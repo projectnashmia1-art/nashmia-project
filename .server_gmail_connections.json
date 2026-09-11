@@ -1,0 +1,19 @@
+[
+  {
+    "id": "b9563c37-f21f-4c3b-8b50-11b5a5c15660",
+    "user_id": "e2a8dc53-2fab-48f1-8d39-854defcc9b3a",
+    "google_email": "projectnashmia1@gmail.com",
+    "google_user_id": "112293394265938423142",
+    "display_name": "Nashmia Project",
+    "avatar_url": "https://lh3.googleusercontent.com/a/ACg8ocJqithXZLmyDOwT8IhYdnzdvuYYoVI6yKB5bzsrwrlZ_m-NCw=s96-c",
+    "access_token": "ya29.a0AdMD6EijFZ1Ms_Qc3B4mEW8j450iZEFtE_0LxQnT79-HSwluhX-8v1rIH1nfMYscUc-VY-uHe3tWZSOBCEKRzftgGoYFTpeCstlz7kjuHI4s207fRxtSP-_GUvlF7kTLEIWcHTVK8PgzyBR3WdPo6Ai1u3VqskwFmH_lh89Ax9Ou6xe-hLeg9o5CvdemMpgY7FgMb6caCgYKAbkSARQSFQHGX2MiO-aRrTvQ1dc0MKCmF9nQ3Q0206",
+    "refresh_token": "1//0g2PilkTEJ0s2CgYIARAAGBASNwF-L9IrkDIfJhzwIVFc7R-XOKDIWFQNSnes_y35VVogKaMubiToudT714ZrRsPtOgjqI3-89ws",
+    "token_expires_at": "2026-09-10T09:22:38.510Z",
+    "scope": "https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/gmail.labels https://www.googleapis.com/auth/gmail.metadata https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.profile openid https://mail.google.com/ https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/userinfo.email",
+    "token_type": "Bearer",
+    "status": "connected",
+    "last_sync_at": "2026-09-10T07:24:13.415Z",
+    "created_at": "2026-09-10T07:24:13.415Z",
+    "updated_at": "2026-09-10T08:22:39.511Z"
+  }
+]
