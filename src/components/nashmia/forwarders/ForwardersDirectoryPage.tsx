@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { ForwarderAccount, INITIAL_FORWARDERS } from "@/lib/forwarders-data";
+import { useQueryClient } from "@tanstack/react-query";
+import { ForwarderAccount } from "@/lib/forwarders-data";
 import { AddForwarderModal } from "./AddForwarderModal";
 import { ForwarderCardGrid } from "./ForwarderCardGrid";
 import { ForwarderDetailDrawer } from "./ForwarderDetailDrawer";
@@ -16,7 +17,13 @@ import {
   insertForwarderToSupabase,
   updateForwarderInSupabase,
 } from "@/lib/supabase-services";
+import { useCachedForwarders, invalidateCachedForwarders, entityCacheKeys } from "@/lib/cache";
 import { useSupabaseRealtime } from "@/hooks/use-supabase-realtime";
+import {
+  DirectorySummaryStripSkeleton,
+  DirectoryCardGridSkeleton,
+  DirectoryTableSkeleton,
+} from "@/components/nashmia/skeletons/DirectorySkeletons";
 
 interface ForwardersDirectoryPageProps {
   onOpenMobileMenu?: () => void;
@@ -24,8 +31,16 @@ interface ForwardersDirectoryPageProps {
 
 export function ForwardersDirectoryPage({ onOpenMobileMenu }: ForwardersDirectoryPageProps) {
   const { userId, isConfigured } = useAuth();
+  const queryClient = useQueryClient();
+
+  // Cached forwarders query with query deduplication, navigation cache reuse & background revalidation
+  const {
+    data: cachedForwarders = [],
+    isLoading: isQueryLoading,
+    refetch: refetchForwarders,
+  } = useCachedForwarders(userId, { enabled: isConfigured });
+
   const [forwarders, setForwarders] = useState<ForwarderAccount[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedShippingLine, setSelectedShippingLine] = useState("all");
   const [selectedStatus, setSelectedStatus] = useState("all");
@@ -41,34 +56,19 @@ export function ForwardersDirectoryPage({ onOpenMobileMenu }: ForwardersDirector
   const [testEmailForwarder, setTestEmailForwarder] = useState<ForwarderAccount | null>(null);
   const [isTestEmailOpen, setIsTestEmailOpen] = useState(false);
 
-  // Load forwarders from Supabase
-  const loadForwarders = useCallback(async () => {
-    try {
-      if (!isConfigured) {
-        setForwarders([]);
-        setIsLoading(false);
-        return;
-      }
-      const data = await fetchForwardersFromSupabase(userId);
-      setForwarders(data || []);
-    } catch (err) {
-      console.warn("[ForwardersDirectoryPage] Error loading forwarders:", err);
-      setForwarders([]);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [userId, isConfigured]);
-
+  // Synchronize local state with cache whenever cached data arrives or updates in background
   useEffect(() => {
-    void loadForwarders();
-  }, [loadForwarders]);
+    setForwarders(cachedForwarders || []);
+  }, [cachedForwarders]);
 
-  // Realtime subscription
+  const isLoading = isQueryLoading && forwarders.length === 0;
+
+  // Realtime subscription: invalidates query cache to trigger silent background revalidation
   useSupabaseRealtime(
     "forwarders",
     useCallback(() => {
-      void loadForwarders();
-    }, [loadForwarders]),
+      void invalidateCachedForwarders(queryClient, userId);
+    }, [queryClient, userId]),
     isConfigured,
   );
 
@@ -162,6 +162,7 @@ export function ForwardersDirectoryPage({ onOpenMobileMenu }: ForwardersDirector
         if (isConfigured) {
           const updated = await updateForwarderInSupabase(editId, data);
           setForwarders((prev) => prev.map((f) => (f.id === editId ? { ...f, ...updated } : f)));
+          await invalidateCachedForwarders(queryClient, userId);
         }
         toast.success("✓ Forwarder Updated", {
           description: `${data.name} profile has been updated.`,
@@ -170,7 +171,7 @@ export function ForwardersDirectoryPage({ onOpenMobileMenu }: ForwardersDirector
         toast.error("Failed to update forwarder", {
           description: err instanceof Error ? err.message : "Database error",
         });
-        void loadForwarders();
+        void refetchForwarders();
       }
     } else {
       const tempId = `agent-${Date.now()}`;
@@ -193,6 +194,7 @@ export function ForwardersDirectoryPage({ onOpenMobileMenu }: ForwardersDirector
           const filtered = prev.filter((f) => f.id !== tempId && f.id !== createdAccount.id);
           return [createdAccount, ...filtered];
         });
+        await invalidateCachedForwarders(queryClient, userId);
 
         if (typeof window !== "undefined") {
           window.dispatchEvent(
@@ -236,6 +238,7 @@ export function ForwardersDirectoryPage({ onOpenMobileMenu }: ForwardersDirector
     try {
       if (isConfigured) {
         await updateForwarderInSupabase(forwarderId, { status: nextStatus });
+        await invalidateCachedForwarders(queryClient, userId);
       }
       toast.info(
         nextStatus === "Inactive" ? `${target.name} archived` : `${target.name} activated`,
@@ -244,7 +247,7 @@ export function ForwardersDirectoryPage({ onOpenMobileMenu }: ForwardersDirector
       toast.error("Could not update forwarder status", {
         description: err instanceof Error ? err.message : "Database error",
       });
-      void loadForwarders();
+      void refetchForwarders();
     }
   };
 
@@ -277,73 +280,77 @@ export function ForwardersDirectoryPage({ onOpenMobileMenu }: ForwardersDirector
   };
 
   return (
-    <div className="relative min-h-screen bg-[#FFFFFF] text-[#000000] selection:bg-[#E8F1F3] selection:text-[#6A80A9]">
-      {/* Subtle Atmospheric Background Depth (#E8F1F3 tint) */}
-      <div className="pointer-events-none fixed inset-0 z-0 bg-gradient-to-b from-[#E8F1F3]/25 via-transparent to-[#E8F1F3]/10" />
+    <div className="relative z-10 w-full min-w-0 max-w-full space-y-6 text-slate-900 pb-12">
+      {/* 1. Header with Eyebrow: DIRECTORY, Title: Forwarders & + Add Forwarder Button */}
+      <ForwardersHeader onOpenMobileMenu={onOpenMobileMenu} onAddForwarder={handleOpenAddModal} />
 
-      {/* Main Container */}
-      <div className="relative z-10 mx-auto max-w-[1520px] px-4 py-8 sm:px-6 lg:px-10 lg:py-10 space-y-6">
-        {/* 1. Header with Eyebrow: DIRECTORY, Title: Forwarders & + Add Forwarder Button */}
-        <ForwardersHeader onOpenMobileMenu={onOpenMobileMenu} onAddForwarder={handleOpenAddModal} />
-
-        {/* 2. Summary Glass Connected Strip */}
+      {/* 2. Summary Glass Connected Strip */}
+      {isLoading ? (
+        <DirectorySummaryStripSkeleton />
+      ) : (
         <ForwardersSummaryStrip
           totalCount={forwarders.length}
           activeCount={activeCount}
           activeBookingsCount={totalActiveBookings}
           shippingLinesCount={7}
         />
+      )}
 
-        {/* 3. Floating Glass Filter Toolbar with View Control */}
-        <ForwardersToolbar
-          searchQuery={searchQuery}
-          onSearchChange={setSearchQuery}
-          selectedShippingLine={selectedShippingLine}
-          onShippingLineChange={setSelectedShippingLine}
-          selectedStatus={selectedStatus}
-          onStatusChange={setSelectedStatus}
-          selectedCountry={selectedCountry}
-          onCountryChange={setSelectedCountry}
-          sortBy={sortBy}
-          onSortChange={setSortBy}
-          viewMode={viewMode}
-          onViewModeChange={setViewMode}
-          onResetFilters={handleResetFilters}
-        />
+      {/* 3. Floating Glass Filter Toolbar with View Control */}
+      <ForwardersToolbar
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
+        selectedShippingLine={selectedShippingLine}
+        onShippingLineChange={setSelectedShippingLine}
+        selectedStatus={selectedStatus}
+        onStatusChange={setSelectedStatus}
+        selectedCountry={selectedCountry}
+        onCountryChange={setSelectedCountry}
+        sortBy={sortBy}
+        onSortChange={setSortBy}
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
+        onResetFilters={handleResetFilters}
+      />
 
-        {/* 4. Directory Content */}
-        {filteredForwarders.length === 0 ? (
-          <ForwardersEmptyState
-            isSearchEmpty={
-              searchQuery !== "" ||
-              selectedShippingLine !== "all" ||
-              selectedStatus !== "all" ||
-              selectedCountry !== "all"
-            }
-            onResetFilters={handleResetFilters}
-            onAddForwarder={handleOpenAddModal}
-          />
-        ) : viewMode === "grid" ? (
-          /* PRIMARY VISUAL FEATURE: Horizontal Forwarder Card Grid (3 cards per row on desktop) */
-          <ForwarderCardGrid
-            forwarders={filteredForwarders}
-            onSelectForwarder={handleSelectForwarder}
-            onEditForwarder={handleOpenEditModal}
-            onToggleArchive={handleToggleArchive}
-            onSendTestEmail={handleOpenTestEmail}
-            onAddForwarder={handleOpenAddModal}
-          />
+      {/* 4. Directory Content */}
+      {isLoading ? (
+        viewMode === "grid" ? (
+          <DirectoryCardGridSkeleton count={8} />
         ) : (
-          /* Alternative List View */
-          <ForwardersListView
-            forwarders={filteredForwarders}
-            onSelectForwarder={handleSelectForwarder}
-            onEditForwarder={handleOpenEditModal}
-            onToggleArchive={handleToggleArchive}
-            onSendTestEmail={handleOpenTestEmail}
-          />
-        )}
-      </div>
+          <DirectoryTableSkeleton rows={8} />
+        )
+      ) : filteredForwarders.length === 0 ? (
+        <ForwardersEmptyState
+          isSearchEmpty={
+            searchQuery !== "" ||
+            selectedShippingLine !== "all" ||
+            selectedStatus !== "all" ||
+            selectedCountry !== "all"
+          }
+          onResetFilters={handleResetFilters}
+          onAddForwarder={handleOpenAddModal}
+        />
+      ) : viewMode === "grid" ? (
+        /* PRIMARY VISUAL FEATURE: Horizontal Forwarder Card Grid (3 cards per row on desktop) */
+        <ForwarderCardGrid
+          forwarders={filteredForwarders}
+          onSelectForwarder={handleSelectForwarder}
+          onEditForwarder={handleOpenEditModal}
+          onToggleArchive={handleToggleArchive}
+          onSendTestEmail={handleOpenTestEmail}
+          onAddForwarder={handleOpenAddModal}
+        />
+      ) : (
+        /* Alternative List View */
+        <ForwardersListView
+          forwarders={filteredForwarders}
+          onSelectForwarder={handleSelectForwarder}
+          onEditForwarder={handleOpenEditModal}
+          onToggleArchive={handleToggleArchive}
+          onSendTestEmail={handleOpenTestEmail}
+        />
+      )}
 
       {/* Add / Edit Forwarder Modal */}
       <AddForwarderModal

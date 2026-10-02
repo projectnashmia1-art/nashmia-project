@@ -1,5 +1,11 @@
 import { supabase, isSupabaseConfigured } from "./supabase";
-import { safeUuid, updateLocalBooking, getLocalBookings } from "./supabase-services";
+import {
+  safeUuid,
+  updateLocalBooking,
+  getLocalBookings,
+  safeInsertNotification,
+  normalizeBookingStatus,
+} from "./supabase-services";
 import { getLocalForwarderRequests } from "./multi-forwarder-service";
 import type {
   ConfirmationStatus,
@@ -449,7 +455,9 @@ export async function processAutomaticMovementConfirmation(
           : confirmationNote;
 
         const updatePayload = {
-          status: "Booking Confirmed",
+          status: "Confirmed",
+          movement_status: "CONFIRMED",
+          is_movement_confirmed: true,
           confirmation_status: "CONFIRMED",
           confirmed_at: confirmedAt,
           confirmed_by: confirmedBy,
@@ -583,36 +591,19 @@ export async function processAutomaticMovementConfirmation(
       }
     }
 
-    // 4. Create Notification in Supabase notifications table for Operations Desk
-    let targetUserId = safeUuid(request.userId || currentBooking?.user_id);
-    if (!targetUserId && isSupabaseConfigured) {
-      try {
-        const { data: authData } = await supabase.auth.getUser();
-        targetUserId = safeUuid(authData?.user?.id) || "00000000-0000-0000-0000-000000000000";
-      } catch {
-        targetUserId = "00000000-0000-0000-0000-000000000000";
-      }
-    }
-
+    // 4. Create Notification in Supabase notifications table for Operations Desk safely
     const notifTitle = `Booking Confirmed: ${effectiveMovementNumber}`;
     const notifMessage = `Movement ${effectiveMovementNumber} has been confirmed by the forwarder.`;
 
-    if (isSupabaseConfigured && targetUserId) {
-      try {
-        await supabase.from("notifications").insert({
-          user_id: targetUserId,
-          type: "booking_confirmed",
-          title: notifTitle,
-          message: notifMessage,
-          related_booking_id: effectiveBookingId,
-          booking_id: effectiveBookingId,
-          link: `/movements`,
-          is_read: false,
-        });
-      } catch (notifErr) {
-        console.warn("[MovementConfirmationEngine] Notification insert notice:", notifErr);
-      }
-    }
+    await safeInsertNotification({
+      userId: request.userId || currentBooking?.user_id,
+      type: "booking_confirmed",
+      title: notifTitle,
+      message: notifMessage,
+      booking_id: effectiveBookingId,
+      link: `/movements`,
+      is_read: false,
+    });
 
     if (typeof window !== "undefined") {
       window.dispatchEvent(
@@ -679,17 +670,14 @@ export async function processAutomaticMovementConfirmation(
           description: `Forwarder stated booking rejection or lack of capacity: ${request.reason}. Movement status remains ${previousStatus}.`,
         });
 
-        const targetUserId = safeUuid(request.userId || currentBooking?.user_id);
-        if (targetUserId) {
-          await supabase.from("notifications").insert({
-            user_id: targetUserId,
-            type: "alert",
-            title: `Space Rejected: Movement ${effectiveMovementNumber}`,
-            message: `Forwarder rejected space allocation: ${request.reason}. Manual intervention required.`,
-            related_booking_id: effectiveBookingId,
-            is_read: false,
-          });
-        }
+        await safeInsertNotification({
+          userId: request.userId || currentBooking?.user_id,
+          type: "alert",
+          title: `Space Rejected: Movement ${effectiveMovementNumber}`,
+          message: `Forwarder rejected space allocation: ${request.reason}. Manual intervention required.`,
+          booking_id: effectiveBookingId,
+          is_read: false,
+        });
       } catch (err) {
         console.warn("[MovementConfirmationEngine] Rejection update notice:", err);
       }

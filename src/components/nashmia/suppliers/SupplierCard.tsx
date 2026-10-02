@@ -2,19 +2,13 @@ import { useState } from "react";
 import {
   Archive,
   ArchiveRestore,
-  ArrowRight,
-  Building2,
-  Check,
-  Container,
-  Copy,
+  Bookmark,
   Edit2,
   ExternalLink,
-  Mail,
-  MapPin,
   MoreHorizontal,
-  Phone,
   Plus,
-  Warehouse,
+  Share2,
+  Star,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -59,6 +53,14 @@ function getCountryFlag(countryCode: string): string {
   return flags[countryCode] || "🌐";
 }
 
+const AVATAR_GRADIENTS = [
+  "from-sky-400 via-teal-400 to-cyan-500",
+  "from-indigo-400 via-sky-400 to-teal-400",
+  "from-amber-400 via-orange-400 to-rose-400",
+  "from-teal-400 via-emerald-400 to-cyan-500",
+  "from-blue-500 via-indigo-400 to-sky-400",
+];
+
 export function SupplierCard({
   supplier,
   index = 0,
@@ -66,127 +68,123 @@ export function SupplierCard({
   onEdit,
   onToggleArchive,
 }: SupplierCardProps) {
-  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [isBookmarked, setIsBookmarked] = useState(false);
   const initials = getAvatarInitials(supplier.name);
   const flag = getCountryFlag(supplier.countryCode);
   const isInactive = supplier.status === "Inactive" || supplier.status === "Archived";
+  const avatarGradient = AVATAR_GRADIENTS[index % AVATAR_GRADIENTS.length];
 
-  const copyToClipboard = (text: string, label: string, e: React.MouseEvent) => {
+  const handleShare = (e: React.MouseEvent) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(text);
-    setCopiedField(label);
-    toast.success(`Copied ${label}`, {
-      description: text,
-      duration: 2000,
+    const shareUrl = window.location.href;
+    navigator.clipboard.writeText(shareUrl);
+    toast.success(`Share link copied for ${supplier.name}`, {
+      description: `${supplier.companyName || supplier.subtitle || "Vendor"} · ${supplier.code}`,
     });
-    setTimeout(() => setCopiedField(null), 2000);
+  };
+
+  const handleBookmarkToggle = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsBookmarked(!isBookmarked);
+    toast.success(
+      isBookmarked ? `Removed ${supplier.name} from saved` : `Saved ${supplier.name} to favorites`,
+    );
   };
 
   return (
     <div
       onClick={() => onSelect(supplier)}
-      style={{ animationDelay: `${index * 30}ms` }}
+      style={{
+        animationDelay: `${index * 30}ms`,
+        background: "linear-gradient(180deg, #FFFFFF 0%, #F5FBFC 45%, #D4F0F6 100%)",
+      }}
       className={cn(
-        "group relative flex min-h-[290px] cursor-pointer flex-col justify-between rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md",
-        isInactive && "opacity-75 bg-slate-50/50",
+        "group relative flex min-h-[380px] w-full cursor-pointer flex-col justify-between overflow-hidden rounded-[32px] sm:rounded-[36px] border border-white/90 p-6 sm:p-7 shadow-[0_20px_45px_-12px_rgba(15,163,177,0.16),0_4px_16px_rgba(0,0,0,0.02)] transition-all duration-300 hover:-translate-y-1.5 hover:shadow-[0_28px_55px_-12px_rgba(15,163,177,0.22)] active:translate-y-0",
+        isInactive && "opacity-75 grayscale-[20%]",
       )}
     >
-      {/* 1. TOP HEADER: Avatar, Name, Status & Dropdown */}
-      <div className="space-y-3.5">
-        <div className="flex items-start justify-between gap-3">
-          {/* Avatar + Name + Subtitle */}
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="relative">
-              <div className="grid size-11 shrink-0 place-items-center rounded-xl border border-[#C7E8E8] bg-[#E8F5F6] text-xs font-bold text-[#0FA3B1] shadow-2xs group-hover:scale-105 transition-transform">
-                {initials}
-              </div>
-              <span
-                className="absolute -bottom-1 -right-1 text-[11px] drop-shadow-2xs"
-                title={supplier.country}
-              >
-                {flag}
-              </span>
-            </div>
+      {/* Specular Edge Highlight */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-white to-transparent" />
 
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <h3 className="font-bold text-[14.5px] text-slate-900 tracking-tight truncate group-hover:text-[#0FA3B1] transition-colors">
-                  {supplier.name}
-                </h3>
-                <span className="rounded bg-slate-100 border border-slate-200 px-1.5 py-0.2 font-mono text-[10px] font-semibold text-slate-500">
-                  {supplier.code}
-                </span>
-              </div>
-              <p className="text-[11.5px] text-slate-400 truncate mt-0.5">
-                {supplier.companyName || supplier.subtitle || "Pickup Vendor"} · {supplier.country}
-              </p>
-            </div>
-          </div>
-
-          {/* Top-Right: Status Pill + Actions Menu */}
-          <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-1.5 shrink-0">
-            <span
+      {/* TOP ROW: Circular Avatar & Share/Actions Button */}
+      <div>
+        <div className="flex items-start justify-between">
+          {/* Circular Portrait Avatar with Flag Badge */}
+          <div className="relative">
+            <div
               className={cn(
-                "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold border",
-                supplier.status === "Active"
-                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                  : "border-slate-200 bg-slate-100 text-slate-600",
+                "size-16 sm:size-17 rounded-full border-2 border-white bg-gradient-to-br p-0.5 shadow-[0_6px_18px_rgba(15,163,177,0.2)] flex items-center justify-center transition-transform duration-300 group-hover:scale-105",
+                avatarGradient,
               )}
             >
-              <span
-                className={cn(
-                  "size-1.5 rounded-full",
-                  supplier.status === "Active" ? "bg-emerald-500 animate-pulse" : "bg-slate-400",
-                )}
-              />
-              <span>{supplier.status}</span>
+              <div className="size-full rounded-full bg-white/20 backdrop-blur-xs flex items-center justify-center text-white font-bold text-[18px] tracking-tight">
+                {initials}
+              </div>
+            </div>
+            <span
+              className="absolute -bottom-1 -right-1 flex size-6 items-center justify-center rounded-full bg-white text-xs shadow-xs border border-slate-100"
+              title={supplier.country}
+            >
+              {flag}
             </span>
+          </div>
+
+          {/* Top Right: Share & Dropdown Menu */}
+          <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={handleShare}
+              title="Share Supplier Profile"
+              className="grid size-9 place-items-center rounded-full text-slate-500 hover:text-slate-900 hover:bg-white/80 transition-colors"
+            >
+              <Share2 className="size-4.5 stroke-[1.8]" />
+            </button>
 
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
                   aria-label={`Options for ${supplier.name}`}
-                  className="grid size-8 place-items-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-900 transition-colors"
+                  className="grid size-9 place-items-center rounded-full text-slate-400 hover:text-slate-900 hover:bg-white/80 transition-colors focus:outline-none"
                 >
-                  <MoreHorizontal className="size-4" />
+                  <MoreHorizontal className="size-4 stroke-[1.8]" />
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent
                 align="end"
-                className="w-48 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl"
+                className="w-52 rounded-2xl border border-slate-200 bg-white p-1.5 shadow-xl"
               >
                 <DropdownMenuLabel className="px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider text-slate-400">
                   {supplier.name}
                 </DropdownMenuLabel>
                 <DropdownMenuItem
                   onClick={() => onSelect(supplier)}
-                  className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                  className="flex cursor-pointer items-center gap-2 rounded-xl px-2.5 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100"
                 >
                   <ExternalLink className="size-3.5 text-[#0FA3B1]" />
-                  <span>View Details</span>
+                  <span>View Full Profile</span>
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={() => onEdit(supplier)}
-                  className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                  className="flex cursor-pointer items-center gap-2 rounded-xl px-2.5 py-2 text-[13px] text-slate-700 hover:bg-slate-100"
                 >
-                  <Edit2 className="size-3.5 text-slate-500" />
+                  <Edit2 className="size-3.5 text-slate-400" />
                   <span>Edit Supplier</span>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
                   <Link
                     to="/new-booking"
                     search={{ supplierId: supplier.id }}
-                    className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                    className="flex cursor-pointer items-center gap-2 rounded-xl px-2.5 py-2 text-[13px] font-semibold text-[#0FA3B1] hover:bg-[#E8F5F6]"
                   >
-                    <Plus className="size-3.5 text-emerald-600" />
+                    <Plus className="size-3.5 text-[#0FA3B1]" />
                     <span>Create Booking</span>
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator className="my-1 bg-slate-100" />
                 <DropdownMenuItem
                   onClick={() => onToggleArchive(supplier.id)}
-                  className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                  className="flex cursor-pointer items-center gap-2 rounded-xl px-2.5 py-2 text-[13px] text-slate-600 hover:bg-slate-100"
                 >
                   {supplier.status === "Active" ? (
                     <>
@@ -196,7 +194,7 @@ export function SupplierCard({
                   ) : (
                     <>
                       <ArchiveRestore className="size-3.5 text-emerald-600" />
-                      <span>Restore Supplier</span>
+                      <span>Activate Supplier</span>
                     </>
                   )}
                 </DropdownMenuItem>
@@ -205,91 +203,85 @@ export function SupplierCard({
           </div>
         </div>
 
-        {/* 2. LOAD POINT HERO CARD */}
-        <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 shadow-2xs">
-          <div className="flex items-center justify-between">
-            <span className="flex items-center gap-1.5 text-[10.5px] font-bold uppercase tracking-wider text-[#0FA3B1]">
-              <MapPin className="size-3" />
-              <span>Primary Load Point</span>
+        {/* IDENTITY SECTION: Big Name, Role/Company, Tag Pills */}
+        <div className="mt-4">
+          <h3 className="text-[21px] sm:text-[22px] font-bold text-slate-900 tracking-tight leading-snug">
+            {supplier.name}
+          </h3>
+          <p className="text-[13.5px] font-medium text-slate-500 mt-0.5 truncate">
+            {supplier.companyName ||
+              supplier.subtitle ||
+              `${supplier.loadPointType} · ${supplier.city}`}
+          </p>
+
+          {/* Tag Pills (Matching uploaded design style) */}
+          <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+            <span className="rounded-full bg-white/90 border border-slate-200/60 px-3 py-0.5 text-[11px] font-semibold text-slate-700 shadow-2xs">
+              {supplier.countryCode} · {supplier.country}
             </span>
-            <span className="rounded bg-white border border-slate-200 px-2 py-0.5 text-[10px] font-bold text-slate-600">
-              {supplier.loadPointType}
+            <span className="rounded-full bg-white/90 border border-slate-200/60 px-3 py-0.5 text-[11px] font-semibold text-slate-700 shadow-2xs">
+              {supplier.loadPointType} · {supplier.city || supplier.loadPointCity}
             </span>
-          </div>
-          <div className="mt-1.5 flex items-center justify-between gap-2">
-            <p className="text-[13.5px] font-bold text-slate-900 tracking-tight leading-snug truncate">
-              {supplier.loadPoint}
-            </p>
-            <span className="text-[11.5px] font-semibold text-slate-500 shrink-0">
-              {supplier.loadPointCity || supplier.city}
+            <span className="rounded-full bg-white/90 border border-slate-200/60 px-2.5 py-0.5 text-[10.5px] font-mono font-semibold text-slate-500 shadow-2xs">
+              {supplier.code}
             </span>
           </div>
         </div>
 
-        {/* 3. CONTACT CHIPS */}
-        <div className="grid grid-cols-2 gap-2 text-xs">
-          <button
-            type="button"
-            onClick={(e) => copyToClipboard(supplier.email, "Email", e)}
-            className="group/btn flex items-center justify-between rounded-lg border border-slate-100 bg-white px-2.5 py-1.5 text-left text-slate-600 hover:border-slate-200 hover:bg-slate-50 transition-colors"
-          >
-            <div className="flex items-center gap-1.5 min-w-0">
-              <Mail className="size-3 text-slate-400 group-hover/btn:text-[#0FA3B1]" />
-              <span className="truncate text-[11.5px] font-medium">{supplier.email}</span>
-            </div>
-            {copiedField === "Email" ? (
-              <Check className="size-3 text-emerald-600 shrink-0" />
-            ) : (
-              <Copy className="size-3 opacity-0 group-hover/btn:opacity-100 text-slate-400 shrink-0 transition-opacity" />
-            )}
-          </button>
+        {/* 3-COLUMN METRICS SECTION (Exact same hierarchy as uploaded design) */}
+        <div className="mt-6 grid grid-cols-3 gap-2 border-t border-slate-200/50 pt-4">
+          {/* Col 1: Rating */}
+          <div className="flex flex-col">
+            <span className="flex items-center gap-1 text-[15px] font-bold text-slate-900 leading-tight">
+              <Star className="size-3.5 fill-slate-900 text-slate-900" />
+              <span>4.9</span>
+            </span>
+            <span className="text-[11.5px] font-medium text-slate-400 mt-0.5">Rating</span>
+          </div>
 
-          <button
-            type="button"
-            onClick={(e) => copyToClipboard(supplier.phone, "Phone", e)}
-            className="group/btn flex items-center justify-between rounded-lg border border-slate-100 bg-white px-2.5 py-1.5 text-left text-slate-600 hover:border-slate-200 hover:bg-slate-50 transition-colors font-mono text-[11.5px]"
-          >
-            <div className="flex items-center gap-1.5 min-w-0">
-              <Phone className="size-3 text-slate-400 group-hover/btn:text-[#0FA3B1]" />
-              <span className="truncate font-medium">{supplier.phone}</span>
-            </div>
-            {copiedField === "Phone" ? (
-              <Check className="size-3 text-emerald-600 shrink-0" />
-            ) : (
-              <Copy className="size-3 opacity-0 group-hover/btn:opacity-100 text-slate-400 shrink-0 transition-opacity" />
-            )}
-          </button>
+          {/* Col 2: Pipeline / Active Units */}
+          <div className="flex flex-col">
+            <span className="text-[15px] font-bold text-slate-900 leading-tight">
+              {supplier.activeContainers} Active
+            </span>
+            <span className="text-[11.5px] font-medium text-slate-400 mt-0.5">Pipeline</span>
+          </div>
+
+          {/* Col 3: Volume / Total */}
+          <div className="flex flex-col">
+            <span className="text-[15px] font-bold text-slate-900 leading-tight">
+              {supplier.totalContainersMoved} Units
+            </span>
+            <span className="text-[11.5px] font-medium text-slate-400 mt-0.5">Total Vol</span>
+          </div>
         </div>
       </div>
 
-      {/* 4. FOOTER: Active Containers & View Action */}
-      <div className="mt-4 border-t border-slate-100 pt-3 flex items-center justify-between">
-        <div className="flex items-center gap-2 min-w-0">
-          <span
-            className={cn(
-              "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-bold",
-              supplier.activeContainers > 0
-                ? "bg-slate-100 text-slate-900 border border-slate-200"
-                : "text-slate-400",
-            )}
-          >
-            <Container
-              className={cn(
-                "size-3.5",
-                supplier.activeContainers > 0 ? "text-[#0FA3B1]" : "text-slate-300",
-              )}
-            />
-            <span>{supplier.activeContainers} Units</span>
-          </span>
-          <span className="text-[11px] text-slate-400 truncate">
-            {supplier.containersDelta || "in pipeline"}
-          </span>
-        </div>
+      {/* BOTTOM ACTION BUTTONS: Wide Pill "Get in touch" + Circular Bookmark Button */}
+      <div className="mt-6 flex items-center gap-2.5">
+        {/* Main wide pill button */}
+        <button
+          type="button"
+          onClick={() => onSelect(supplier)}
+          className="flex-1 rounded-full bg-white/95 hover:bg-white text-slate-900 font-semibold text-[13.5px] py-3 px-5 shadow-[0_4px_16px_rgba(0,0,0,0.04)] border border-white/90 transition-all duration-200 hover:shadow-[0_8px_24px_rgba(15,163,177,0.14)] active:scale-[0.98] text-center"
+        >
+          Get in touch
+        </button>
 
-        <div className="flex items-center gap-1 text-[12.5px] font-semibold text-slate-700 group-hover:text-[#0FA3B1] transition-colors shrink-0">
-          <span>Manage</span>
-          <ArrowRight className="size-3.5 transition-transform duration-200 group-hover:translate-x-1" />
-        </div>
+        {/* Circular Bookmark Button */}
+        <button
+          type="button"
+          onClick={handleBookmarkToggle}
+          title={isBookmarked ? "Remove bookmark" : "Save bookmark"}
+          className={cn(
+            "size-11 sm:size-12 rounded-full flex items-center justify-center shadow-[0_4px_16px_rgba(0,0,0,0.04)] border border-white/90 shrink-0 transition-all duration-200 hover:scale-105 active:scale-95",
+            isBookmarked
+              ? "bg-[#0FA3B1] text-white border-[#0FA3B1] shadow-[0_4px_14px_rgba(15,163,177,0.3)]"
+              : "bg-white hover:bg-slate-50 text-slate-800",
+          )}
+        >
+          <Bookmark className={cn("size-4.5 stroke-[2]", isBookmarked && "fill-white")} />
+        </button>
       </div>
     </div>
   );

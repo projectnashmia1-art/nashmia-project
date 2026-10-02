@@ -1,5 +1,16 @@
 import { useEffect, useState } from "react";
-import { Check, CheckCircle2, Send, Ship, X } from "lucide-react";
+import {
+  AlertCircle,
+  Building2,
+  Check,
+  Globe2,
+  Mail,
+  Phone,
+  Plus,
+  Ship,
+  User,
+  X,
+} from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -12,6 +23,8 @@ import {
   FORWARDER_COUNTRY_OPTIONS,
   FORWARDER_SHIPPING_LINES_OPTIONS,
 } from "@/lib/forwarders-data";
+import { ResultSuccessView } from "@/components/nashmia/common/ResultSuccessView";
+import { LifecycleDropdownSelect } from "@/components/nashmia/common/LifecycleDropdownSelect";
 import { cn } from "@/lib/utils";
 
 interface AddForwarderModalProps {
@@ -36,38 +49,51 @@ export function AddForwarderModal({
 }: AddForwarderModalProps) {
   const [name, setName] = useState("");
   const [contactPerson, setContactPerson] = useState("");
+  const [contactRole, setContactRole] = useState("Freight Booking Agent");
   const [email, setEmail] = useState("");
   const [whatsapp, setWhatsapp] = useState("");
   const [country, setCountry] = useState("United Kingdom");
   const [notes, setNotes] = useState("");
   const [status, setStatus] = useState<"Active" | "Inactive">("Active");
-  const [selectedShippingLines, setSelectedShippingLines] = useState<string[]>(["MSC", "Maersk"]);
+  const [selectedShippingLines, setSelectedShippingLines] = useState<string[]>([
+    "MSC",
+    "Maersk",
+    "CMA CGM",
+  ]);
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSuccess, setIsSuccess] = useState(false);
+  const [savedEntity, setSavedEntity] = useState<{ name: string; code: string } | null>(null);
 
   useEffect(() => {
     if (editForwarder) {
       setName(editForwarder.name);
       setContactPerson(editForwarder.contactPerson);
+      setContactRole(editForwarder.contactRole || "Freight Booking Agent");
       setEmail(editForwarder.email);
       setWhatsapp(editForwarder.whatsapp);
       setCountry(editForwarder.country);
-      setNotes(editForwarder.notes);
+      setNotes(editForwarder.notes || "");
       setStatus(editForwarder.status === "Inactive" ? "Inactive" : "Active");
-      setSelectedShippingLines(editForwarder.shippingLines);
+      setSelectedShippingLines(
+        editForwarder.shippingLines.length > 0 ? editForwarder.shippingLines : ["MSC", "Maersk"],
+      );
+      setIsSuccess(false);
+      setSavedEntity(null);
     } else {
       setName("");
       setContactPerson("");
+      setContactRole("Freight Booking Agent");
       setEmail("");
-      setWhatsapp("+44 ");
+      setWhatsapp("");
       setCountry("United Kingdom");
       setNotes("");
       setStatus("Active");
-      setSelectedShippingLines(["MSC", "Maersk"]);
+      setSelectedShippingLines(["MSC", "Maersk", "CMA CGM"]);
+      setIsSuccess(false);
+      setSavedEntity(null);
     }
     setErrors({});
-    setIsSuccess(false);
   }, [editForwarder, open]);
 
   const toggleShippingLine = (line: string) => {
@@ -78,6 +104,10 @@ export function AddForwarderModal({
     } else {
       setSelectedShippingLines([...selectedShippingLines, line]);
     }
+  };
+
+  const handleSelectAllLines = () => {
+    setSelectedShippingLines([...ALL_SHIPPING_LINES]);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -91,7 +121,7 @@ export function AddForwarderModal({
     } else if (!/\S+@\S+\.\S+/.test(email)) {
       newErrors.email = "Enter a valid email address";
     }
-    if (!whatsapp.trim()) newErrors.whatsapp = "WhatsApp number is required";
+    if (!whatsapp.trim()) newErrors.whatsapp = "WhatsApp or phone number is required";
     if (selectedShippingLines.length === 0) {
       newErrors.shippingLines = "Select at least one shipping line";
     }
@@ -108,13 +138,23 @@ export function AddForwarderModal({
           ? "DE"
           : country === "France"
             ? "FR"
-            : country === "United Arab Emirates"
-              ? "AE"
-              : country === "Pakistan"
-                ? "PK"
-                : "US";
+            : country === "Spain"
+              ? "ES"
+              : country === "Italy"
+                ? "IT"
+                : country === "Netherlands"
+                  ? "NL"
+                  : country === "United Arab Emirates"
+                    ? "AE"
+                    : country === "Pakistan"
+                      ? "PK"
+                      : country === "China"
+                        ? "CN"
+                        : "US";
 
-    const code = editForwarder?.code || `${name.substring(0, 3).toUpperCase()}-FWD`;
+    const code =
+      editForwarder?.code ||
+      `${name.slice(0, 3).toUpperCase()}-FWD-${countryCode}-${Math.floor(1000 + Math.random() * 9000)}`;
 
     onSaveForwarder(
       {
@@ -122,7 +162,7 @@ export function AddForwarderModal({
         code,
         badge: "Booking Agent",
         contactPerson: contactPerson.trim(),
-        contactRole: editForwarder?.contactRole || "Freight Booking Agent",
+        contactRole: contactRole.trim() || "Freight Booking Agent",
         email: email.trim().toLowerCase(),
         whatsapp: whatsapp.trim(),
         country,
@@ -136,261 +176,316 @@ export function AddForwarderModal({
       editForwarder?.id,
     );
 
+    setSavedEntity({ name: name.trim(), code });
     setIsSuccess(true);
+  };
+
+  const handleDismiss = () => {
+    onOpenChange(false);
     setTimeout(() => {
       setIsSuccess(false);
-      onOpenChange(false);
-    }, 1200);
+      setSavedEntity(null);
+    }, 200);
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl rounded-[24px] border border-white/80 bg-white/95 p-0 shadow-[0_24px_64px_rgba(15,23,42,0.14)] backdrop-blur-2xl sm:max-w-[580px] overflow-hidden">
-        {/* Header */}
-        <div className="border-b border-slate-100/80 px-6 py-5">
-          <DialogHeader>
-            <div className="flex items-center gap-2.5">
-              <span className="grid size-8 place-items-center rounded-[10px] bg-[#E8F1F3] text-[#6A80A9]">
-                <Send className="size-4" />
-              </span>
-              <DialogTitle className="text-[20px] font-semibold tracking-[-0.02em] text-[#000000]">
-                {editForwarder ? "Edit Forwarder" : "Create Forwarder"}
-              </DialogTitle>
-            </div>
-            <DialogDescription className="text-[13px] text-slate-500 mt-1">
-              Add a booking agent and configure shipping line agreements.
-            </DialogDescription>
-          </DialogHeader>
-        </div>
+      <DialogContent
+        className={cn(
+          "w-[95vw] max-w-[95vw] sm:max-w-[580px] max-h-[90vh] flex flex-col p-0 overflow-hidden rounded-[24px] sm:rounded-[28px] border border-slate-100 bg-white shadow-2xl focus:outline-none",
+          isSuccess && "sm:max-w-[420px]",
+        )}
+      >
+        {isSuccess ? (
+          <div className="p-4 sm:p-6 overflow-y-auto max-h-[88vh]">
+            <ResultSuccessView
+              type="success"
+              title={
+                editForwarder ? "Forwarder Profile Updated" : "Forwarder Registered Successfully"
+              }
+              message={`Your forwarder partner data has been ${
+                editForwarder ? "updated" : "saved and added to the directory"
+              }. Active booking requests and rate cards can now reference this partner.`}
+              entityName={savedEntity?.name}
+              entitySubtitle={savedEntity?.code}
+              actionText="OKAY"
+              onAction={handleDismiss}
+              onClose={handleDismiss}
+            />
+          </div>
+        ) : (
+          <form
+            onSubmit={handleSubmit}
+            className="flex flex-col h-full max-h-[90vh] overflow-hidden"
+          >
+            {/* Minimal Circular Close Button */}
+            <button
+              type="button"
+              onClick={() => onOpenChange(false)}
+              aria-label="Close"
+              className="absolute top-4 right-4 z-20 flex size-8 items-center justify-center rounded-full bg-slate-100 text-slate-400 transition-all hover:bg-slate-200 hover:text-slate-700 active:scale-95 cursor-pointer shadow-2xs"
+            >
+              <X className="size-4 stroke-[2.5]" />
+            </button>
 
-        {/* Content Form */}
-        <form onSubmit={handleSubmit}>
-          <div className="max-h-[68vh] overflow-y-auto px-6 py-5 space-y-4">
-            {isSuccess ? (
-              <div className="flex flex-col items-center justify-center py-10 text-center animate-in fade-in zoom-in-95 duration-200">
-                <div className="grid size-16 place-items-center rounded-full bg-[#C7D5BF]/40 text-[#2B3B24] border border-[#C7D5BF]/80">
-                  <CheckCircle2 className="size-8 text-[#3D5A32]" />
-                </div>
-                <h3 className="mt-3.5 text-[18px] font-semibold text-[#000000]">
-                  ✓ {editForwarder ? "Forwarder Updated" : "Forwarder Created"}
-                </h3>
-                <p className="mt-1 text-[13.5px] text-slate-500">
-                  {name} has been saved successfully.
-                </p>
+            {/* Clean Minimal Header (Matching Supplier Modal) */}
+            <DialogHeader className="p-5 sm:p-6 pb-3 sm:pb-4 border-b border-slate-100 shrink-0 bg-white space-y-1.5 text-left pr-10">
+              <div className="inline-flex items-center gap-1.5 rounded-full bg-[#E8F5F6] px-3 py-1 text-[11px] font-bold text-[#0FA3B1] w-fit">
+                <span className="size-1.5 rounded-full bg-[#0FA3B1]" />
+                {editForwarder ? "Edit Forwarder Partner" : "Forwarder Partner"}
               </div>
-            ) : (
-              <>
-                {/* 1. Forwarder Name & Country */}
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <div className="space-y-1.5">
-                    <label className="text-[12.5px] font-semibold text-[#000000]">
-                      Forwarder Name <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={name}
-                      onChange={(e) => {
-                        setName(e.target.value);
-                        if (errors.name) setErrors((prev) => ({ ...prev, name: "" }));
-                      }}
-                      placeholder="e.g. ABC Forwarding"
-                      className={cn(
-                        "h-[44px] w-full rounded-[12px] border bg-white/70 px-3.5 text-[14px] text-black transition-all focus:bg-[#E8F1F3]/40 focus:outline-none",
-                        errors.name
-                          ? "border-red-400 focus:shadow-[0_0_0_3px_rgba(239,68,68,0.15)]"
-                          : "border-slate-200 focus:border-[#6A80A9] focus:shadow-[0_0_0_3px_rgba(106,128,169,0.12)]",
-                      )}
-                    />
-                    {errors.name && (
-                      <p className="text-[11.5px] font-medium text-red-500">{errors.name}</p>
-                    )}
-                  </div>
+              <DialogTitle className="text-xl sm:text-[22px] font-extrabold tracking-tight text-[#0D1F3C]">
+                {editForwarder ? "Update Forwarder Profile" : "Register New Forwarder"}
+              </DialogTitle>
+              <DialogDescription className="text-xs sm:text-[13px] font-medium text-slate-500">
+                {editForwarder
+                  ? "Modify booking agent credentials, contracted shipping lines, and direct contact channels."
+                  : "Configure booking agent details, contact channels, and contracted shipping lines."}
+              </DialogDescription>
+            </DialogHeader>
 
-                  <div className="space-y-1.5">
-                    <label className="text-[12.5px] font-semibold text-[#000000]">Country</label>
-                    <select
-                      value={country}
-                      onChange={(e) => setCountry(e.target.value)}
-                      className="h-[44px] w-full rounded-[12px] border border-slate-200 bg-white/70 px-3.5 text-[14px] text-black transition-all focus:border-[#6A80A9] focus:bg-[#E8F1F3]/40 focus:shadow-[0_0_0_3px_rgba(106,128,169,0.12)] focus:outline-none"
-                    >
-                      {FORWARDER_COUNTRY_OPTIONS.filter((c) => c !== "All Countries").map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                {/* 2. Contact Person & Email */}
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <div className="space-y-1.5">
-                    <label className="text-[12.5px] font-semibold text-[#000000]">
-                      Contact Person <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={contactPerson}
-                      onChange={(e) => {
-                        setContactPerson(e.target.value);
-                        if (errors.contactPerson) {
-                          setErrors((prev) => ({ ...prev, contactPerson: "" }));
-                        }
-                      }}
-                      placeholder="e.g. John Smith"
-                      className={cn(
-                        "h-[44px] w-full rounded-[12px] border bg-white/70 px-3.5 text-[14px] text-black transition-all focus:bg-[#E8F1F3]/40 focus:outline-none",
-                        errors.contactPerson
-                          ? "border-red-400 focus:shadow-[0_0_0_3px_rgba(239,68,68,0.15)]"
-                          : "border-slate-200 focus:border-[#6A80A9] focus:shadow-[0_0_0_3px_rgba(106,128,169,0.12)]",
-                      )}
-                    />
-                    {errors.contactPerson && (
-                      <p className="text-[11.5px] font-medium text-red-500">
-                        {errors.contactPerson}
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-[12.5px] font-semibold text-[#000000]">
-                      Email Address <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="email"
-                      value={email}
-                      onChange={(e) => {
-                        setEmail(e.target.value);
-                        if (errors.email) setErrors((prev) => ({ ...prev, email: "" }));
-                      }}
-                      placeholder="e.g. booking@abc-forwarding.co.uk"
-                      className={cn(
-                        "h-[44px] w-full rounded-[12px] border bg-white/70 px-3.5 text-[14px] text-black transition-all focus:bg-[#E8F1F3]/40 focus:outline-none",
-                        errors.email
-                          ? "border-red-400 focus:shadow-[0_0_0_3px_rgba(239,68,68,0.15)]"
-                          : "border-slate-200 focus:border-[#6A80A9] focus:shadow-[0_0_0_3px_rgba(106,128,169,0.12)]",
-                      )}
-                    />
-                    {errors.email && (
-                      <p className="text-[11.5px] font-medium text-red-500">{errors.email}</p>
-                    )}
-                  </div>
-                </div>
-
-                {/* 3. WhatsApp & Status */}
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <div className="space-y-1.5">
-                    <label className="text-[12.5px] font-semibold text-[#000000]">
-                      WhatsApp Number <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={whatsapp}
-                      onChange={(e) => {
-                        setWhatsapp(e.target.value);
-                        if (errors.whatsapp) setErrors((prev) => ({ ...prev, whatsapp: "" }));
-                      }}
-                      placeholder="e.g. +44 7700 900077"
-                      className={cn(
-                        "h-[44px] w-full rounded-[12px] border bg-white/70 px-3.5 text-[14px] text-black transition-all focus:bg-[#E8F1F3]/40 focus:outline-none",
-                        errors.whatsapp
-                          ? "border-red-400 focus:shadow-[0_0_0_3px_rgba(239,68,68,0.15)]"
-                          : "border-slate-200 focus:border-[#6A80A9] focus:shadow-[0_0_0_3px_rgba(106,128,169,0.12)]",
-                      )}
-                    />
-                    {errors.whatsapp && (
-                      <p className="text-[11.5px] font-medium text-red-500">{errors.whatsapp}</p>
-                    )}
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-[12.5px] font-semibold text-[#000000]">Status</label>
-                    <select
-                      value={status}
-                      onChange={(e) => setStatus(e.target.value as "Active" | "Inactive")}
-                      className="h-[44px] w-full rounded-[12px] border border-slate-200 bg-white/70 px-3.5 text-[14px] text-black transition-all focus:border-[#6A80A9] focus:bg-[#E8F1F3]/40 focus:shadow-[0_0_0_3px_rgba(106,128,169,0.12)] focus:outline-none"
-                    >
-                      <option value="Active">Active</option>
-                      <option value="Inactive">Inactive</option>
-                    </select>
-                  </div>
-                </div>
-
-                {/* 4. Shipping Lines (Multi-Select Searchable Chips) */}
-                <div className="space-y-2 rounded-[16px] border border-[#6A80A9]/20 bg-[#E8F1F3]/30 p-4">
-                  <div className="flex items-center justify-between">
-                    <label className="text-[12.5px] font-bold text-[#000000] flex items-center gap-1.5">
-                      <Ship className="size-3.5 text-[#6A80A9]" />
-                      <span>Connected Shipping Lines</span>
-                      <span className="text-red-500">*</span>
-                    </label>
-                    <span className="text-[11px] text-slate-500">
-                      {selectedShippingLines.length} selected
-                    </span>
-                  </div>
-
-                  <div className="flex flex-wrap gap-2 pt-1">
-                    {ALL_SHIPPING_LINES.map((line) => {
-                      const isSelected = selectedShippingLines.includes(line);
-                      return (
-                        <button
-                          key={line}
-                          type="button"
-                          onClick={() => toggleShippingLine(line)}
-                          className={cn(
-                            "inline-flex items-center gap-1.5 rounded-[10px] px-3 py-1.5 text-[12.5px] font-medium transition-all shadow-2xs",
-                            isSelected
-                              ? "bg-[#6A80A9] text-white shadow-[0_2px_8px_rgba(106,128,169,0.3)]"
-                              : "bg-white text-slate-700 border border-slate-200 hover:border-slate-300",
-                          )}
-                        >
-                          {isSelected && <Check className="size-3" />}
-                          <span>{line}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {errors.shippingLines && (
-                    <p className="text-[11.5px] font-medium text-red-500">{errors.shippingLines}</p>
+            {/* SCROLLABLE FORM INPUTS */}
+            <div className="flex-1 overflow-y-auto px-5 sm:px-6 py-4 space-y-4 [scrollbar-width:thin]">
+              {/* Row 1: Name & Country */}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <label className="text-[12px] font-semibold text-slate-600">
+                    Forwarder / Company Name <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={name}
+                    onChange={(e) => {
+                      setName(e.target.value);
+                      if (errors.name) setErrors((prev) => ({ ...prev, name: "" }));
+                    }}
+                    placeholder="e.g. Apex Global Forwarding"
+                    className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50/60 px-3.5 text-sm sm:text-[13px] font-medium text-slate-900 placeholder:text-slate-400 transition-all duration-150 hover:bg-white focus:bg-white focus:border-[#009EE2] focus:ring-4 focus:ring-[#009EE2]/10 focus:outline-none"
+                  />
+                  {errors.name && (
+                    <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 pt-0.5">
+                      <AlertCircle className="size-3 shrink-0" />
+                      <span>{errors.name}</span>
+                    </p>
                   )}
                 </div>
 
-                {/* 5. Notes & Dispatch Guidelines */}
-                <div className="space-y-1.5">
-                  <label className="text-[12.5px] font-semibold text-[#000000]">
-                    Operational Notes & Communication SLA
-                  </label>
-                  <textarea
-                    rows={3}
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
-                    placeholder="e.g. Direct contract for UK-PK lanes. Vessel cutoff reminders required 48h in advance."
-                    className="w-full rounded-[12px] border border-slate-200 bg-white/70 p-3 text-[13.5px] text-black transition-all focus:border-[#6A80A9] focus:bg-[#E8F1F3]/40 focus:shadow-[0_0_0_3px_rgba(106,128,169,0.12)] focus:outline-none"
+                <div className="space-y-1">
+                  <LifecycleDropdownSelect
+                    label="Country / Primary Hub"
+                    value={country}
+                    onChange={(val) => setCountry(val)}
+                    options={FORWARDER_COUNTRY_OPTIONS.filter((c) => c !== "All Countries").map(
+                      (c) => ({
+                        value: c,
+                        label: c,
+                      }),
+                    )}
+                    placeholder="Select Country"
+                    activeColor="teal"
+                    triggerClassName="h-11 w-full text-sm sm:text-[13px] bg-slate-50/60"
                   />
                 </div>
-              </>
-            )}
-          </div>
+              </div>
 
-          {/* Footer Actions */}
-          {!isSuccess && (
-            <div className="border-t border-slate-100 px-6 py-4 flex items-center justify-end gap-3 bg-slate-50/50">
+              {/* Row 2: Contact Person & Role */}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <label className="text-[12px] font-semibold text-slate-600">
+                    Contact Person <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={contactPerson}
+                    onChange={(e) => {
+                      setContactPerson(e.target.value);
+                      if (errors.contactPerson) setErrors((prev) => ({ ...prev, contactPerson: "" }));
+                    }}
+                    placeholder="e.g. David Sterling"
+                    className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50/60 px-3.5 text-sm sm:text-[13px] font-medium text-slate-900 placeholder:text-slate-400 transition-all duration-150 hover:bg-white focus:bg-white focus:border-[#009EE2] focus:ring-4 focus:ring-[#009EE2]/10 focus:outline-none"
+                  />
+                  {errors.contactPerson && (
+                    <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 pt-0.5">
+                      <AlertCircle className="size-3 shrink-0" />
+                      <span>{errors.contactPerson}</span>
+                    </p>
+                  )}
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[12px] font-semibold text-slate-600">
+                    Designation / Role
+                  </label>
+                  <input
+                    type="text"
+                    value={contactRole}
+                    onChange={(e) => setContactRole(e.target.value)}
+                    placeholder="e.g. Senior Booking Agent"
+                    className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50/60 px-3.5 text-sm sm:text-[13px] font-medium text-slate-900 placeholder:text-slate-400 transition-all duration-150 hover:bg-white focus:bg-white focus:border-[#009EE2] focus:ring-4 focus:ring-[#009EE2]/10 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              {/* Row 3: Email & WhatsApp / Phone */}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <label className="text-[12px] font-semibold text-slate-600">
+                    Direct Email <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      if (errors.email) setErrors((prev) => ({ ...prev, email: "" }));
+                    }}
+                    placeholder="booking@forwarder.com"
+                    className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50/60 px-3.5 text-sm sm:text-[13px] font-medium text-slate-900 placeholder:text-slate-400 transition-all duration-150 hover:bg-white focus:bg-white focus:border-[#009EE2] focus:ring-4 focus:ring-[#009EE2]/10 focus:outline-none"
+                  />
+                  {errors.email && (
+                    <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 pt-0.5">
+                      <AlertCircle className="size-3 shrink-0" />
+                      <span>{errors.email}</span>
+                    </p>
+                  )}
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[12px] font-semibold text-slate-600">
+                    WhatsApp / Phone <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={whatsapp}
+                    onChange={(e) => {
+                      setWhatsapp(e.target.value);
+                      if (errors.whatsapp) setErrors((prev) => ({ ...prev, whatsapp: "" }));
+                    }}
+                    placeholder="+44 20 7946 0912"
+                    className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50/60 px-3.5 text-sm sm:text-[13px] font-medium text-slate-900 placeholder:text-slate-400 transition-all duration-150 hover:bg-white focus:bg-white focus:border-[#009EE2] focus:ring-4 focus:ring-[#009EE2]/10 focus:outline-none"
+                  />
+                  {errors.whatsapp && (
+                    <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 pt-0.5">
+                      <AlertCircle className="size-3 shrink-0" />
+                      <span>{errors.whatsapp}</span>
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Row 4: Contracted Shipping Lines */}
+              <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50/60 p-3.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-[12px] font-semibold text-slate-700">
+                    Contracted Shipping Lines <span className="text-rose-500">*</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleSelectAllLines}
+                    className="text-[11px] font-bold text-[#0FA3B1] hover:underline cursor-pointer"
+                  >
+                    Select All ({ALL_SHIPPING_LINES.length})
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {ALL_SHIPPING_LINES.map((line) => {
+                    const isSelected = selectedShippingLines.includes(line);
+                    return (
+                      <button
+                        key={line}
+                        type="button"
+                        onClick={() => toggleShippingLine(line)}
+                        className={cn(
+                          "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold transition-all cursor-pointer",
+                          isSelected
+                            ? "border-[#0FA3B1] bg-[#E8F5F6] text-[#0FA3B1] shadow-2xs ring-1 ring-[#0FA3B1]/20"
+                            : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50",
+                        )}
+                      >
+                        {isSelected && <Check className="size-3 stroke-[2.5]" />}
+                        <span>{line}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {errors.shippingLines && (
+                  <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 pt-0.5">
+                    <AlertCircle className="size-3 shrink-0" />
+                    <span>{errors.shippingLines}</span>
+                  </p>
+                )}
+              </div>
+
+              {/* Row 5: Notes */}
+              <div className="space-y-1">
+                <label className="text-[12px] font-semibold text-slate-600">
+                  Operational Notes (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  placeholder="e.g. Preferred for MSC UK-Pakistan routes with guaranteed space."
+                  className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50/60 px-3.5 text-sm sm:text-[13px] font-medium text-slate-900 placeholder:text-slate-400 transition-all duration-150 hover:bg-white focus:bg-white focus:border-[#009EE2] focus:ring-4 focus:ring-[#009EE2]/10 focus:outline-none"
+                />
+              </div>
+
+              {/* Row 6: Status Switch */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 rounded-xl border border-slate-200 bg-slate-50/60 p-3.5">
+                <div>
+                  <p className="text-[12px] font-bold text-slate-800">Forwarder Status</p>
+                  <p className="text-[11px] text-slate-500">
+                    Active partners receive automated quotation requests and booking orders
+                  </p>
+                </div>
+                <div className="flex items-center gap-1 bg-slate-200/70 p-0.5 rounded-full self-start sm:self-auto">
+                  <button
+                    type="button"
+                    onClick={() => setStatus("Active")}
+                    className={cn(
+                      "rounded-full px-3 py-1 text-[11.5px] font-bold transition-all cursor-pointer",
+                      status === "Active"
+                        ? "bg-white text-emerald-700 shadow-2xs"
+                        : "text-slate-600 hover:text-slate-900",
+                    )}
+                  >
+                    Active
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStatus("Inactive")}
+                    className={cn(
+                      "rounded-full px-3 py-1 text-[11.5px] font-bold transition-all cursor-pointer",
+                      status === "Inactive"
+                        ? "bg-white text-slate-800 shadow-2xs"
+                        : "text-slate-600 hover:text-slate-900",
+                    )}
+                  >
+                    Inactive
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* STICKY ACTION FOOTER */}
+            <div className="p-4 sm:p-5 sm:py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-2.5 shrink-0">
               <button
                 type="button"
                 onClick={() => onOpenChange(false)}
-                className="h-[44px] rounded-[12px] border border-slate-200 bg-white px-5 text-[13.5px] font-medium text-slate-700 hover:bg-slate-100 transition-colors"
+                className="h-10 px-4 rounded-full text-[13px] font-semibold text-slate-500 hover:bg-slate-200/60 hover:text-slate-800 transition-colors cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="h-[44px] rounded-[12px] bg-[#000000] px-6 text-[13.5px] font-medium text-[#FFFFFF] shadow-md hover:bg-slate-900 transition-all hover:scale-[1.01]"
+                className="inline-flex h-10 items-center justify-center gap-1.5 rounded-full bg-[#009EE2] hover:bg-[#0089c7] px-5 sm:px-6 text-[13px] font-bold text-white shadow-md shadow-[#009EE2]/20 transition-all active:scale-[0.98] cursor-pointer"
               >
-                {editForwarder ? "Save Changes" : "Create Forwarder"}
+                <Plus className="size-3.5 stroke-[2.5]" />
+                <span>{editForwarder ? "Save Changes" : "Register Forwarder"}</span>
               </button>
             </div>
-          )}
-        </form>
+          </form>
+        )}
       </DialogContent>
     </Dialog>
   );

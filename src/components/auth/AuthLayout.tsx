@@ -1,6 +1,7 @@
 import { ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { Anchor, Container, Globe2, ShieldCheck, Ship } from "lucide-react";
+import { PageTransition } from "@/components/common/PageTransition";
 
 interface AuthLayoutProps {
   children: ReactNode;
@@ -8,7 +9,7 @@ interface AuthLayoutProps {
 
 export function AuthLayout({ children }: { children: ReactNode }) {
   return (
-    <div className="relative min-h-screen w-full bg-[#FFFFFF] text-[#000000] selection:bg-[#E8F1F3] selection:text-[#6A80A9] flex flex-col justify-between overflow-x-hidden">
+    <div className="relative min-h-screen min-h-[100dvh] w-full min-w-full max-w-full bg-[#FFFFFF] text-[#000000] selection:bg-[#E8F1F3] selection:text-[#6A80A9] flex flex-col justify-between overflow-x-hidden">
       {/* Background ambient lighting */}
       <div
         className="pointer-events-none fixed inset-0 z-0 bg-[radial-gradient(ellipse_80%_60%_at_50%_-10%,rgba(232,241,243,0.85),rgba(255,255,255,0))]"
@@ -136,7 +137,9 @@ export function AuthLayout({ children }: { children: ReactNode }) {
           </div>
 
           {/* RIGHT SIDE: Centered Glass Authentication Card */}
-          <div className="flex w-full justify-center lg:col-span-6 lg:justify-end">{children}</div>
+          <div className="flex w-full justify-center lg:col-span-6 lg:justify-end">
+            <PageTransition>{children}</PageTransition>
+          </div>
         </div>
       </main>
 

@@ -1,14 +1,17 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { showPillToast } from "@/lib/pill-toast";
 import { useAuth } from "@/lib/auth-context";
 import { useSupabaseRealtime } from "@/hooks/use-supabase-realtime";
+import type { FullBookingRecord } from "@/lib/supabase-services";
 import {
   fetchBookingRequestsFromSupabase,
   approveBookingRequestInSupabase,
   requestRevisionInSupabase,
   calculateRequestsStats,
+  mapBookingRecordToRequest,
 } from "@/lib/requests-data";
+import { fetchAllForwarderRequestsFromSupabase } from "@/lib/multi-forwarder-service";
 import { RequestsHeader } from "./RequestsHeader";
 import { RequestsMetrics } from "./RequestsMetrics";
 import { RequestsToolbar } from "./RequestsToolbar";
@@ -20,19 +23,14 @@ import { ApproveRequestModal } from "./ApproveRequestModal";
 import { RevisionRequestModal } from "./RevisionRequestModal";
 import { ComposeEmailModal } from "../emails/ComposeEmailModal";
 import { MultiForwarderRequestModal } from "./MultiForwarderRequestModal";
-import { RecordOfferModal } from "./RecordOfferModal";
-import { ForwarderOfferCardsGrid } from "./ForwarderOfferCardsGrid";
-import { ForwarderOfferDetailModal } from "./ForwarderOfferDetailModal";
-import { MultipleForwarderComparisonModal } from "./MultipleForwarderComparisonModal";
-import { AwardConfirmationModal } from "./AwardConfirmationModal";
+import { GroupedQuotationModal } from "./GroupedQuotationModal";
 import {
-  fetchForwarderOfferCardsFromSupabase,
-  awardForwarderOfferCard,
-  type ForwarderOfferCardItem,
-} from "@/lib/forwarder-card-service";
+  RequestsMetricsSkeleton,
+  RequestsTableSkeleton,
+  RequestsCardGridSkeleton,
+} from "@/components/nashmia/skeletons/RequestsSkeletons";
 import type {
   BookingRequestRecord,
-  ForwarderQuoteRequestRecord,
   RequestsFilterState,
   RequestStatus,
   RequestPriority,
@@ -43,7 +41,7 @@ interface RequestsPageProps {
 }
 
 export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
-  const { userId, isConfigured } = useAuth();
+  const { userId, organizationId, isConfigured } = useAuth();
   const queryClient = useQueryClient();
 
   // Filters & layout state
@@ -74,19 +72,8 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
     null,
   );
   const [isMultiForwarderModalOpen, setIsMultiForwarderModalOpen] = useState(false);
-  const [recordingOfferRequest, setRecordingOfferRequest] =
-    useState<ForwarderQuoteRequestRecord | null>(null);
-
-  // Forwarder Offer Card State (Dynamic cards from Supabase)
-  const [detailOfferCard, setDetailOfferCard] = useState<ForwarderOfferCardItem | null>(null);
-  const [awardConfirmationCard, setAwardConfirmationCard] = useState<ForwarderOfferCardItem | null>(
-    null,
-  );
-  const [awardingCardId, setAwardingCardId] = useState<string | null>(null);
-
-  // Multiple Forwarder Comparison Modal State
-  const [comparingBooking, setComparingBooking] = useState<BookingRequestRecord | null>(null);
-  const [isComparingModalOpen, setIsComparingModalOpen] = useState(false);
+  const [viewingQuotationsBooking, setViewingQuotationsBooking] =
+    useState<BookingRequestRecord | null>(null);
 
   // React Query Fetch Booking Requests
   const {
@@ -97,95 +84,28 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
   } = useQuery({
     queryKey: ["booking-requests", userId],
     queryFn: () => fetchBookingRequestsFromSupabase(userId),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+    refetchOnMount: false,
+  });
+
+  // Supabase Source of Truth: All Forwarder Requests & Current Quotations
+  const { data: allForwarderRequests = [] } = useQuery({
+    queryKey: ["all-forwarder-requests"],
+    queryFn: () => fetchAllForwarderRequestsFromSupabase(),
     staleTime: 30_000,
+    refetchOnWindowFocus: false,
   });
 
-  // React Query Fetch Forwarder Offers dynamically from Supabase
-  const {
-    data: forwarderCards = [],
-    isLoading: isLoadingForwarderCards,
-    refetch: refetchForwarderCards,
-  } = useQuery({
-    queryKey: ["forwarder-offer-cards", userId],
-    queryFn: () => fetchForwarderOfferCardsFromSupabase(userId),
-    staleTime: 15_000,
-  });
+  // Consolidated Realtime updates subscriptions (multiplexed 1 channel per table, updating cache surgically)
+  useSupabaseRealtime("bookings", undefined, isConfigured, { organizationId });
+  useSupabaseRealtime("booking_events", undefined, isConfigured, { organizationId });
+  useSupabaseRealtime("email_messages", undefined, isConfigured, { organizationId });
+  useSupabaseRealtime("notifications", undefined, isConfigured, { organizationId });
+  useSupabaseRealtime("forwarder_requests", undefined, isConfigured, { organizationId });
+  useSupabaseRealtime("quotations", undefined, isConfigured, { organizationId });
 
-  // Cross-component and multi-forwarder event listener
-  useEffect(() => {
-    const handleDataChange = () => {
-      void refetch();
-      void refetchForwarderCards();
-      void queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
-      void queryClient.invalidateQueries({ queryKey: ["forwarder-offer-cards"] });
-    };
-
-    window.addEventListener("nashmia_multi_forwarder_updated", handleDataChange);
-    window.addEventListener("nashmia_multi_forwarder_dispatched", handleDataChange);
-    window.addEventListener("nashmia_forwarder_offer_received", handleDataChange);
-    window.addEventListener("nashmia_booking_confirmed", handleDataChange);
-    window.addEventListener("nashmia_booking_awarded", handleDataChange);
-
-    return () => {
-      window.removeEventListener("nashmia_multi_forwarder_updated", handleDataChange);
-      window.removeEventListener("nashmia_multi_forwarder_dispatched", handleDataChange);
-      window.removeEventListener("nashmia_forwarder_offer_received", handleDataChange);
-      window.removeEventListener("nashmia_booking_confirmed", handleDataChange);
-      window.removeEventListener("nashmia_booking_awarded", handleDataChange);
-    };
-  }, [refetch, refetchForwarderCards, queryClient]);
-
-  // Realtime updates subscription for forwarder offers in Supabase
-  useSupabaseRealtime(
-    "forwarder_offers",
-    useCallback(() => {
-      void queryClient.invalidateQueries({ queryKey: ["forwarder-offer-cards"] });
-      void refetchForwarderCards();
-      void queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
-      void refetch();
-    }, [queryClient, refetchForwarderCards, refetch]),
-    isConfigured,
-  );
-
-  // Realtime updates subscription
-  useSupabaseRealtime(
-    "bookings",
-    useCallback(() => {
-      void queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
-    }, [queryClient]),
-    isConfigured,
-  );
-
-  useSupabaseRealtime(
-    "booking_events",
-    useCallback(() => {
-      void queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
-      void refetch();
-    }, [queryClient, refetch]),
-    isConfigured,
-  );
-
-  useSupabaseRealtime(
-    "email_confirmations",
-    useCallback(() => {
-      void queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
-      void refetch();
-    }, [queryClient, refetch]),
-    isConfigured,
-  );
-
-  useSupabaseRealtime(
-    "email_messages",
-    useCallback(() => {
-      void queryClient.invalidateQueries({ queryKey: ["forwarder-offer-cards"] });
-      void refetchForwarderCards();
-      void queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
-      void refetch();
-    }, [queryClient, refetchForwarderCards, refetch]),
-    isConfigured,
-  );
-
-  // Sync with window events from email workflows or other tabs
+  // Sync with window events from email workflows or other tabs with surgical cache updates
   useEffect(() => {
     const handleUpdate = (e?: Event) => {
       if (e && "detail" in e) {
@@ -204,6 +124,32 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
 
           const targetMov = (detail.movementNumber || "").trim().toLowerCase();
           const targetBk = (detail.bookingId || detail.id || "").trim().toLowerCase();
+
+          // Handle newly created booking prepending
+          if (detail.booking && typeof detail.booking === "object") {
+            try {
+              const mapped = mapBookingRecordToRequest(detail.booking as FullBookingRecord);
+              queryClient.setQueriesData<BookingRequestRecord[]>(
+                { queryKey: ["booking-requests"] },
+                (prev) => {
+                  if (!prev) return [mapped];
+                  const exists = prev.some(
+                    (r) =>
+                      r.id === mapped.id ||
+                      (mapped.movementNumber && r.movementNumber === mapped.movementNumber) ||
+                      (mapped.reference && r.reference === mapped.reference),
+                  );
+                  if (exists) return prev;
+                  return [mapped, ...prev];
+                },
+              );
+            } catch (err) {
+              console.warn("[RequestsPage] Failed to map new booking:", err);
+            }
+          }
+
+          // Always refresh/sync all-forwarder-requests query cache
+          void queryClient.invalidateQueries({ queryKey: ["all-forwarder-requests"] });
 
           if (targetRef || targetMov || targetBk) {
             queryClient.setQueriesData<BookingRequestRecord[]>(
@@ -234,17 +180,74 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
                         itemId === targetBk));
 
                   if (isMatch) {
+                    const eventStatus = (detail.status || "").trim();
+                    const isConfirmedEvent =
+                      detail.isConfirmed ||
+                      eventStatus === "Approved" ||
+                      eventStatus === "Booking Confirmed" ||
+                      detail.confirmationStatus === "CONFIRMED";
+
+                    const isOfferEvent =
+                      eventStatus === "OFFER_RECEIVED" ||
+                      eventStatus === "Rate Verification" ||
+                      detail.offer ||
+                      detail.rate;
+
+                    let mappedStatus = item.status;
+                    if (
+                      isConfirmedEvent &&
+                      (item.status === "Pending Review" ||
+                        item.status === "Rate Verification" ||
+                        item.status === "Line Allocation")
+                    ) {
+                      mappedStatus = "Approved";
+                    } else if (
+                      isOfferEvent &&
+                      item.status !== "Approved" &&
+                      item.status !== "Booking Confirmed"
+                    ) {
+                      mappedStatus = "Rate Verification";
+                    } else if (
+                      eventStatus &&
+                      eventStatus !== "Approved" &&
+                      eventStatus !== "Booking Confirmed"
+                    ) {
+                      mappedStatus = eventStatus as RequestStatus;
+                    }
+
+                    const newRate =
+                      detail.rate ?? detail.offer?.ratePerContainer ?? item.ratePerContainer;
+
+                    const newTotal =
+                      detail.total ??
+                      detail.offer?.totalFreight ??
+                      (newRate ? newRate * (item.containerCount || 1) : item.totalFreight);
+
                     return {
                       ...item,
-                      status: "Approved",
-                      confirmationStatus: "CONFIRMED",
-                      confirmedAt: detail.confirmedAt || new Date().toISOString(),
+                      status: mappedStatus,
+                      confirmationStatus:
+                        detail.confirmationStatus ||
+                        (isConfirmedEvent ? "CONFIRMED" : item.confirmationStatus),
+                      confirmedAt:
+                        detail.confirmedAt ||
+                        item.confirmedAt ||
+                        (isConfirmedEvent ? new Date().toISOString() : undefined),
                       confirmedBy:
-                        detail.confirmedBy || detail.forwarderName || "Awarded Forwarder",
-                      preferredCarrier: detail.carrier || item.preferredCarrier,
-                      vesselName: detail.vesselName || item.vesselName,
-                      ratePerContainer: detail.rate || item.ratePerContainer,
-                      totalFreight: detail.total || item.totalFreight,
+                        detail.confirmedBy ||
+                        detail.forwarderName ||
+                        item.confirmedBy ||
+                        "Operations Desk",
+                      preferredCarrier:
+                        detail.carrier ||
+                        detail.offer?.carrier ||
+                        detail.preferredCarrier ||
+                        item.preferredCarrier,
+                      vesselName: detail.vesselName || detail.offer?.vesselName || item.vesselName,
+                      voyageNumber:
+                        detail.voyageNumber || detail.offer?.voyageNumber || item.voyageNumber,
+                      ratePerContainer: newRate,
+                      totalFreight: newTotal,
                     };
                   }
                   return item;
@@ -254,39 +257,30 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
           }
         }
       }
-      let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-      const debouncedRefresh = () => {
-        if (debounceTimer) clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => {
-          void queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
-          void queryClient.invalidateQueries({ queryKey: ["forwarder-offer-cards"] });
-          void refetch();
-          void refetchForwarderCards();
-        }, 150);
-      };
-      debouncedRefresh();
     };
 
+    window.addEventListener("nashmia_multi_forwarder_updated", handleUpdate);
+    window.addEventListener("nashmia_multi_forwarder_dispatched", handleUpdate);
+    window.addEventListener("nashmia_forwarder_offer_received", handleUpdate);
     window.addEventListener("nashmia_booking_confirmed", handleUpdate);
     window.addEventListener("nashmia_booking_awarded", handleUpdate);
     window.addEventListener("nashmia_booking_status_updated", handleUpdate);
     window.addEventListener("supabase_realtime_bookings_change", handleUpdate);
     window.addEventListener("nashmia_bookings_updated", handleUpdate);
     window.addEventListener("nashmia_email_matched", handleUpdate);
-    window.addEventListener("nashmia:email-sent", handleUpdate);
-    window.addEventListener("storage", handleUpdate);
 
     return () => {
+      window.removeEventListener("nashmia_multi_forwarder_updated", handleUpdate);
+      window.removeEventListener("nashmia_multi_forwarder_dispatched", handleUpdate);
+      window.removeEventListener("nashmia_forwarder_offer_received", handleUpdate);
       window.removeEventListener("nashmia_booking_confirmed", handleUpdate);
       window.removeEventListener("nashmia_booking_awarded", handleUpdate);
       window.removeEventListener("nashmia_booking_status_updated", handleUpdate);
       window.removeEventListener("supabase_realtime_bookings_change", handleUpdate);
       window.removeEventListener("nashmia_bookings_updated", handleUpdate);
       window.removeEventListener("nashmia_email_matched", handleUpdate);
-      window.removeEventListener("nashmia:email-sent", handleUpdate);
-      window.removeEventListener("storage", handleUpdate);
     };
-  }, [queryClient, refetch, refetchForwarderCards]);
+  }, [queryClient]);
 
   // Derive reactive active request for drawer to automatically update on confirmation
   const currentActiveDetail = useMemo(() => {
@@ -294,9 +288,26 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
     return requests.find((r) => r.id === activeDetailRequest.id) || activeDetailRequest;
   }, [activeDetailRequest, requests]);
 
-  // Filter and Sort requests
+  // Filter and Sort requests - Guaranteed exactly ONE main request per booking / Movement Number
   const filteredRequests = useMemo(() => {
-    return requests
+    // 1. Enforce strict 1:1 grouping per Movement Number / Booking
+    const uniqueGroupMap = new Map<string, BookingRequestRecord>();
+    for (const req of requests) {
+      const groupKey = (req.movementNumber || req.bookingReference || req.reference || req.id)
+        .trim()
+        .toUpperCase();
+
+      if (!uniqueGroupMap.has(groupKey)) {
+        uniqueGroupMap.set(groupKey, req);
+      } else {
+        const existing = uniqueGroupMap.get(groupKey)!;
+        if (new Date(req.updatedAt).getTime() > new Date(existing.updatedAt).getTime()) {
+          uniqueGroupMap.set(groupKey, req);
+        }
+      }
+    }
+
+    return Array.from(uniqueGroupMap.values())
       .filter((req) => {
         // Search filter
         if (filters.search.trim()) {
@@ -396,60 +407,43 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
     setFilters((prev) => ({ ...prev, ...updates }));
   }, []);
 
-  // Action Handlers
-  const handleConfirmApproval = async (
-    requestId: string,
-    details: {
-      vesselName?: string;
-      voyageNumber?: string;
-      notes?: string;
-      notifyParties?: boolean;
+  // Action Handlers: Optimistic mutation for manual booking approval
+  const approveBookingMutation = useMutation({
+    mutationFn: async ({
+      requestId,
+      details,
+    }: {
+      requestId: string;
+      details: {
+        forwarderId?: string;
+        forwarderName?: string;
+        vesselName?: string;
+        voyageNumber?: string;
+        notes?: string;
+        notifyParties?: boolean;
+      };
+      displayRef?: string;
+    }) => {
+      return await approveBookingRequestInSupabase(requestId, userId, details);
     },
-  ) => {
-    try {
-      await approveBookingRequestInSupabase(requestId, userId, details);
-      toast.success("Booking Request Approved", {
-        description: `Booking ${requestId} is now confirmed. Equipment and space allocated.`,
-      });
-      void queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
-    } catch (err: unknown) {
-      toast.error("Failed to approve request", {
-        description: err instanceof Error ? err.message : "Please try again.",
-      });
-    }
-  };
+    onMutate: async ({ requestId, details, displayRef }) => {
+      // 1. Cancel any active outgoing refetches so they don't overwrite optimistic data
+      await queryClient.cancelQueries({ queryKey: ["booking-requests"] });
+      await queryClient.cancelQueries({ queryKey: ["dashboard-bookings"] });
+      await queryClient.cancelQueries({ queryKey: ["movements"] });
 
-  const handleConfirmRevision = async (requestId: string, revisionNotes: string) => {
-    try {
-      await requestRevisionInSupabase(requestId, userId, revisionNotes);
-      toast.info("Revision Request Dispatched", {
-        description: `Shipper has been notified with revision instructions.`,
+      // 2. Snapshot previous query states for rollback on failure
+      const previousRequests = queryClient.getQueriesData<BookingRequestRecord[]>({
+        queryKey: ["booking-requests"],
       });
-      void queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
-    } catch (err: unknown) {
-      toast.error("Failed to submit revision", {
-        description: err instanceof Error ? err.message : "Please try again.",
+      const previousDashboard = queryClient.getQueriesData<FullBookingRecord[]>({
+        queryKey: ["dashboard-bookings"],
       });
-    }
-  };
 
-  // Trigger Award Confirmation Modal with forwarder offer details
-  const handleAwardForwarderCard = (card: ForwarderOfferCardItem) => {
-    setAwardConfirmationCard(card);
-  };
+      const confirmedAt = new Date().toISOString();
+      const targetIdLower = requestId.trim().toLowerCase();
 
-  // Explicit confirmation execution after user clicks Confirm Award in modal
-  const handleConfirmAwardCard = async (
-    card: ForwarderOfferCardItem,
-    options?: { confirmImmediatelyIfExplicit?: boolean; confirmationNotes?: string },
-  ) => {
-    setAwardingCardId(card.id);
-    try {
-      // Optimistic update for immediate visual feedback on All Requests
-      const targetMov = (card.movementNumber || "").trim().toLowerCase();
-      const targetBk = (card.bookingId || "").trim().toLowerCase();
-      const targetRef = (card.movementNumber || card.bookingId || "").trim().toLowerCase();
-
+      // 3. Optimistically update all matching booking-requests queries
       queryClient.setQueriesData<BookingRequestRecord[]>(
         { queryKey: ["booking-requests"] },
         (prev) => {
@@ -461,33 +455,22 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
             const itemId = (item.id || "").trim().toLowerCase();
 
             const isMatch =
-              (targetRef &&
-                (itemRef === targetRef ||
-                  itemMov === targetRef ||
-                  itemBkRef === targetRef ||
-                  itemId === targetRef)) ||
-              (targetMov &&
-                (itemRef === targetMov ||
-                  itemMov === targetMov ||
-                  itemBkRef === targetMov ||
-                  itemId === targetMov)) ||
-              (targetBk &&
-                (itemRef === targetBk ||
-                  itemMov === targetBk ||
-                  itemBkRef === targetBk ||
-                  itemId === targetBk));
+              itemId === targetIdLower ||
+              itemRef === targetIdLower ||
+              itemMov === targetIdLower ||
+              itemBkRef === targetIdLower;
 
             if (isMatch) {
               return {
                 ...item,
                 status: "Approved",
                 confirmationStatus: "CONFIRMED",
-                confirmedAt: new Date().toISOString(),
-                confirmedBy: card.forwarderName || "Awarded Forwarder",
-                preferredCarrier: card.carrier || item.preferredCarrier,
-                vesselName: card.vesselName || item.vesselName,
-                ratePerContainer: card.ratePerContainer || item.ratePerContainer,
-                totalFreight: card.totalFreight || item.totalFreight,
+                confirmedAt,
+                confirmedBy: details.forwarderName || "Operations Desk",
+                forwarderId: details.forwarderId || item.forwarderId,
+                forwarderName: details.forwarderName || item.forwarderName,
+                vesselName: details.vesselName || item.vesselName,
+                voyageNumber: details.voyageNumber || item.voyageNumber,
               };
             }
             return item;
@@ -495,28 +478,143 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
         },
       );
 
-      const res = await awardForwarderOfferCard(card, userId, options);
-      toast.success("Offer Awarded & Request Confirmed!", {
-        description: `Booking request ${card.movementNumber || card.bookingId || ""} is now officially Approved & Confirmed with ${card.forwarderName}.`,
-      });
-      setAwardConfirmationCard(null);
-      void refetchForwarderCards();
-      void refetch();
-      void queryClient.invalidateQueries({ queryKey: ["forwarder-offer-cards"] });
+      // 4. Optimistically update all dashboard queries
+      queryClient.setQueriesData<FullBookingRecord[]>(
+        { queryKey: ["dashboard-bookings"] },
+        (prev) => {
+          if (!prev) return prev;
+          return prev.map((b) => {
+            const bId = (b.id || "").trim().toLowerCase();
+            const bMov = (b.movement_number || "").trim().toLowerCase();
+            const bRef = (b.booking_reference || "").trim().toLowerCase();
+            const bRefCode = (b.reference || "").trim().toLowerCase();
+
+            const isMatch =
+              bId === targetIdLower ||
+              bMov === targetIdLower ||
+              bRef === targetIdLower ||
+              bRefCode === targetIdLower;
+
+            if (isMatch) {
+              return {
+                ...b,
+                status: "Booking Confirmed",
+                confirmation_status: "CONFIRMED",
+                confirmed_at: confirmedAt,
+                confirmed_by: details.forwarderName || "Operations Desk",
+                forwarder_id: details.forwarderId || b.forwarder_id,
+                forwarder_name: details.forwarderName || b.forwarder_name,
+                vessel_name: details.vesselName || b.vessel_name,
+                voyage_number: details.voyageNumber || b.voyage_number,
+              };
+            }
+            return b;
+          });
+        },
+      );
+
+      // 5. Dispatch instantaneous UI events for non-query listeners & cross-component sync
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("nashmia_booking_confirmed", {
+            detail: {
+              bookingId: requestId,
+              id: requestId,
+              status: "Booking Confirmed",
+              confirmationStatus: "CONFIRMED",
+              isConfirmed: true,
+              confirmedAt,
+              confirmedBy: "Operations Desk",
+              vesselName: details.vesselName,
+              voyageNumber: details.voyageNumber,
+            },
+          }),
+        );
+        window.dispatchEvent(new CustomEvent("nashmia_bookings_updated"));
+        window.dispatchEvent(new CustomEvent("supabase_realtime_bookings_change"));
+      }
+
+      return { previousRequests, previousDashboard, displayRef };
+    },
+    onError: (err, variables, context) => {
+      // Rollback to previous state on error
+      if (context?.previousRequests) {
+        context.previousRequests.forEach(([queryKey, data]) => {
+          queryClient.setQueryData(queryKey, data);
+        });
+      }
+      if (context?.previousDashboard) {
+        context.previousDashboard.forEach(([queryKey, data]) => {
+          queryClient.setQueryData(queryKey, data);
+        });
+      }
+      showPillToast.error(
+        err instanceof Error ? err.message : "Please try again.",
+        "Failed to approve request",
+      );
+    },
+    onSuccess: (_data, variables, context) => {
+      const displayRef = context?.displayRef || variables.requestId;
+      showPillToast.success(
+        `Booking ${displayRef} is now confirmed. Equipment and space allocated.`,
+        "Booking Request Approved",
+        displayRef,
+      );
+    },
+    onSettled: () => {
+      // Targeted UI refresh via TanStack Query cache invalidations
+      void queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
+      void queryClient.invalidateQueries({ queryKey: ["dashboard-bookings"] });
+      void queryClient.invalidateQueries({ queryKey: ["movements"] });
+      void queryClient.invalidateQueries({ queryKey: ["booking-events"] });
+      void queryClient.invalidateQueries({ queryKey: ["notifications"] });
+
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("nashmia_bookings_updated"));
+        window.dispatchEvent(new CustomEvent("supabase_realtime_bookings_change"));
+      }
+    },
+  });
+
+  const handleConfirmApproval = async (
+    requestId: string,
+    details: {
+      forwarderId?: string;
+      forwarderName?: string;
+      vesselName?: string;
+      voyageNumber?: string;
+      notes?: string;
+      notifyParties?: boolean;
+    },
+  ) => {
+    const displayRef = approvingRequest?.reference || approvingRequest?.movementNumber || requestId;
+    await approveBookingMutation.mutateAsync({
+      requestId,
+      details,
+      displayRef,
+    });
+  };
+
+  const handleConfirmRevision = async (requestId: string, revisionNotes: string) => {
+    try {
+      await requestRevisionInSupabase(requestId, userId, revisionNotes);
+      showPillToast.info(
+        "Shipper has been notified with revision instructions.",
+        "Revision Request Dispatched",
+      );
       void queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
     } catch (err: unknown) {
-      toast.error("Failed to award booking", {
-        description: err instanceof Error ? err.message : "Please try again.",
-      });
-    } finally {
-      setAwardingCardId(null);
+      showPillToast.error(
+        err instanceof Error ? err.message : "Please try again.",
+        "Failed to submit revision",
+      );
     }
   };
 
   // CSV Export
   const handleExportCsv = () => {
     if (filteredRequests.length === 0) {
-      toast.error("No requests to export");
+      showPillToast.error("No requests to export", "Notice");
       return;
     }
 
@@ -564,89 +662,24 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
     link.click();
     document.body.removeChild(link);
 
-    toast.success("CSV Export Generated", {
-      description: `Downloaded ${filteredRequests.length} booking request records.`,
-    });
+    showPillToast.build(
+      `Downloaded ${filteredRequests.length} booking request records.`,
+      "CSV Export Generated",
+    );
   };
 
   const handleOpenMultiForwarder = (req?: BookingRequestRecord) => {
     const target = req || currentActiveDetail || filteredRequests[0] || null;
     if (!target) {
-      toast.error("Please select a booking request first to dispatch quote requests.");
+      showPillToast.error(
+        "Please select a booking request first to dispatch quote requests.",
+        "Notice",
+      );
       return;
     }
     setMultiForwarderBooking(target);
     setIsMultiForwarderModalOpen(true);
   };
-
-  const handleOpenComparison = useCallback(
-    (bookingOrIdentifier?: BookingRequestRecord | string) => {
-      if (!bookingOrIdentifier) {
-        setComparingBooking(requests[0] || null);
-        setIsComparingModalOpen(true);
-        return;
-      }
-
-      if (typeof bookingOrIdentifier === "string") {
-        const found = requests.find(
-          (r) =>
-            r.id === bookingOrIdentifier ||
-            r.reference === bookingOrIdentifier ||
-            r.movementNumber === bookingOrIdentifier,
-        );
-        if (found) {
-          setComparingBooking(found);
-        } else {
-          // Construct minimal booking context from matching forwarder offer card
-          const matchingOffers = forwarderCards.filter(
-            (c) => c.movementNumber === bookingOrIdentifier || c.bookingId === bookingOrIdentifier,
-          );
-          if (matchingOffers.length > 0) {
-            const first = matchingOffers[0];
-            setComparingBooking({
-              id: first.bookingId || `booking-${first.movementNumber}`,
-              reference: first.movementNumber,
-              movementNumber: first.movementNumber,
-              buyerName: "Global Buyer / Consignee",
-              supplierName: "Verified Supplier",
-              cargoDescription: first.containerType || "General Cargo",
-              containerType: first.containerSize || "40HC",
-              containerCount: first.containerCount || 1,
-              polCode: first.polCode || "PKBQM",
-              podCode: first.podCode || "USLAX",
-              etd: first.etd || new Date().toISOString(),
-              eta: first.eta || new Date().toISOString(),
-              status: "Pending Review",
-              priority: "Medium",
-              requestedBy: { name: "Logistics Team", email: "logistics@example.com" },
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            } as BookingRequestRecord);
-          } else {
-            setComparingBooking(requests[0] || null);
-          }
-        }
-      } else {
-        setComparingBooking(bookingOrIdentifier);
-      }
-      setIsComparingModalOpen(true);
-    },
-    [requests, forwarderCards],
-  );
-
-  // Filter offers for the comparison modal
-  const comparisonOffers = useMemo(() => {
-    if (!comparingBooking) return forwarderCards;
-    const bookingId = comparingBooking.id;
-    const movement = comparingBooking.movementNumber || comparingBooking.reference;
-    const filtered = forwarderCards.filter(
-      (card) =>
-        (card.bookingId && card.bookingId === bookingId) ||
-        (movement && card.movementNumber === movement) ||
-        (comparingBooking.reference && card.movementNumber === comparingBooking.reference),
-    );
-    return filtered.length > 0 ? filtered : forwarderCards;
-  }, [comparingBooking, forwarderCards]);
 
   return (
     <div className="space-y-6">
@@ -662,60 +695,52 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
       />
 
       {/* KPI Metrics */}
-      <RequestsMetrics
-        stats={stats}
-        activeStatusFilter={filters.status}
-        onFilterStatus={(status) => {
-          if (status === "Urgent") {
-            setFilters((prev) => ({ ...prev, priority: "Urgent", status: "All" }));
-          } else {
-            setFilters((prev) => ({
-              ...prev,
-              status: status as RequestStatus | "All",
-              priority: "All",
-            }));
-          }
-        }}
-      />
+      {isLoading && requests.length === 0 ? (
+        <RequestsMetricsSkeleton />
+      ) : (
+        <RequestsMetrics
+          stats={stats}
+          activeStatusFilter={filters.status}
+          onFilterStatus={(status) => {
+            if (status === "Urgent") {
+              setFilters((prev) => ({ ...prev, priority: "Urgent", status: "All" }));
+            } else {
+              setFilters((prev) => ({
+                ...prev,
+                status: status as RequestStatus | "All",
+                priority: "All",
+              }));
+            }
+          }}
+        />
+      )}
 
       {/* Filter & View Toolbar */}
       <RequestsToolbar
         filters={filters}
         onFilterChange={handleFilterChange}
         statusCounts={statusCounts}
-        totalFiltered={
-          filters.status === "Forwarder Offers" ? forwarderCards.length : filteredRequests.length
-        }
-        forwarderOffersCount={forwarderCards.length}
+        totalFiltered={filteredRequests.length}
       />
 
-      {/* Main Content: Forwarder Offers OR Booking Requests (Grid / Table / Kanban) */}
-      {filters.status === "Forwarder Offers" ? (
-        <ForwarderOfferCardsGrid
-          cards={forwarderCards}
-          isLoading={isLoadingForwarderCards}
-          onViewDetails={(card) => setDetailOfferCard(card)}
-          onAward={handleAwardForwarderCard}
-          onCompare={(card) => handleOpenComparison(card.movementNumber || card.bookingId)}
-          onCompareBooking={(movement) => handleOpenComparison(movement)}
-          onRequestQuotes={() => handleOpenMultiForwarder()}
-          onRefresh={() => void refetchForwarderCards()}
-          awardingCardId={awardingCardId}
-        />
+      {/* Main Content: Booking Requests (Grid / Table / Kanban) */}
+      {isLoading && requests.length === 0 ? (
+        filters.viewMode === "table" ? (
+          <RequestsTableSkeleton rows={7} />
+        ) : (
+          <RequestsCardGridSkeleton count={6} />
+        )
       ) : (
         <>
           {filters.viewMode === "grid" && (
             <RequestsCardGrid
               requests={filteredRequests}
-              forwarderCards={forwarderCards}
+              forwarderRequests={allForwarderRequests}
               onSelectRequest={(req) => setActiveDetailRequest(req)}
               onApproveRequest={(req) => setApprovingRequest(req)}
               onRequestRevision={(req) => setRevisingRequest(req)}
               onRequestQuotes={(req) => handleOpenMultiForwarder(req)}
-              onCompareForwarderOffers={handleOpenComparison}
-              onViewForwarderOffers={() => {
-                setFilters((prev) => ({ ...prev, status: "Forwarder Offers" }));
-              }}
+              onViewQuotations={(req) => setViewingQuotationsBooking(req)}
               onComposeEmail={(req) => {
                 setEmailingRequest(req);
                 setIsEmailModalOpen(true);
@@ -726,6 +751,7 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
           {filters.viewMode === "table" && (
             <RequestsTableView
               requests={filteredRequests}
+              forwarderRequests={allForwarderRequests}
               selectedIds={selectedIds}
               onToggleSelect={handleToggleSelect}
               onToggleSelectAll={handleToggleSelectAll}
@@ -733,7 +759,7 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
               onApproveRequest={(req) => setApprovingRequest(req)}
               onRequestRevision={(req) => setRevisingRequest(req)}
               onRequestQuotes={(req) => handleOpenMultiForwarder(req)}
-              onCompareForwarderOffers={handleOpenComparison}
+              onViewQuotations={(req) => setViewingQuotationsBooking(req)}
               onComposeEmail={(req) => {
                 setEmailingRequest(req);
                 setIsEmailModalOpen(true);
@@ -766,8 +792,6 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
           setRevisingRequest(req);
         }}
         onRequestQuotes={(req) => handleOpenMultiForwarder(req)}
-        onRecordOffer={(fwdReq) => setRecordingOfferRequest(fwdReq)}
-        onCompareForwarderOffers={handleOpenComparison}
         onComposeEmail={(req) => {
           setEmailingRequest(req);
           setIsEmailModalOpen(true);
@@ -806,40 +830,15 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
         />
       )}
 
-      {/* Multiple Forwarder Comparison Modal */}
-      {isComparingModalOpen && (
-        <MultipleForwarderComparisonModal
-          booking={comparingBooking}
-          offers={comparisonOffers}
-          allBookings={requests}
-          isOpen={isComparingModalOpen}
-          onClose={() => {
-            setIsComparingModalOpen(false);
-            setComparingBooking(null);
-          }}
-          onSelectBooking={(b) => setComparingBooking(b)}
-          onAwardOffer={async (offer) => {
-            await handleAwardForwarderCard(offer);
-            setIsComparingModalOpen(false);
-            setComparingBooking(null);
-          }}
-          onRefresh={() => {
-            void refetch();
-            void refetchForwarderCards();
-          }}
-          userId={userId}
-        />
-      )}
-
-      {/* Record Offer Modal */}
-      {Boolean(recordingOfferRequest) && (
-        <RecordOfferModal
-          request={recordingOfferRequest}
-          isOpen={Boolean(recordingOfferRequest)}
-          onClose={() => setRecordingOfferRequest(null)}
-          onSaved={() => {
-            void refetch();
-            void queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
+      {/* Grouped Quotation Comparison Modal */}
+      {viewingQuotationsBooking && (
+        <GroupedQuotationModal
+          booking={viewingQuotationsBooking}
+          isOpen={Boolean(viewingQuotationsBooking)}
+          onClose={() => setViewingQuotationsBooking(null)}
+          onRequestMoreQuotes={(req) => {
+            setViewingQuotationsBooking(null);
+            handleOpenMultiForwarder(req);
           }}
         />
       )}
@@ -860,24 +859,6 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
           }
         />
       )}
-
-      {/* Forwarder Offer Detail Modal */}
-      <ForwarderOfferDetailModal
-        card={detailOfferCard}
-        isOpen={Boolean(detailOfferCard)}
-        onClose={() => setDetailOfferCard(null)}
-        onAward={handleAwardForwarderCard}
-        isAwarding={awardingCardId === detailOfferCard?.id}
-      />
-
-      {/* Award & Official Assignment Confirmation Modal */}
-      <AwardConfirmationModal
-        isOpen={Boolean(awardConfirmationCard)}
-        onClose={() => setAwardConfirmationCard(null)}
-        card={awardConfirmationCard}
-        onConfirmAward={handleConfirmAwardCard}
-        isAwarding={Boolean(awardingCardId)}
-      />
     </div>
   );
 }

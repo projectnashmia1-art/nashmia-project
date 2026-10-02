@@ -25,10 +25,11 @@ export function ForwarderCardGrid({
       <AddForwarderCard onAddForwarder={onAddForwarder} />
 
       {/* 2. Forwarder Business Profile Cards */}
-      {forwarders.map((forwarder) => (
+      {forwarders.map((forwarder, idx) => (
         <ForwarderCard
           key={forwarder.id}
           forwarder={forwarder}
+          index={idx + 1}
           onSelectForwarder={onSelectForwarder}
           onEditForwarder={onEditForwarder}
           onToggleArchive={onToggleArchive}

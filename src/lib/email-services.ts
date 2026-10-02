@@ -375,9 +375,9 @@ export async function fetchEmailsFromSupabase(
   let dbRecords: EmailMessageRecord[] = [];
   let gmailRecords: EmailMessageRecord[] = [];
 
-  // 1. Fetch live Gmail messages if user has an active Gmail session (throttled to 60s)
+  // 1. Fetch live Gmail messages if user has an active Gmail session (short 10s cooldown)
   const now = Date.now();
-  if (now - lastLiveGmailFetchTime < 60000 && cachedLiveGmailRecords.length > 0) {
+  if (now - lastLiveGmailFetchTime < 10000 && cachedLiveGmailRecords.length > 0) {
     gmailRecords = cachedLiveGmailRecords;
   } else if (isGmailQuotaCooldownActive()) {
     gmailRecords = cachedLiveGmailRecords;
@@ -387,7 +387,7 @@ export async function fetchEmailsFromSupabase(
       if (token) {
         const cachedUser = getCachedGoogleUser();
         const liveGmailMsgs = await fetchLiveGmailMessages({
-          maxResults: 15,
+          maxResults: 20,
           userId,
         });
         if (liveGmailMsgs && liveGmailMsgs.length > 0) {
@@ -764,11 +764,22 @@ export async function saveDraftEmailInSupabase(
 
 /**
  * Dispatch / Send an email through the secure backend flow with Gmail verification.
- * Only after Gmail API / backend confirms successful sending, status becomes SENT with valid message & thread IDs.
+ * Supports both signatures:
+ *   sendEmailThroughBackend(userId, values, draftId)
+ *   sendEmailThroughBackend({ userId, toEmail, subject, ... })
  */
 export async function sendEmailThroughBackend(
-  userId: string | null | undefined,
-  values: ComposeEmailFormValues,
+  userIdOrOptions:
+    | string
+    | null
+    | undefined
+    | (ComposeEmailFormValues & {
+        userId?: string | null;
+        bodyText?: string;
+        bookingReference?: string;
+        templateType?: string;
+      }),
+  maybeValues?: ComposeEmailFormValues,
   _draftMessageId?: string,
 ): Promise<{
   success: boolean;
@@ -779,6 +790,31 @@ export async function sendEmailThroughBackend(
   gmailThreadId?: string;
   errorMessage?: string;
 }> {
+  let userId: string | null | undefined = null;
+  let values: ComposeEmailFormValues;
+
+  if (typeof userIdOrOptions === "object" && userIdOrOptions !== null) {
+    const opts = userIdOrOptions;
+    userId = opts.userId || null;
+    values = {
+      fromEmail: opts.fromEmail || "projectnashmia1@gmail.com",
+      toEmail: opts.toEmail,
+      toName: opts.toName,
+      cc: opts.cc,
+      bcc: opts.bcc,
+      subject: opts.subject,
+      body: opts.body || opts.bodyText || "",
+      bookingId: opts.bookingId,
+      forwarderId: opts.forwarderId,
+      emailType: opts.emailType,
+      movementNumber: opts.movementNumber || opts.bookingReference,
+      attachments: opts.attachments,
+    };
+  } else {
+    userId = userIdOrOptions;
+    values = maybeValues || ({} as ComposeEmailFormValues);
+  }
+
   console.log("[EmailService] sendEmailThroughBackend initiated with payload:", {
     userId: userId || null,
     fromEmail: values.fromEmail,
@@ -907,15 +943,19 @@ export async function sendEmailThroughBackend(
         gmailThreadId,
       });
     } else {
-      console.warn("[EmailService] No Gmail access token found for user ID:", userId);
-      // Attempt backend route if configured
-      console.log("[EmailService] Checking backend fallback /api/gmail/send-email...");
+      console.warn(
+        "[EmailService] No Gmail access token found in client memory. Triggering /api/gmail/send-email server dispatch...",
+      );
+      // Attempt backend route which has access to persistent tokens and auto-refresh
       const backendRes = await fetch("/api/gmail/send-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          userId: userId || null,
           from: values.fromEmail,
+          fromName: values.toName ? "Nashmia Operations" : undefined,
           to: values.toEmail,
+          toName: values.toName,
           cc: values.cc,
           bcc: values.bcc,
           subject: values.subject,
@@ -930,25 +970,38 @@ export async function sendEmailThroughBackend(
 
       if (backendRes && backendRes.ok) {
         const responseData = (await backendRes.json().catch(() => ({}))) as {
+          success?: boolean;
           gmail_message_id?: string;
           id?: string;
           gmail_thread_id?: string;
           threadId?: string;
+          error?: string;
         };
-        finalStatus = "SENT";
-        gmailMessageId = responseData.gmail_message_id || responseData.id || `gm-${Date.now()}`;
-        gmailThreadId =
-          responseData.gmail_thread_id || responseData.threadId || `gth-${Date.now()}`;
-        console.log("[EmailService] Sent via backend proxy:", { gmailMessageId, gmailThreadId });
+        if (responseData.success !== false && (responseData.gmail_message_id || responseData.id)) {
+          finalStatus = "SENT";
+          gmailMessageId = responseData.gmail_message_id || responseData.id || `gm-${Date.now()}`;
+          gmailThreadId =
+            responseData.gmail_thread_id || responseData.threadId || `gth-${Date.now()}`;
+          console.log("[EmailService] Sent successfully via backend proxy:", {
+            gmailMessageId,
+            gmailThreadId,
+          });
+        } else {
+          finalStatus = "FAILED";
+          backendErrorMessage =
+            responseData.error ||
+            "Gmail is not connected. Please connect your Gmail account in Settings or click Connect Gmail.";
+        }
       } else {
-        const statusDetail = backendRes ? `HTTP ${backendRes.status}` : "Endpoint unreachable";
-        backendErrorMessage = `Gmail is not connected. Please connect your Gmail account to send live emails (${statusDetail}).`;
+        const errJson = backendRes ? await backendRes.json().catch(() => ({})) : {};
+        const errMsg =
+          (errJson as { error?: string })?.error ||
+          "Gmail is not connected. Please connect your Gmail account in Settings to send live emails.";
+        backendErrorMessage = errMsg;
         finalStatus = "FAILED";
         console.error(
-          "[EmailService] Email delivery failed: No active Gmail OAuth session and backend proxy unavailable.",
-          {
-            backendResStatus: backendRes?.status,
-          },
+          "[EmailService] Email delivery failed: No active Gmail OAuth session.",
+          backendErrorMessage,
         );
       }
     }
@@ -961,17 +1014,18 @@ export async function sendEmailThroughBackend(
   // 3. Update Supabase with final status and error message
   if (isSupabaseConfigured && messageId !== fallbackMessageId) {
     try {
-      await supabase
+      const { error: msgUpdErr } = await supabase
         .from("email_messages")
         .update({
-          status: finalStatus === "SENT" ? "SENT" : "FAILED",
+          direction: "Outbound",
           gmail_message_id: gmailMessageId || null,
-          gmail_thread_id: gmailThreadId || null,
-          error_message: backendErrorMessage || null,
           sent_at: finalStatus === "SENT" ? new Date().toISOString() : null,
-          updated_at: new Date().toISOString(),
         })
         .eq("id", messageId);
+
+      if (msgUpdErr) {
+        console.warn("[EmailService] Supabase email_messages update notice:", msgUpdErr.message);
+      }
 
       await supabase
         .from("email_threads")
@@ -1080,26 +1134,26 @@ export async function retrySendEmailInSupabase(
 
     // 3. Update database record as SENT
     if (isSupabaseConfigured) {
-      await supabase
-        .from("email_messages")
-        .update({
-          gmail_message_id: gmailResult.gmailMessageId,
-          gmail_thread_id: gmailResult.gmailThreadId,
-          status: "SENT",
-          error_message: null,
-          sent_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", email.id);
+      try {
+        await supabase
+          .from("email_messages")
+          .update({
+            gmail_message_id: gmailResult.gmailMessageId,
+            sent_at: new Date().toISOString(),
+          })
+          .eq("id", email.id);
 
-      await supabase
-        .from("email_threads")
-        .update({
-          status: "SENT",
-          gmail_thread_id: gmailResult.gmailThreadId,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", email.threadId);
+        await supabase
+          .from("email_threads")
+          .update({
+            status: "SENT",
+            gmail_thread_id: gmailResult.gmailThreadId,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", email.threadId);
+      } catch (dbErr) {
+        console.warn("[EmailService] Notice updating database records on retry:", dbErr);
+      }
     }
 
     updateLocalEmail(email.id, {

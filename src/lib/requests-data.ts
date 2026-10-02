@@ -3,9 +3,12 @@ import {
   safeUuid,
   fetchBookingsFromSupabase,
   updateLocalBooking,
+  getLocalBookings,
+  safeInsertNotification,
+  markIdentifierConfirmed,
+  isBookingConfirmed as checkIsBookingConfirmed,
   type FullBookingRecord,
 } from "./supabase-services";
-import { getAwardedMovementsMap } from "./forwarder-card-service";
 import type {
   BookingRequestRecord,
   RequestStatus,
@@ -49,6 +52,10 @@ export function mapBookingRecordToRequest(booking: FullBookingRecord): BookingRe
   const confirmationStatusUpper = (booking.confirmation_status || "").toUpperCase();
 
   const isConfirmed =
+    checkIsBookingConfirmed(
+      booking,
+      booking.id || booking.movement_number || booking.booking_reference,
+    ) ||
     upperStatus === "CONFIRMED" ||
     upperStatus === "BOOKING CONFIRMED" ||
     upperStatus.includes("CONFIRM") ||
@@ -94,13 +101,15 @@ export function mapBookingRecordToRequest(booking: FullBookingRecord): BookingRe
 
   const containerCount = booking.container_count || 1;
   const totalFreight =
-    booking.total_freight || (booking.rate_amount ? booking.rate_amount * containerCount : 3600);
+    booking.total_freight || (booking.rate_amount ? booking.rate_amount * containerCount : 0);
   const ratePerContainer =
-    containerCount > 0 ? Math.round(totalFreight / containerCount) : totalFreight;
+    containerCount > 0 && totalFreight > 0
+      ? Math.round(totalFreight / containerCount)
+      : booking.rate_amount || 0;
 
   // Derive POL & POD Codes & Names
-  const originStr = booking.origin || booking.pol_name || "Karachi (PK-KHI)";
-  const destStr = booking.destination || booking.pod_name || "Hamburg (DE-HAM)";
+  const originStr = booking.origin || booking.pol_name || "POL";
+  const destStr = booking.destination || booking.pod_name || "POD";
 
   const polCode =
     booking.pol_code ||
@@ -156,17 +165,37 @@ export function mapBookingRecordToRequest(booking: FullBookingRecord): BookingRe
     confirmationDetectedBy: booking.confirmation_detected_by || undefined,
     confirmationConfidence: booking.confirmation_confidence || undefined,
     buyerId: booking.buyer_id || undefined,
-    buyerName: booking.buyer?.company_name || "Buyer",
+    buyerName:
+      (booking.buyer as { name?: string })?.name ||
+      booking.buyer?.company_name ||
+      booking.buyer_name ||
+      (booking as { buyerName?: string })?.buyerName ||
+      "Buyer",
     buyerCode: booking.buyer?.code || "BUYER",
     buyerCountry: booking.buyer?.country || "International",
-    consignee: booking.buyer?.consignee || booking.buyer?.company_name || "Consignee on File",
+    consignee:
+      booking.buyer?.consignee ||
+      (booking.buyer as { name?: string })?.name ||
+      booking.buyer?.company_name ||
+      booking.buyer_name ||
+      "Consignee on File",
     supplierId: booking.supplier_id || undefined,
-    supplierName: booking.supplier?.company_name || "Supplier",
+    supplierName:
+      (booking.supplier as { name?: string })?.name ||
+      booking.supplier?.company_name ||
+      booking.supplier_name ||
+      (booking as { supplierName?: string })?.supplierName ||
+      "Supplier",
     supplierCode: booking.supplier?.code || "SUPPLIER",
-    supplierCity: booking.supplier?.city || "",
+    supplierCity: booking.supplier?.city || (booking as { supplierCity?: string })?.supplierCity || "",
     supplierLoadPoint: booking.supplier?.load_point || "",
-    forwarderId: booking.forwarder_id || undefined,
-    forwarderName: booking.forwarder?.company_name || "Freight Forwarder",
+    forwarderId: isConfirmed ? booking.forwarder_id || undefined : undefined,
+    forwarderName: isConfirmed
+      ? (booking.forwarder as { name?: string })?.name ||
+        booking.forwarder?.company_name ||
+        booking.forwarder_name ||
+        "Forwarder"
+      : "Pending Award",
     forwarderCode: booking.forwarder?.code || "FORWARDER",
     forwarderEmail: booking.forwarder?.email || undefined,
     polCode,
@@ -182,13 +211,13 @@ export function mapBookingRecordToRequest(booking: FullBookingRecord): BookingRe
     allocatedContainers: booking.containers?.map((c) => c.container_number),
     preferredCarrier,
     assignedCarrier: preferredCarrier,
-    vesselName: booking.vessel_name || `${preferredCarrier} VALENCIA`,
-    voyageNumber: booking.voyage_number || "431W",
+    vesselName: booking.vessel_name || "Pending Allocation",
+    voyageNumber: booking.voyage_number || "—",
     ratePerContainer,
     totalFreight,
     currency: booking.currency || "USD",
     rateCardId: booking.rate_card_id || undefined,
-    rateValidUntil: "2026-09-30",
+    rateValidUntil: "—",
     cargo: {
       description: booking.product_description || "Commercial Export Cargo",
       totalWeightKg,
@@ -196,18 +225,39 @@ export function mapBookingRecordToRequest(booking: FullBookingRecord): BookingRe
       packagesCount,
       packageType: "Export Master Cartons / Pallets",
     },
-    siCutoff: `${siCutoffDate.toISOString().split("T")[0]} 18:00`,
-    vgmCutoff: `${vgmCutoffDate.toISOString().split("T")[0]} 12:00`,
-    gateCutoff: `${vgmCutoffDate.toISOString().split("T")[0]} 22:00`,
+    siCutoff:
+      (booking.cut_off_dates as { siCutoff?: string })?.siCutoff ||
+      (booking.confirmation_details as { cut_off_dates?: { siCutoff?: string } })?.cut_off_dates
+        ?.siCutoff ||
+      `${siCutoffDate.toISOString().split("T")[0]} 18:00`,
+    vgmCutoff:
+      (booking.cut_off_dates as { vgmCutoff?: string })?.vgmCutoff ||
+      (booking.confirmation_details as { cut_off_dates?: { vgmCutoff?: string } })?.cut_off_dates
+        ?.vgmCutoff ||
+      `${vgmCutoffDate.toISOString().split("T")[0]} 12:00`,
+    gateCutoff:
+      (booking.cut_off_dates as { gateCutoff?: string; portCutoff?: string })?.gateCutoff ||
+      (booking.cut_off_dates as { gateCutoff?: string; portCutoff?: string })?.portCutoff ||
+      (
+        booking.confirmation_details as {
+          cut_off_dates?: { gateCutoff?: string; portCutoff?: string };
+        }
+      )?.cut_off_dates?.gateCutoff ||
+      (
+        booking.confirmation_details as {
+          cut_off_dates?: { gateCutoff?: string; portCutoff?: string };
+        }
+      )?.cut_off_dates?.portCutoff ||
+      `${vgmCutoffDate.toISOString().split("T")[0]} 22:00`,
     specialInstructions: booking.special_instructions || booking.notes || undefined,
     revisionNotes:
       status === "Revision Requested"
         ? booking.special_instructions || "Awaiting updated documentation or weight adjustments."
         : undefined,
     requestedBy: {
-      name: booking.supplier?.contact_person || "Logistics Lead",
-      email: booking.supplier?.email || "dispatch@nashmiaindustries.com",
-      phone: booking.supplier?.phone || "+92 300 1234567",
+      name: booking.supplier?.contact_person || booking.created_by_name || "Operations Desk",
+      email: booking.supplier?.email || "operations@nashmia.com",
+      phone: booking.supplier?.phone || "—",
     },
     events: booking.events,
   };
@@ -267,7 +317,8 @@ export async function fetchBookingRequestsFromSupabase(
         const { data: confs } = await supabase
           .from("email_confirmations")
           .select("booking_id, movement_number, confirmation_status")
-          .eq("confirmation_status", "CONFIRMED");
+          .eq("confirmation_status", "CONFIRMED")
+          .limit(200);
 
         if (confs) {
           for (const c of confs) {
@@ -280,68 +331,71 @@ export async function fetchBookingRequestsFromSupabase(
       }
     }
 
-    const awardedMap = getAwardedMovementsMap();
-    if (awardedMap && awardedMap.size > 0) {
-      for (const [key, award] of awardedMap.entries()) {
-        if (key) confirmedIdentifiers.add(key.toLowerCase());
-        if (award.movementNumber) {
-          confirmedIdentifiers.add(award.movementNumber.trim().toLowerCase());
-        }
-        if (award.bookingId) confirmedIdentifiers.add(award.bookingId.trim().toLowerCase());
-      }
-    }
-
-    return bookings.map((booking) => {
+    const rawRequests = bookings.map((booking) => {
       const bRef = (booking.booking_reference || "").trim().toLowerCase();
       const movNum = (booking.movement_number || "").trim().toLowerCase();
       const ref = (booking.reference || "").trim().toLowerCase();
       const bId = (booking.id || "").trim().toLowerCase();
 
-      const awardRec =
-        (movNum && awardedMap.get(movNum.toUpperCase())) ||
-        (bRef && awardedMap.get(bRef.toUpperCase())) ||
-        (ref && awardedMap.get(ref.toUpperCase())) ||
-        (bId && awardedMap.get(bId.toUpperCase()));
-
-      const isAwardedOrConfirmed =
-        Boolean(awardRec) ||
+      const isConfirmed =
         (bRef && confirmedIdentifiers.has(bRef)) ||
         (movNum && confirmedIdentifiers.has(movNum)) ||
         (ref && confirmedIdentifiers.has(ref)) ||
         (bId && confirmedIdentifiers.has(bId));
 
-      if (isAwardedOrConfirmed) {
-        const currentUpper = (booking.status || "").toUpperCase();
-        if (!currentUpper.includes("CONFIRM") || awardRec) {
-          booking.status = "Booking Confirmed";
-          booking.confirmation_status = "CONFIRMED";
-          booking.confirmed_at =
-            booking.confirmed_at || awardRec?.awardedAt || new Date().toISOString();
-          booking.confirmed_by =
-            awardRec?.awardedForwarderName || booking.confirmed_by || "Awarded Forwarder";
-          if (awardRec?.awardedForwarderName) {
-            booking.forwarder_name = awardRec.awardedForwarderName;
-          }
-          if (awardRec?.rate && (!booking.total_freight || booking.total_freight === 3600)) {
-            booking.rate_amount = awardRec.rate;
-            booking.total_freight = awardRec.rate * (booking.container_count || 1);
-          }
+      if (isConfirmed) {
+        const rawStatus = (booking.status || "").trim();
+        const currentUpper = rawStatus.toUpperCase();
+        const isEarlyStage =
+          !rawStatus ||
+          currentUpper === "BOOKING REQUESTED" ||
+          currentUpper === "DRAFT" ||
+          currentUpper === "PENDING" ||
+          currentUpper === "PENDING REVIEW" ||
+          currentUpper === "RATE VERIFICATION" ||
+          currentUpper === "LINE ALLOCATION";
 
-          // Auto-persist in local store
-          updateLocalBooking(booking.id, {
-            status: "Booking Confirmed",
-            confirmation_status: "CONFIRMED",
-            confirmed_at: booking.confirmed_at,
-            confirmed_by: booking.confirmed_by,
-            forwarder_name: booking.forwarder_name,
-            rate_amount: booking.rate_amount,
-            total_freight: booking.total_freight,
-          });
+        if (isEarlyStage) {
+          booking.status = "Booking Confirmed";
         }
+        booking.confirmation_status = "CONFIRMED";
+        booking.confirmed_at = booking.confirmed_at || new Date().toISOString();
+        booking.confirmed_by = booking.confirmed_by || "Operations Desk";
+
+        // Auto-persist in local store while respecting advanced lifecycle stages
+        updateLocalBooking(booking.id, {
+          status: booking.status,
+          confirmation_status: "CONFIRMED",
+          confirmed_at: booking.confirmed_at,
+          confirmed_by: booking.confirmed_by,
+          forwarder_name: booking.forwarder_name,
+          rate_amount: booking.rate_amount,
+          total_freight: booking.total_freight,
+        });
       }
 
       return mapBookingRecordToRequest(booking);
     });
+
+    // Grouping rule: exactly ONE main request per booking / Movement Number
+    const groupedByMovement = new Map<string, BookingRequestRecord>();
+    for (const req of rawRequests) {
+      const groupKey = (req.movementNumber || req.bookingReference || req.reference || req.id)
+        .trim()
+        .toUpperCase();
+
+      if (!groupedByMovement.has(groupKey)) {
+        groupedByMovement.set(groupKey, req);
+      } else {
+        const existing = groupedByMovement.get(groupKey)!;
+        // Keep the one with newer update or more complete forwarder information
+        if (new Date(req.updatedAt).getTime() > new Date(existing.updatedAt).getTime()) {
+          groupedByMovement.set(groupKey, req);
+        }
+      }
+    }
+
+    return Array.from(groupedByMovement.values());
   } catch (err) {
     console.warn("[fetchBookingRequestsFromSupabase] Exception:", err);
     return [];
@@ -355,6 +409,8 @@ export async function approveBookingRequestInSupabase(
   requestId: string,
   userId: string | null | undefined,
   details: {
+    forwarderId?: string;
+    forwarderName?: string;
     assignedCarrier?: string;
     vesselName?: string;
     voyageNumber?: string;
@@ -365,74 +421,153 @@ export async function approveBookingRequestInSupabase(
   const validUserUuid = safeUuid(userId);
   const nowIso = new Date().toISOString();
 
-  // 1. Update local storage record if present
+  // 1. Retrieve existing booking from local storage or database
+  const localList = getLocalBookings();
+  const existing = localList.find(
+    (b) =>
+      b.id === requestId ||
+      b.booking_reference === requestId ||
+      b.movement_number === requestId ||
+      (b.reference && b.reference === requestId) ||
+      (b.id && b.id.toLowerCase() === requestId.toLowerCase()),
+  );
+
+  let movementNum =
+    existing?.movement_number ||
+    existing?.booking_reference ||
+    existing?.reference ||
+    (requestId.startsWith("MOV-") || requestId.startsWith("NASH-") ? requestId : "MOV-2026-00001");
+
+  // Call Server-Side API to update Supabase with Service Role
+  try {
+    const apiRes = await fetch("/api/bookings/approve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        bookingId: requestId,
+        requestId,
+        forwarderId: details.forwarderId,
+        forwarderName: details.forwarderName,
+        vesselName: details.vesselName,
+        voyageNumber: details.voyageNumber,
+        notes: details.notes,
+        confirmedBy: details.forwarderName || details.confirmedBy,
+        userId,
+      }),
+    });
+    if (apiRes.ok) {
+      const apiJson = await apiRes.json();
+      if (apiJson.success && apiJson.movementNumber) {
+        movementNum = apiJson.movementNumber;
+      }
+    }
+  } catch (apiErr) {
+    console.warn("[approveBookingRequestInSupabase] API notice:", apiErr);
+  }
+
+  const validBookingUuid = safeUuid(requestId) || safeUuid(existing?.id);
+
+  // 2. Persist in local storage
   updateLocalBooking(requestId, {
     status: "Booking Confirmed",
+    forwarder_id: details.forwarderId,
+    forwarder_name: details.forwarderName || existing?.forwarder_name,
     vessel_name: details.vesselName,
     voyage_number: details.voyageNumber,
     notes: details.notes,
     confirmed_at: nowIso,
-    confirmed_by: details.confirmedBy || "Operations Desk",
+    confirmed_by: details.forwarderName || details.confirmedBy || "Operations Desk",
+    confirmation_status: "CONFIRMED",
     updated_at: nowIso,
   });
 
+  // 3. Mark identifier confirmed in global confirmed registry
+  markIdentifierConfirmed(
+    requestId,
+    [
+      movementNum,
+      existing?.movement_number,
+      existing?.booking_reference,
+      validBookingUuid || undefined,
+    ].filter(Boolean) as string[],
+  );
+
   if (isSupabaseConfigured) {
     try {
-      const updates: Record<string, unknown> = {
-        status: "Booking Confirmed",
-        confirmed_at: nowIso,
-        confirmed_by: details.confirmedBy || "Operations Desk",
-        confirmation_status: "CONFIRMED",
+      // 4. Update booking with single consolidated query
+      const fullBookingUpdates: Record<string, unknown> = {
+        status: "Confirmed",
+        movement_status: "CONFIRMED",
+        is_movement_confirmed: true,
         updated_at: nowIso,
+        confirmation_status: "CONFIRMED",
+        confirmed_at: nowIso,
+        confirmed_by: details.forwarderName || details.confirmedBy || "Operations Desk",
       };
+      if (details.forwarderName) fullBookingUpdates.forwarder_name = details.forwarderName;
+      if (details.forwarderId) fullBookingUpdates.forwarder_id = details.forwarderId;
+      if (details.vesselName) fullBookingUpdates.vessel_name = details.vesselName;
+      if (details.voyageNumber) fullBookingUpdates.voyage_number = details.voyageNumber;
+      if (details.notes) fullBookingUpdates.notes = details.notes;
 
-      if (details.vesselName) updates.vessel_name = details.vesselName;
-      if (details.voyageNumber) updates.voyage_number = details.voyageNumber;
-      if (details.notes) updates.notes = details.notes;
+      if (validBookingUuid) {
+        await supabase.from("bookings").update(fullBookingUpdates).eq("id", validBookingUuid);
+      } else if (existing?.movement_number) {
+        await supabase
+          .from("bookings")
+          .update(fullBookingUpdates)
+          .eq("movement_number", existing.movement_number);
+      } else if (requestId) {
+        await supabase
+          .from("bookings")
+          .update(fullBookingUpdates)
+          .eq("booking_reference", requestId);
+      }
 
-      const { error: updateError } = await supabase
-        .from("bookings")
-        .update(updates)
-        .eq("id", requestId);
-
-      if (updateError) {
-        console.warn("[approveBookingRequest] Update warning:", updateError.message);
+      // Record in email_confirmations table for persistent lookup
+      try {
+        await supabase.from("email_confirmations").insert({
+          booking_id: validBookingUuid || requestId,
+          movement_number: movementNum,
+          confirmation_status: "CONFIRMED",
+          confirmed_by: details.confirmedBy || "Operations Desk",
+          source: "OPERATIONS_APPROVAL",
+          confirmed_at: nowIso,
+        });
+      } catch {
+        // Table or schema fallback
       }
 
       // Add event log in Supabase
-      await supabase
-        .from("booking_events")
-        .insert({
-          booking_id: requestId,
-          event_type: "Booking Confirmed",
-          event_date: nowIso,
-          location: "Operations Desk",
-          description: `Request approved. Vessel ${details.vesselName || "Assigned"} / Voyage ${details.voyageNumber || "Allocated"}. Booking confirmation released.`,
-        })
-        .catch((err) => console.warn("[approveBookingRequest] Event insert notice:", err));
-
-      // Send notification in Supabase
-      const movementNum = existing?.movement_number || requestId;
-      if (validUserUuid) {
+      if (validBookingUuid) {
         await supabase
-          .from("notifications")
+          .from("booking_events")
           .insert({
-            user_id: validUserUuid,
-            type: "booking_confirmed",
-            title: `Booking Confirmed: ${movementNum}`,
-            message: `Movement ${movementNum} has been confirmed. Space and equipment allocated.`,
-            related_booking_id: requestId,
-            is_read: false,
+            booking_id: validBookingUuid,
+            event_type: "Booking Confirmed",
+            event_date: nowIso,
+            location: "Operations Desk",
+            description: `Request approved. Vessel ${details.vesselName || "Assigned"} / Voyage ${details.voyageNumber || "Allocated"}. Booking confirmation released.`,
           })
-          .catch((err) => console.warn("[approveBookingRequest] Notification notice:", err));
+          .catch((err) => console.warn("[approveBookingRequest] Event insert notice:", err));
       }
+
+      // Send notification safely
+      await safeInsertNotification({
+        userId: validUserUuid,
+        type: "booking_confirmed",
+        title: `Booking Confirmed: ${movementNum}`,
+        message: `Movement ${movementNum} has been confirmed. Space and equipment allocated.`,
+        booking_id: validBookingUuid,
+        is_read: false,
+      });
     } catch (err) {
       console.warn("[approveBookingRequest] Supabase notice:", err);
     }
   }
 
   // Dispatch events for real-time reactivity across all pages
-  const movementRef = existing?.movement_number || requestId;
+  const movementRef = movementNum;
   if (typeof window !== "undefined") {
     window.dispatchEvent(
       new CustomEvent("nashmia_booking_confirmed", {
@@ -442,6 +577,8 @@ export async function approveBookingRequestInSupabase(
           bookingReference: movementRef,
           status: "Booking Confirmed",
           confirmedBy: details.confirmedBy || "Operations Desk",
+          vesselName: details.vesselName,
+          voyageNumber: details.voyageNumber,
         },
       }),
     );
@@ -449,10 +586,13 @@ export async function approveBookingRequestInSupabase(
       new CustomEvent("nashmia_booking_status_updated", {
         detail: {
           bookingId: requestId,
+          movementNumber: movementRef,
           status: "Booking Confirmed",
         },
       }),
     );
+    window.dispatchEvent(new CustomEvent("nashmia_bookings_updated"));
+    window.dispatchEvent(new CustomEvent("supabase_realtime_bookings_change"));
   }
 }
 
@@ -474,45 +614,78 @@ export async function requestRevisionInSupabase(
     updated_at: nowIso,
   });
 
+  const localList = getLocalBookings();
+  const existing = localList.find(
+    (b) =>
+      b.id === requestId ||
+      b.booking_reference === requestId ||
+      b.movement_number === requestId ||
+      (b.id && b.id.toLowerCase() === requestId.toLowerCase()),
+  );
+
+  const movementNum =
+    existing?.movement_number ||
+    existing?.booking_reference ||
+    (requestId.startsWith("MOV-") ? requestId : requestId);
+
+  const validBookingUuid = safeUuid(requestId) || safeUuid(existing?.id);
+
   if (isSupabaseConfigured) {
     try {
-      const { error } = await supabase
-        .from("bookings")
-        .update({
-          status: "Customs Hold",
-          special_instructions: `Revision Requested: ${revisionNotes}`,
-          updated_at: nowIso,
-        })
-        .eq("id", requestId);
-
-      if (error) {
-        console.warn("[requestRevisionInSupabase] Update notice:", error.message);
-      }
-
-      await supabase
-        .from("booking_events")
-        .insert({
-          booking_id: requestId,
-          event_type: "Revision Requested",
-          event_date: nowIso,
-          location: "Documentation Desk",
-          description: revisionNotes,
-        })
-        .catch((err) => console.warn("[requestRevisionInSupabase] Event notice:", err));
-
-      if (validUserUuid) {
-        await supabase
-          .from("notifications")
-          .insert({
-            user_id: validUserUuid,
-            type: "action_required",
-            title: "Revision Requested",
-            message: `Revision requested for booking ${requestId}: ${revisionNotes.slice(0, 80)}...`,
-            related_booking_id: requestId,
-            is_read: false,
+      if (validBookingUuid) {
+        const { error } = await supabase
+          .from("bookings")
+          .update({
+            status: "Customs Hold",
+            special_instructions: `Revision Requested: ${revisionNotes}`,
+            updated_at: nowIso,
           })
-          .catch((err) => console.warn("[requestRevisionInSupabase] Notification notice:", err));
+          .eq("id", validBookingUuid);
+
+        if (error) {
+          console.warn("[requestRevisionInSupabase] Update notice:", error.message);
+        }
+      } else if (existing?.movement_number) {
+        await supabase
+          .from("bookings")
+          .update({
+            status: "Customs Hold",
+            special_instructions: `Revision Requested: ${revisionNotes}`,
+            updated_at: nowIso,
+          })
+          .eq("movement_number", existing.movement_number);
+      } else if (requestId) {
+        await supabase
+          .from("bookings")
+          .update({
+            status: "Customs Hold",
+            special_instructions: `Revision Requested: ${revisionNotes}`,
+            updated_at: nowIso,
+          })
+          .eq("booking_reference", requestId);
       }
+
+      if (validBookingUuid) {
+        await supabase
+          .from("booking_events")
+          .insert({
+            booking_id: validBookingUuid,
+            event_type: "Revision Requested",
+            event_date: nowIso,
+            location: "Documentation Desk",
+            description: revisionNotes,
+          })
+          .catch((err) => console.warn("[requestRevisionInSupabase] Event notice:", err));
+      }
+
+      await safeInsertNotification({
+        userId: validUserUuid,
+        type: "action_required",
+        title: "Revision Requested",
+        message: `Revision requested for booking ${movementNum}: ${revisionNotes.slice(0, 80)}...`,
+        booking_id: validBookingUuid,
+        is_read: false,
+      });
     } catch (err) {
       console.warn("[requestRevision] Exception:", err);
     }
@@ -524,6 +697,7 @@ export async function requestRevisionInSupabase(
       new CustomEvent("nashmia_booking_status_updated", {
         detail: {
           bookingId: requestId,
+          movementNumber: movementNum,
           status: "Customs Hold",
           revisionNotes,
         },

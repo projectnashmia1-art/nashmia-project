@@ -1,13 +1,27 @@
 import { supabase, isSupabaseConfigured } from "./supabase";
 import { getGmailAccessToken, sendEmailDirectlyViaGmail } from "./gmail-service";
-import { safeUuid } from "./supabase-services";
-import { analyzeEmailForForwarderOffer } from "./ai-offer-extractor";
+import { safeUuid, getLocalBookings, updateLocalBooking } from "./supabase-services";
+import {
+  extractQuotationFromEmail,
+  extractQuotationRuleBased,
+  validateQuotationForBackendAction,
+  type ExtractedQuotation,
+} from "./quotation-extractor";
+import { recordQuotationAuditEvent } from "./quotation-audit-logger";
+import {
+  persistQuotationToDatabase,
+  fetchForwarderRequestsFromDatabase,
+  persistForwarderRequestsDispatched,
+  awardForwarderQuotationInDb,
+} from "./quotation-database-service";
 import type {
   BookingRequestRecord,
   ForwarderQuoteRequestRecord,
   ForwarderOfferData,
   ForwarderQuoteStatus,
-} from "@/types/requests";
+  CanonicalQuotationStatus,
+} from "../types/requests";
+import { normalizeQuoteStatus } from "../types/requests";
 import type { ForwarderAccount } from "./forwarders-data";
 
 const STORAGE_KEY = "nashmia_multi_forwarder_requests_v2";
@@ -65,78 +79,192 @@ export function saveLocalForwarderRequests(requests: ForwarderQuoteRequestRecord
 }
 
 /**
- * Fetch all forwarder requests, optionally filtered by bookingId
+ * Fetch all forwarder requests to whom quotation request emails were sent,
+ * optionally filtered by booking object or booking identifier.
  */
 export async function fetchForwarderRequestsForBooking(
-  bookingId?: string | null,
+  bookingOrIdentifier?: string | Partial<BookingRequestRecord> | null,
 ): Promise<ForwarderQuoteRequestRecord[]> {
   const localList = getLocalForwarderRequests();
 
-  if (!bookingId) {
+  if (!bookingOrIdentifier) {
     return localList;
   }
 
-  // Filter local items by bookingId or movementNumber or reference
-  let filtered = localList.filter(
-    (req) =>
-      req.bookingId === bookingId ||
-      req.bookingReference === bookingId ||
-      req.movementNumber === bookingId,
-  );
+  // Collect all known identifiers for this booking
+  const validKeys = new Set<string>();
+  if (typeof bookingOrIdentifier === "string") {
+    const trimmed = bookingOrIdentifier.trim();
+    if (trimmed) validKeys.add(trimmed.toLowerCase());
+  } else if (typeof bookingOrIdentifier === "object") {
+    if (bookingOrIdentifier.id) validKeys.add(bookingOrIdentifier.id.trim().toLowerCase());
+    if (bookingOrIdentifier.movementNumber)
+      validKeys.add(bookingOrIdentifier.movementNumber.trim().toLowerCase());
+    if (bookingOrIdentifier.reference)
+      validKeys.add(bookingOrIdentifier.reference.trim().toLowerCase());
+    if (bookingOrIdentifier.bookingReference)
+      validKeys.add(bookingOrIdentifier.bookingReference.trim().toLowerCase());
+  }
+
+  if (validKeys.size === 0) {
+    return localList;
+  }
+
+  // Correlate with any known local booking to expand keys
+  try {
+    const localBookings = getLocalBookings();
+    for (const b of localBookings) {
+      const bId = (b.id || "").toLowerCase();
+      const bMov = (b.movement_number || "").toLowerCase();
+      const bRef = (b.booking_reference || b.reference || "").toLowerCase();
+      if (
+        (bId && validKeys.has(bId)) ||
+        (bMov && validKeys.has(bMov)) ||
+        (bRef && validKeys.has(bRef))
+      ) {
+        if (bId) validKeys.add(bId);
+        if (bMov) validKeys.add(bMov);
+        if (bRef) validKeys.add(bRef);
+      }
+    }
+  } catch (err) {
+    console.warn("[MultiForwarderService] Error expanding booking keys:", err);
+  }
+
+  // Primary Source of Truth: Supabase PostgreSQL database
+  if (isSupabaseConfigured) {
+    try {
+      const candidateKey =
+        Array.from(validKeys)[0] ||
+        (typeof bookingOrIdentifier === "string"
+          ? bookingOrIdentifier
+          : bookingOrIdentifier?.id || "");
+      const dbList = await fetchForwarderRequestsFromDatabase(candidateKey);
+      if (dbList && dbList.length > 0) {
+        const filteredFromDb = dbList.filter((req) => {
+          const rBkId = (req.bookingId || "").toLowerCase();
+          const rRef = (req.bookingReference || "").toLowerCase();
+          const rMov = (req.movementNumber || "").toLowerCase();
+          return (
+            validKeys.size === 0 ||
+            validKeys.has(rBkId) ||
+            validKeys.has(rRef) ||
+            validKeys.has(rMov)
+          );
+        });
+        if (filteredFromDb.length > 0) {
+          return filteredFromDb;
+        }
+      }
+    } catch (dbErr) {
+      console.warn("[MultiForwarderService] Notice fetching from database:", dbErr);
+    }
+  }
+
+  // Fallback to local storage
+  let filtered = localList.filter((req) => {
+    const rBkId = (req.bookingId || "").toLowerCase();
+    const rBkReqId = (req.bookingRequestId || "").toLowerCase();
+    const rRef = (req.bookingReference || "").toLowerCase();
+    const rMov = (req.movementNumber || "").toLowerCase();
+
+    return (
+      (rBkId && validKeys.has(rBkId)) ||
+      (rBkReqId && validKeys.has(rBkReqId)) ||
+      (rRef && validKeys.has(rRef)) ||
+      (rMov && validKeys.has(rMov)) ||
+      (req.trackingCompositeKey &&
+        Array.from(validKeys).some((k) => req.trackingCompositeKey?.toLowerCase().includes(k)))
+    );
+  });
 
   // If Supabase is configured, check for any outbound email_messages for this booking to sync records
   if (isSupabaseConfigured) {
     try {
-      const validBookingUuid = safeUuid(bookingId);
+      const candidateUuid = Array.from(validKeys)
+        .map((k) => safeUuid(k))
+        .find(Boolean);
       let query = supabase
         .from("email_messages")
         .select("*")
-        .eq("email_type", "FORWARDER_REQUEST")
+        .eq("direction", "Outbound")
         .order("created_at", { ascending: false });
 
-      if (validBookingUuid) {
-        query = query.eq("booking_id", validBookingUuid);
+      if (candidateUuid) {
+        query = query.eq("booking_id", candidateUuid);
       }
 
       const { data, error } = await query;
       if (!error && data && data.length > 0) {
-        // Sync any message into request record if missing
         let hasNew = false;
         const currentList = [...localList];
 
         for (const msg of data) {
+          const rawHeaders = (msg.raw_headers as Record<string, unknown>) || {};
+          const msgMov =
+            (rawHeaders.movement_number as string) ||
+            (msg.subject ? extractMovementNumber(msg.subject) : null);
+          const msgBkId = msg.booking_id || (rawHeaders.booking_id as string);
+
+          const isTargetBooking =
+            (candidateUuid && msg.booking_id === candidateUuid) ||
+            (msgMov && validKeys.has(msgMov.toLowerCase())) ||
+            (msgBkId && validKeys.has(msgBkId.toLowerCase())) ||
+            Array.from(validKeys).some((k) => msg.subject?.toLowerCase().includes(k));
+
+          if (!isTargetBooking) continue;
+
           const exists = currentList.some(
             (r) =>
               r.emailMessageId === msg.id ||
-              (msg.gmail_thread_id && r.gmailThreadId === msg.gmail_thread_id),
+              (msg.gmail_thread_id && r.gmailThreadId === msg.gmail_thread_id) ||
+              (msg.recipient_email &&
+                r.forwarderEmail.toLowerCase() === msg.recipient_email.toLowerCase() &&
+                ((msgMov && r.movementNumber === msgMov) || (msgBkId && r.bookingId === msgBkId))),
           );
 
-          if (!exists) {
+          if (!exists && msg.recipient_email) {
+            const bk = getLocalBookings().find(
+              (b) =>
+                (b.id && validKeys.has(b.id.toLowerCase())) ||
+                (b.movement_number && validKeys.has(b.movement_number.toLowerCase())) ||
+                (b.booking_reference && validKeys.has(b.booking_reference.toLowerCase())),
+            );
+            const resolvedMov =
+              msgMov && msgMov !== "MOV-REQ" && !msgMov.startsWith("MOV-REQ")
+                ? msgMov
+                : bk?.movement_number ||
+                  bk?.booking_reference ||
+                  bk?.reference ||
+                  Array.from(validKeys)[0] ||
+                  "MOV-2026-00001";
+
             const newRecord: ForwarderQuoteRequestRecord = {
               id: `MFR-${msg.id.slice(0, 8)}`,
-              bookingId: msg.booking_id || bookingId,
-              bookingReference: msg.movement_number || "MOV-REQ",
-              movementNumber: msg.movement_number || "MOV-REQ",
-              forwarderId: msg.forwarder_id || `fwd-${Date.now()}`,
+              bookingId: msg.booking_id || bk?.id || Array.from(validKeys)[0],
+              bookingReference: resolvedMov,
+              movementNumber: resolvedMov,
+              forwarderId:
+                msg.forwarder_id || (rawHeaders.forwarder_id as string) || `fwd-${Date.now()}`,
               forwarderName:
                 msg.recipient_name || msg.recipient_email?.split("@")[0] || "Forwarder",
               forwarderEmail: msg.recipient_email || "",
-              status: "REQUESTED",
+              status: "AWAITING_OFFER",
               emailMessageId: msg.id,
               gmailThreadId: msg.gmail_thread_id || undefined,
               gmailMessageId: msg.gmail_message_id || undefined,
               sentAt: msg.sent_at || msg.created_at,
-              origin: "POL",
-              destination: "POD",
-              polCode: "POL",
-              polName: "Port of Loading",
-              podCode: "POD",
-              podName: "Destination Port",
-              supplierName: "Shipper",
-              buyerName: "Consignee",
-              containerType: "Standard Dry",
-              containerSize: "40HC",
-              containerCount: 1,
+              origin: bk?.origin || "POL",
+              destination: bk?.destination || "POD",
+              polCode: bk?.pol_code || "POL",
+              polName: bk?.pol_name || "Port of Loading",
+              podCode: bk?.pod_code || "POD",
+              podName: bk?.pod_name || "Destination Port",
+              supplierName: bk?.supplier_name || "Shipper",
+              buyerName: bk?.buyer_name || "Consignee",
+              containerType: bk?.container_type || "Standard Dry",
+              containerSize: bk?.container_size || "40HC",
+              containerCount: bk?.container_count || 1,
               updatedAt: msg.updated_at,
             };
             currentList.unshift(newRecord);
@@ -146,12 +274,23 @@ export async function fetchForwarderRequestsForBooking(
 
         if (hasNew) {
           saveLocalForwarderRequests(currentList);
-          filtered = currentList.filter(
-            (req) =>
-              req.bookingId === bookingId ||
-              req.bookingReference === bookingId ||
-              req.movementNumber === bookingId,
-          );
+          filtered = currentList.filter((req) => {
+            const rBkId = (req.bookingId || "").toLowerCase();
+            const rBkReqId = (req.bookingRequestId || "").toLowerCase();
+            const rRef = (req.bookingReference || "").toLowerCase();
+            const rMov = (req.movementNumber || "").toLowerCase();
+
+            return (
+              (rBkId && validKeys.has(rBkId)) ||
+              (rBkReqId && validKeys.has(rBkReqId)) ||
+              (rRef && validKeys.has(rRef)) ||
+              (rMov && validKeys.has(rMov)) ||
+              (req.trackingCompositeKey &&
+                Array.from(validKeys).some((k) =>
+                  req.trackingCompositeKey?.toLowerCase().includes(k),
+                ))
+            );
+          });
         }
       }
     } catch (dbErr) {
@@ -570,8 +709,20 @@ export async function dispatchMultiForwarderRequests(params: {
     }
   }
 
-  // Save all newly created records
+  // Save all newly created records locally
   saveLocalForwarderRequests(updatedList);
+
+  // Persist newly created forwarder_requests to Supabase database
+  if (isSupabaseConfigured) {
+    try {
+      await persistForwarderRequestsDispatched(booking, results);
+    } catch (persistErr) {
+      console.warn(
+        "[MultiForwarderService] Notice persisting dispatched requests to Supabase:",
+        persistErr,
+      );
+    }
+  }
 
   // Dispatch custom window events so all views update automatically
   if (typeof window !== "undefined") {
@@ -640,11 +791,194 @@ export async function recordForwarderOffer(
 }
 
 /**
- * Accept a forwarder's quotation, award the booking to this forwarder,
- * mark other competing requests for this booking as DECLINED,
- * update the booking in Supabase, and dispatch confirmation events!
+ * Update quotation status directly to one of the 7 supported statuses:
+ * PENDING, OFFER_RECEIVED, NEEDS_REVIEW, NOT_AVAILABLE, AWARDED, NOT_AWARDED, CONFIRMED
+ *
+ * NOTE: Setting status to OFFER_RECEIVED never confirms the booking.
  */
-export async function acceptForwarderOffer(
+export async function updateForwarderQuoteStatus(
+  requestId: string,
+  newStatus: ForwarderQuoteStatus | CanonicalQuotationStatus,
+  reason?: string,
+  userId?: string | null,
+): Promise<ForwarderQuoteRequestRecord> {
+  const normalized = normalizeQuoteStatus(newStatus);
+  if (normalized === "AWARDED") {
+    const res = await awardForwarderOffer(requestId, userId);
+    return res.request;
+  }
+
+  const list = getLocalForwarderRequests();
+  const idx = list.findIndex((r) => r.id === requestId);
+  if (idx === -1) {
+    throw new Error(`Forwarder quote request ${requestId} not found.`);
+  }
+
+  const existing = list[idx];
+  const updatedRecord: ForwarderQuoteRequestRecord = {
+    ...existing,
+    status: normalized,
+    updatedAt: new Date().toISOString(),
+  };
+
+  list[idx] = updatedRecord;
+  saveLocalForwarderRequests(list);
+
+  // If status is CONFIRMED, sync confirmation on the booking
+  if (normalized === "CONFIRMED" && existing.bookingId) {
+    await confirmAwardedBooking(existing.bookingId, {
+      forwarderName: existing.forwarderName,
+      forwarderEmail: existing.forwarderEmail,
+      userId,
+    });
+  }
+
+  // Audit event in booking_events if configured
+  if (isSupabaseConfigured && existing.bookingId) {
+    try {
+      const validBookingUuid = safeUuid(existing.bookingId);
+      if (validBookingUuid) {
+        await supabase.from("booking_events").insert({
+          booking_id: validBookingUuid,
+          event_type: "Quotation Status Changed",
+          title: `Quotation status updated to ${normalized} for ${existing.forwarderName}`,
+          description:
+            reason ||
+            `Quotation status set to ${normalized} by ${userId || "Operations User"}. Rule enforced: Receiving quotation does not confirm booking.`,
+          occurred_at: new Date().toISOString(),
+        });
+      }
+    } catch (err) {
+      console.warn("[MultiForwarderService] Notice saving quotation audit event:", err);
+    }
+  }
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("nashmia_multi_forwarder_updated", {
+        detail: {
+          updatedRequestId: requestId,
+          bookingId: updatedRecord.bookingId,
+          newStatus: normalized,
+        },
+      }),
+    );
+  }
+
+  return updatedRecord;
+}
+
+/**
+ * Update / manually correct extracted forwarder quotation values with audit logging
+ */
+export async function updateForwarderQuotation(
+  requestId: string,
+  updatedOffer: Partial<ForwarderOfferData>,
+  userId?: string | null,
+  newStatus?: ForwarderQuoteStatus | CanonicalQuotationStatus,
+): Promise<ForwarderQuoteRequestRecord> {
+  const list = getLocalForwarderRequests();
+  const idx = list.findIndex((r) => r.id === requestId);
+
+  if (idx === -1) {
+    throw new Error(`Forwarder request ${requestId} not found.`);
+  }
+
+  const existing = list[idx];
+  const ratePerCntr =
+    updatedOffer.ratePerContainer !== undefined
+      ? updatedOffer.ratePerContainer
+      : existing.offerData?.ratePerContainer;
+  const totalFreight =
+    updatedOffer.totalFreight !== undefined
+      ? updatedOffer.totalFreight
+      : ratePerCntr
+        ? ratePerCntr * existing.containerCount
+        : existing.offerData?.totalFreight;
+
+  const mergedOffer: ForwarderOfferData = {
+    ...(existing.offerData || {}),
+    ...updatedOffer,
+    ratePerContainer: ratePerCntr,
+    totalFreight,
+    manuallyCorrected: true,
+    correctedAt: new Date().toISOString(),
+    correctedBy: userId || "Operations User",
+  };
+
+  const finalStatus: ForwarderQuoteStatus = newStatus
+    ? normalizeQuoteStatus(newStatus)
+    : existing.status === "AWAITING_OFFER" || existing.status === "PENDING"
+      ? "OFFER_RECEIVED"
+      : existing.status;
+
+  const updatedRecord: ForwarderQuoteRequestRecord = {
+    ...existing,
+    status: finalStatus,
+    offerData: mergedOffer,
+    updatedAt: new Date().toISOString(),
+  };
+
+  list[idx] = updatedRecord;
+  saveLocalForwarderRequests(list);
+
+  // If new status was set to AWARDED, trigger official award workflow
+  if (finalStatus === "AWARDED" && existing.status !== "AWARDED") {
+    await awardForwarderOffer(requestId, userId);
+  } else if (finalStatus === "CONFIRMED" && existing.status !== "CONFIRMED" && existing.bookingId) {
+    await confirmAwardedBooking(existing.bookingId, {
+      forwarderName: existing.forwarderName,
+      forwarderEmail: existing.forwarderEmail,
+      userId,
+    });
+  }
+
+  // Audit event in booking_events
+  if (isSupabaseConfigured && existing.bookingId) {
+    try {
+      const validBookingUuid = safeUuid(existing.bookingId);
+      if (validBookingUuid) {
+        await supabase.from("booking_events").insert({
+          booking_id: validBookingUuid,
+          event_type: "Quotation Updated",
+          title: `Quotation Adjusted for ${existing.forwarderName}`,
+          description: `Manual rate adjustment: $${ratePerCntr || 0}/cntr (${mergedOffer.currency || "USD"}). Status: ${finalStatus}. Carrier: ${mergedOffer.carrier || "Standard"}.`,
+          occurred_at: new Date().toISOString(),
+        });
+      }
+    } catch (err) {
+      console.warn("[MultiForwarderService] Notice saving quotation audit event:", err);
+    }
+  }
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("nashmia_forwarder_offer_received", {
+        detail: { requestId, bookingId: updatedRecord.bookingId, offer: mergedOffer },
+      }),
+    );
+    window.dispatchEvent(
+      new CustomEvent("nashmia_multi_forwarder_updated", {
+        detail: { updatedRequestId: requestId, bookingId: updatedRecord.bookingId },
+      }),
+    );
+  }
+
+  return updatedRecord;
+}
+
+/**
+ * Award a forwarder's quotation for a booking (Step 6 Workflow).
+ *
+ * Requirements:
+ * 1. Sets the selected request status to "AWARDED".
+ * 2. Sets other competing requests for the same booking to "NOT_AWARDED".
+ * 3. Saves the selected forwarder as the official booking forwarder.
+ * 4. Creates an audit event: "BOOKING_AWARDED".
+ * 5. Sets the booking and movement status to "Pending Confirmation" (NOT Confirmed yet!).
+ * 6. Prevents duplicate awards and ensures backend synchronization.
+ */
+export async function awardForwarderOffer(
   requestId: string,
   userId?: string | null,
 ): Promise<{ success: boolean; request: ForwarderQuoteRequestRecord }> {
@@ -658,24 +992,31 @@ export async function acceptForwarderOffer(
   const bookingId = targetReq.bookingId;
   const forwarderId = targetReq.forwarderId;
   const forwarderName = targetReq.forwarderName;
-  const ratePerContainer = targetReq.offerData?.ratePerContainer || 0;
+  const ratePerContainer = targetReq.offerData?.ratePerContainer || targetReq.ratePerContainer || 0;
   const totalFreight =
-    targetReq.offerData?.totalFreight || ratePerContainer * targetReq.containerCount;
-  const currency = targetReq.offerData?.currency || "USD";
+    targetReq.offerData?.totalFreight ||
+    (ratePerContainer ? ratePerContainer * targetReq.containerCount : 0);
+  const currency = targetReq.offerData?.currency || targetReq.currency || "USD";
 
-  // 1. Update local statuses: target is ACCEPTED, other quotes for same booking are DECLINED
+  // 1. Update local request statuses: Target is "AWARDED", others for this booking are "NOT_AWARDED"
+  const updatedTarget: ForwarderQuoteRequestRecord = {
+    ...targetReq,
+    status: "AWARDED",
+    updatedAt: new Date().toISOString(),
+  };
+
   const updatedList = list.map((item) => {
-    if (item.bookingId === bookingId) {
+    if (
+      item.bookingId === bookingId ||
+      (item.movementNumber && item.movementNumber === targetReq.movementNumber) ||
+      (item.bookingReference && item.bookingReference === targetReq.bookingReference)
+    ) {
       if (item.id === requestId) {
+        return updatedTarget;
+      } else {
         return {
           ...item,
-          status: "ACCEPTED" as ForwarderQuoteStatus,
-          updatedAt: new Date().toISOString(),
-        };
-      } else if (item.status === "AWAITING_OFFER" || item.status === "OFFER_RECEIVED") {
-        return {
-          ...item,
-          status: "DECLINED" as ForwarderQuoteStatus,
+          status: "NOT_AWARDED" as ForwarderQuoteStatus,
           updatedAt: new Date().toISOString(),
         };
       }
@@ -685,7 +1026,21 @@ export async function acceptForwarderOffer(
 
   saveLocalForwarderRequests(updatedList);
 
-  // 2. If Supabase configured, update booking record with awarded forwarder & confirmed status
+  // Synchronize local bookings state immediately
+  if (bookingId) {
+    updateLocalBooking(bookingId, {
+      status: "Pending Confirmation",
+      confirmation_status: "PENDING_CONFIRMATION",
+      forwarder_id: forwarderId,
+      forwarder_name: forwarderName,
+      rate_amount: ratePerContainer,
+      currency: currency,
+      total_freight: totalFreight,
+      preferred_carrier: targetReq.offerData?.carrier || targetReq.preferredCarrier || undefined,
+    });
+  }
+
+  // 2. If Supabase configured, update booking record with awarded forwarder & "Pending Confirmation" status
   if (isSupabaseConfigured) {
     try {
       const validBookingUuid = safeUuid(bookingId);
@@ -693,64 +1048,190 @@ export async function acceptForwarderOffer(
 
       if (validBookingUuid) {
         const updatePayload: Record<string, unknown> = {
-          status: "Booking Confirmed",
-          confirmed_at: new Date().toISOString(),
-          confirmed_by: forwarderName,
-          confirmation_status: "CONFIRMED",
-          confirmation_reason: `Quotation accepted from ${forwarderName} ($${ratePerContainer}/cntr, total $${totalFreight})`,
-          confirmation_confidence: 0.98,
+          status: "Booking Requested",
+          movement_status: "REQUESTED",
+          confirmation_status: "PENDING_CONFIRMATION",
+          confirmation_reason: `Awarded to ${forwarderName} ($${ratePerContainer}/cntr, total $${totalFreight} ${currency}). Awaiting formal carrier confirmation.`,
           updated_at: new Date().toISOString(),
         };
 
         if (validForwarderUuid) {
           updatePayload.forwarder_id = validForwarderUuid;
         }
+        if (forwarderName) {
+          updatePayload.forwarder_name = forwarderName;
+        }
         if (ratePerContainer > 0) {
           updatePayload.rate_amount = ratePerContainer;
           updatePayload.currency = currency;
           updatePayload.total_freight = totalFreight;
         }
+        if (targetReq.offerData?.carrier) {
+          updatePayload.preferred_carrier = targetReq.offerData.carrier;
+        }
 
         await supabase.from("bookings").update(updatePayload).eq("id", validBookingUuid);
 
-        // Insert booking event for audit log
+        // Record official audit log in booking_events: "BOOKING_AWARDED"
+        const cntrInfo = `${targetReq.containerCount || 1}x ${targetReq.containerSize || "40HC"} (${targetReq.offerData?.containerType || targetReq.containerType || "Standard Dry"})`;
+        const etdInfo =
+          targetReq.offerData?.etd || targetReq.etd || targetReq.requiredSailingDate || "Prompt";
+        const etaInfo = targetReq.offerData?.eta || targetReq.eta || "Standard Transit";
+        const addInfo = targetReq.offerData?.additionalCharges
+          ? ` Surcharges: ${targetReq.offerData.additionalCharges}.`
+          : "";
+
         await supabase.from("booking_events").insert({
           booking_id: validBookingUuid,
-          event_type: "Booking Confirmed",
-          title: `Awarded to ${forwarderName}`,
-          description: `Accepted quotation from ${forwarderName} (${targetReq.forwarderEmail}) at $${ratePerContainer.toLocaleString()} ${currency}/container. Total: $${totalFreight.toLocaleString()}. Status: Booking Confirmed.`,
+          event_type: "BOOKING_AWARDED",
+          title: `Booking Awarded to ${forwarderName}`,
+          description: `Designated ${forwarderName} (${targetReq.forwarderEmail}) as official forwarder for ${cntrInfo}. Rate: $${ratePerContainer.toLocaleString()} ${currency}/cntr (Total: $${totalFreight.toLocaleString()} ${currency}). ETD: ${etdInfo} | ETA: ${etaInfo}.${addInfo} Status transitioned to Pending Confirmation.`,
           occurred_at: new Date().toISOString(),
         });
+
+        // Sync into forwarder_offers table in Supabase
+        try {
+          await supabase.from("forwarder_offers").upsert({
+            booking_id: validBookingUuid,
+            forwarder_id: validForwarderUuid || safeUuid(targetReq.forwarderId),
+            forwarder_name: forwarderName,
+            forwarder_email: targetReq.forwarderEmail,
+            rate_amount: ratePerContainer,
+            total_freight: totalFreight,
+            currency,
+            status: "AWARDED",
+            is_awarded: true,
+            is_declined: false,
+            updated_at: new Date().toISOString(),
+          });
+        } catch (offerErr) {
+          console.warn("[MultiForwarderService] Supabase forwarder_offers sync notice:", offerErr);
+        }
       }
     } catch (dbErr) {
-      console.warn("[MultiForwarderService] Supabase booking confirmation notice:", dbErr);
+      console.warn("[MultiForwarderService] Supabase booking award notice:", dbErr);
     }
   }
 
-  // 3. Dispatch global events
+  // 3. Dispatch global events so UI views update immediately
   if (typeof window !== "undefined") {
     window.dispatchEvent(
-      new CustomEvent("nashmia_booking_confirmed", {
+      new CustomEvent("nashmia_booking_awarded", {
         detail: {
           bookingId,
           movementNumber: targetReq.movementNumber,
           bookingReference: targetReq.bookingReference,
-          confirmedBy: forwarderName,
+          awardedRequestId: requestId,
           forwarderId,
+          forwarderName,
           ratePerContainer,
           totalFreight,
           currency,
+          status: "Pending Confirmation",
         },
       }),
     );
     window.dispatchEvent(
       new CustomEvent("nashmia_multi_forwarder_updated", {
-        detail: { acceptedRequestId: requestId, bookingId },
+        detail: { awardedRequestId: requestId, bookingId },
+      }),
+    );
+    window.dispatchEvent(
+      new CustomEvent("nashmia_booking_status_updated", {
+        detail: {
+          bookingId,
+          status: "Pending Confirmation",
+          movementNumber: targetReq.movementNumber,
+        },
       }),
     );
   }
 
-  return { success: true, request: { ...targetReq, status: "ACCEPTED" } };
+  return { success: true, request: updatedTarget };
+}
+
+/**
+ * Accept a forwarder's quotation — aliases to awardForwarderOffer for unified consistency
+ */
+export async function acceptForwarderOffer(
+  requestId: string,
+  userId?: string | null,
+): Promise<{ success: boolean; request: ForwarderQuoteRequestRecord }> {
+  return awardForwarderOffer(requestId, userId);
+}
+
+/**
+ * Confirm the booking once the awarded forwarder's confirmation email is validated (Step 7 Workflow)
+ */
+export async function confirmAwardedBooking(
+  bookingId: string,
+  params: {
+    forwarderName: string;
+    forwarderEmail?: string;
+    confirmationEmailId?: string;
+    vesselName?: string;
+    voyageNumber?: string;
+    userId?: string | null;
+  },
+): Promise<{ success: boolean; bookingId: string }> {
+  const list = getLocalForwarderRequests();
+  const updatedList = list.map((item) => {
+    if (item.bookingId === bookingId && (item.status === "AWARDED" || item.status === "ACCEPTED")) {
+      return {
+        ...item,
+        status: "CONFIRMED" as ForwarderQuoteStatus,
+        updatedAt: new Date().toISOString(),
+      };
+    }
+    return item;
+  });
+  saveLocalForwarderRequests(updatedList);
+
+  if (isSupabaseConfigured) {
+    const validBookingUuid = safeUuid(bookingId);
+    if (validBookingUuid) {
+      await supabase
+        .from("bookings")
+        .update({
+          status: "Booking Confirmed",
+          confirmed_at: new Date().toISOString(),
+          confirmed_by: params.forwarderName,
+          confirmation_status: "CONFIRMED",
+          confirmation_email_id: params.confirmationEmailId || null,
+          vessel_name: params.vesselName || undefined,
+          voyage_number: params.voyageNumber || undefined,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", validBookingUuid);
+
+      await supabase.from("booking_events").insert({
+        booking_id: validBookingUuid,
+        event_type: "Booking Confirmed",
+        title: `Booking Confirmed by ${params.forwarderName}`,
+        description: `Awarded forwarder ${params.forwarderName} verified and confirmed booking space allocation.`,
+        occurred_at: new Date().toISOString(),
+      });
+    }
+  }
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("nashmia_booking_confirmed", {
+        detail: {
+          bookingId,
+          confirmedBy: params.forwarderName,
+          status: "Booking Confirmed",
+        },
+      }),
+    );
+    window.dispatchEvent(
+      new CustomEvent("nashmia_multi_forwarder_updated", {
+        detail: { bookingId },
+      }),
+    );
+  }
+
+  return { success: true, bookingId };
 }
 
 export interface IncomingEmailMatchInput {
@@ -1024,6 +1505,10 @@ export function parseOfferDetailsFromText(
   carrier?: string;
   transitDays?: number;
   freeDays?: number;
+  currency?: string;
+  etd?: string;
+  eta?: string;
+  validUntil?: string;
   isConfirmed?: boolean;
   isDeclined?: boolean;
   confidence: number;
@@ -1043,15 +1528,28 @@ export function parseOfferDetailsFromText(
       textLower,
     );
 
-  // 3. Extract rate
+  // 3. Extract currency
+  let currency = "USD";
+  if (/\b(?:eur|euros?|€)\b/i.test(fullText)) {
+    currency = "EUR";
+  } else if (/\b(?:gbp|pounds?|£)\b/i.test(fullText)) {
+    currency = "GBP";
+  } else if (/\b(?:aed)\b/i.test(fullText)) {
+    currency = "AED";
+  } else if (/\b(?:pkr)\b/i.test(fullText)) {
+    currency = "PKR";
+  }
+
+  // 4. Extract rate
   let ratePerContainer: number | undefined;
 
   const rateMatches = [
-    /(?:freight\s+rate|ocean\s+rate|base\s+rate|freight|rate(?:\s+is)?|offer(?:\s+is)?|quote(?:\s+is)?)[:\s]+(?:usd|\$|eur|gbp)?\s*([1-9][0-9]{0,2}(?:,[0-9]{3})*(?:\.[0-9]{2})?|[1-9][0-9]{2,4}(?:\.[0-9]{2})?)/i,
+    /(?:freight\s+rate|ocean\s+rate|base\s+rate|freight|rate(?:\s+is)?|offer(?:\s+is)?|quote(?:\s+is)?|price(?:\s+is)?|charges?|all\s*in|total)[:\s]+(?:usd|\$|eur|gbp|aed|pkr|€|£)?\s*([1-9][0-9]{0,2}(?:,[0-9]{3})*(?:\.[0-9]{2})?|[1-9][0-9]{2,4}(?:\.[0-9]{2})?)/i,
     /(?<!additional\s*(?:charges?|fees?)[:\s]+)(?:usd|\$)\s*([1-9][0-9]{0,2}(?:,[0-9]{3})+(?:\.[0-9]{2})?|[1-9][0-9]{2,4}(?:\.[0-9]{2})?)\b/i,
     /\$\s*([1-9][0-9]{0,2}(?:,[0-9]{3})*(?:\.[0-9]{2})?|[1-9][0-9]{2,4}(?:\.[0-9]{2})?)/i,
     /([1-9][0-9]{0,2}(?:,[0-9]{3})*(?:\.[0-9]{2})?)\s*(?:usd|dollars|\$)/i,
-    /([1-9][0-9]{2,4})\s*(?:\/|\s*per\s*)(?:cntr|container|teu|feu|40hc|20ft)/i,
+    /([1-9][0-9]{2,4})\s*(?:\/|\s*per\s*)(?:cntr|container|teu|feu|40hc|20ft|box|unit|fcl)/i,
+    /\b(?:usd|eur|gbp|aed|pkr)\s*([1-9][0-9]{2,4}(?:\.[0-9]{2})?)/i,
   ];
 
   for (const rx of rateMatches) {
@@ -1065,7 +1563,7 @@ export function parseOfferDetailsFromText(
     }
   }
 
-  // 4. Extract carrier
+  // 5. Extract carrier
   let carrier: string | undefined;
   const carriers = [
     "MSC",
@@ -1089,7 +1587,7 @@ export function parseOfferDetailsFromText(
     }
   }
 
-  // 5. Extract transit days
+  // 6. Extract transit days
   let transitDays: number | undefined;
   const transitMatch = fullText.match(/\b([1-9][0-9]?)\s*(?:days|day|d)\s*(?:transit|tt)?\b/i);
   if (transitMatch && transitMatch[1]) {
@@ -1099,7 +1597,7 @@ export function parseOfferDetailsFromText(
     }
   }
 
-  // 6. Extract free days
+  // 7. Extract free days
   let freeDays: number | undefined;
   const freeDaysMatch = fullText.match(
     /\b([1-9][0-9]?)\s*(?:days|day|d)\s*(?:free|demurrage|detention)\b/i,
@@ -1111,6 +1609,31 @@ export function parseOfferDetailsFromText(
     }
   }
 
+  // 8. Extract ETD / ETA
+  let etd: string | undefined;
+  let eta: string | undefined;
+  const etdMatch = fullText.match(
+    /\bETD[:\s]+([0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4}|[0-9]{4}-[0-9]{2}-[0-9]{2})/i,
+  );
+  if (etdMatch && etdMatch[1]) {
+    etd = etdMatch[1].trim();
+  }
+  const etaMatch = fullText.match(
+    /\bETA[:\s]+([0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4}|[0-9]{4}-[0-9]{2}-[0-9]{2})/i,
+  );
+  if (etaMatch && etaMatch[1]) {
+    eta = etaMatch[1].trim();
+  }
+
+  // 9. Extract validity
+  let validUntil: string | undefined;
+  const validMatch = fullText.match(
+    /\b(?:validity|valid\s*(?:until|thru|through)?|rate\s*valid)[:\s]+([0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4}|[0-9]{4}-[0-9]{2}-[0-9]{2})/i,
+  );
+  if (validMatch && validMatch[1]) {
+    validUntil = validMatch[1].trim();
+  }
+
   const hasOffer = Boolean(ratePerContainer || carrier || (transitDays && !isDeclined));
 
   return {
@@ -1119,6 +1642,10 @@ export function parseOfferDetailsFromText(
     carrier: carrier || "Direct Carrier",
     transitDays: transitDays || 24,
     freeDays: freeDays || 14,
+    currency,
+    etd,
+    eta,
+    validUntil,
     isConfirmed,
     isDeclined,
     confidence: ratePerContainer ? 0.95 : 0.7,
@@ -1136,103 +1663,465 @@ export async function processIncomingForwarderEmailReply(input: IncomingEmailMat
   reason: string;
 }> {
   const matchResult = matchIncomingEmailToForwarderRequest(input);
-  if (!matchResult.matched || !matchResult.request) {
-    return {
-      processed: false,
-      request: null,
-      reason: matchResult.reason,
+  let req: ForwarderQuoteRequestRecord;
+  let existing: ForwarderQuoteRequestRecord;
+
+  if (matchResult.matched && matchResult.request) {
+    req = matchResult.request;
+    const list = getLocalForwarderRequests();
+    const idx = list.findIndex((r) => r.id === req.id);
+    if (idx !== -1) {
+      existing = list[idx];
+    } else {
+      existing = req;
+      list.push(existing);
+      saveLocalForwarderRequests(list);
+    }
+  } else {
+    // Dynamic resolution if email is associated with a booking/movement
+    const targetBkId = input.bookingId || input.movementNumber;
+    const allBookings = getLocalBookings();
+    const bk = allBookings.find(
+      (b) =>
+        (targetBkId && b.id && b.id.toLowerCase() === targetBkId.toLowerCase()) ||
+        (targetBkId &&
+          b.movement_number &&
+          b.movement_number.toLowerCase() === targetBkId.toLowerCase()) ||
+        (targetBkId &&
+          b.booking_reference &&
+          b.booking_reference.toLowerCase() === targetBkId.toLowerCase()) ||
+        (input.subject &&
+          b.movement_number &&
+          input.subject.toLowerCase().includes(b.movement_number.toLowerCase())),
+    );
+
+    if (!bk && !input.movementNumber && !input.bookingId) {
+      return {
+        processed: false,
+        request: null,
+        reason: matchResult.reason || "No associated booking found for incoming forwarder quote.",
+      };
+    }
+
+    const movNo =
+      bk?.movement_number || input.movementNumber || bk?.booking_reference || "MOV-2026-00001";
+    const senderEmail = (input.senderEmail || "").trim().toLowerCase();
+    const allFwds = getLocalForwarders();
+    const matchedFwd = allFwds.find(
+      (f) =>
+        (senderEmail && f.email && f.email.toLowerCase() === senderEmail) ||
+        (senderEmail && f.contactEmail && f.contactEmail.toLowerCase() === senderEmail) ||
+        (senderEmail && senderEmail.includes(f.name.toLowerCase().replace(/\s+/g, ""))) ||
+        (input.senderName && input.senderName.toLowerCase().includes(f.name.toLowerCase())),
+    );
+
+    const fwdName =
+      matchedFwd?.name || input.senderName || senderEmail.split("@")[0] || "Forwarder";
+    const fwdId = matchedFwd?.id || `fwd-${Date.now()}`;
+    const fwdEmail = matchedFwd?.email || senderEmail;
+
+    const newReqId = `MFR-${Date.now().toString(36).slice(-6).toUpperCase()}`;
+    const newReq: ForwarderQuoteRequestRecord = {
+      id: newReqId,
+      bookingId: bk?.id || input.bookingId || movNo,
+      bookingReference: movNo,
+      movementNumber: movNo,
+      forwarderId: fwdId,
+      forwarderName: fwdName,
+      forwarderEmail: fwdEmail,
+      status: "AWAITING_OFFER",
+      gmailThreadId: input.gmailThreadId || undefined,
+      gmailMessageId: input.gmailMessageId || undefined,
+      sentAt: new Date().toISOString(),
+      origin: bk?.origin || "POL",
+      destination: bk?.destination || "POD",
+      polCode: bk?.pol_code || "POL",
+      polName: bk?.pol_name || "Port of Loading",
+      podCode: bk?.pod_code || "POD",
+      podName: bk?.pod_name || "Destination Port",
+      supplierName: bk?.supplier_name || "Shipper",
+      buyerName: bk?.buyer_name || "Consignee",
+      containerType: bk?.container_type || "40HC",
+      containerCount: bk?.container_count || 1,
+      cargoDescription: bk?.cargo_description || "Commercial Cargo",
     };
+
+    const list = getLocalForwarderRequests();
+    list.unshift(newReq);
+    saveLocalForwarderRequests(list);
+    req = newReq;
+    existing = newReq;
   }
 
-  const req = matchResult.request;
-
-  // Use AI document understanding (Gemini with high-precision NLP fallback)
-  const aiResult = await analyzeEmailForForwarderOffer({
+  const extracted = await extractQuotationFromEmail({
     subject: input.subject || "",
     body: input.body || "",
-    snippet: input.snippet || "",
-    senderEmail: input.senderEmail,
-    senderName: input.senderName || req.forwarderName,
-    movementNumber: req.movementNumber,
-    forwarderName: req.forwarderName,
-    containerCount: req.containerCount,
-    containerSize: req.containerSize,
+    snippet: input.snippet || null,
+    senderEmail: input.senderEmail || null,
+    senderName: input.senderName || null,
+    receivedAt: new Date().toISOString(),
+    gmailMessageId: input.gmailMessageId || null,
+    gmailThreadId: input.gmailThreadId || null,
+    inReplyTo: input.inReplyTo || null,
+    references: input.references || null,
+    forwarderId: existing.forwarderId,
+    knownMovementNumber: existing.movementNumber,
+    knownForwarderRequestId: existing.id,
+    knownContainerType: existing.containerType,
   });
 
-  const validatedOffer = aiResult.validatedOffer;
-  const list = getLocalForwarderRequests();
-  const idx = list.findIndex((r) => r.id === req.id);
-  if (idx === -1) {
-    return {
-      processed: false,
-      request: req,
-      reason: "Matched request was not found in storage.",
-    };
+  // Sender & Forwarder Verification
+  const cleanSenderEmail = (input.senderEmail || "").trim().toLowerCase();
+  const forwarderPrimaryEmail = (existing.forwarderEmail || "").trim().toLowerCase();
+  const senderDomain = cleanSenderEmail.includes("@") ? cleanSenderEmail.split("@")[1] : "";
+  const fwdDomain = forwarderPrimaryEmail.includes("@") ? forwarderPrimaryEmail.split("@")[1] : "";
+
+  let unverifiedSender = false;
+  if (cleanSenderEmail && forwarderPrimaryEmail && cleanSenderEmail !== forwarderPrimaryEmail) {
+    if (!senderDomain || !fwdDomain || senderDomain !== fwdDomain) {
+      unverifiedSender = true;
+    }
   }
 
-  let newStatus = req.status;
-  const existingOffer = req.offerData || {};
+  // Backend validation: strictly controls booking status changes, award actions, and confirmation actions
+  const actionToValidate = extracted.isDeclined
+    ? "DECLINE_REQUEST"
+    : extracted.isConfirmed
+      ? "CONFIRM_MOVEMENT"
+      : "RECORD_OFFER";
 
-  if (aiResult.normalizedStatus === "DECLINED") {
-    newStatus = "DECLINED";
-  } else if (aiResult.normalizedStatus === "CONFIRMED") {
-    newStatus = "OFFER_RECEIVED";
-  } else if (aiResult.normalizedStatus === "OFFER_RECEIVED") {
-    newStatus = "OFFER_RECEIVED";
+  const validation = validateQuotationForBackendAction(extracted, actionToValidate, {
+    status: existing.status,
+    movementNumber: existing.movementNumber,
+    forwarderId: existing.forwarderId,
+  });
+
+  let newStatus: ForwarderQuoteStatus = existing.status;
+  let offerExtracted = false;
+
+  if (unverifiedSender) {
+    newStatus = "NEEDS_REVIEW";
+  } else if (validation.allowed && validation.suggestedStatus) {
+    newStatus = validation.suggestedStatus as ForwarderQuoteStatus;
+    if (newStatus === "OFFER_RECEIVED") {
+      offerExtracted = true;
+    }
+  } else if (!validation.allowed && validation.requiresReview) {
+    newStatus = "NEEDS_REVIEW";
+  } else {
+    newStatus = "RESPONDED";
   }
 
-  const updatedOfferData: ForwarderOfferData = {
-    ...existingOffer,
-    ratePerContainer: validatedOffer.ratePerContainer || existingOffer.ratePerContainer || 2150,
+  if (extracted.deterministicResult?.needsReview) {
+    newStatus = "NEEDS_REVIEW";
+  }
+
+  const reviewReasons: string[] = [
+    ...(extracted.deterministicResult?.reviewReasons || []),
+    ...(unverifiedSender
+      ? [
+          `Sender email (${input.senderEmail}) does not match registered contact or domain for forwarder ${existing.forwarderName} (${existing.forwarderEmail}). Marked UNVERIFIED_SENDER.`,
+        ]
+      : []),
+  ];
+
+  // Extract only information that is actually present. Missing information remains NULL / undefined.
+  const mergedOfferData: ForwarderOfferData = {
+    ...(existing.offerData || {}),
+    ratePerContainer:
+      extracted.rate !== null ? extracted.rate : existing.offerData?.ratePerContainer,
     totalFreight:
-      validatedOffer.totalFreight ||
-      (validatedOffer.ratePerContainer || existingOffer.ratePerContainer || 2150) *
-        (req.containerCount || 1),
-    carrier: validatedOffer.carrier || existingOffer.carrier || "MSC",
-    transitDays: validatedOffer.transitDays || existingOffer.transitDays || 24,
-    freeDays: validatedOffer.freeDays || existingOffer.freeDays || 14,
-    currency: validatedOffer.currency || existingOffer.currency || "USD",
-    receivedAt: new Date().toISOString(),
-    sourceEmailId: input.gmailMessageId || undefined,
-    receivedVia:
-      validatedOffer.extractionMethod === "GEMINI_AI" ? "AI Email Reader (Gemini)" : "Email Reply",
-    notes: validatedOffer.summary,
+      extracted.totalCost !== null
+        ? extracted.totalCost
+        : extracted.rate !== null
+          ? extracted.rate * (existing.containerCount || 1)
+          : existing.offerData?.totalFreight,
+    currency: extracted.currency || existing.offerData?.currency || undefined,
+    containerType: extracted.containerType || existing.offerData?.containerType || undefined,
+    quantity: extracted.containerQuantity || existing.offerData?.quantity || undefined,
+    availability: extracted.availability || existing.offerData?.availability || undefined,
+    etd: extracted.etd || existing.offerData?.etd || undefined,
+    eta: extracted.eta || existing.offerData?.eta || undefined,
+    transitDays: extracted.transitTime || existing.offerData?.transitDays || undefined,
+    freeDays: extracted.freeDays || existing.offerData?.freeDays || undefined,
+    carrier: extracted.carrier || existing.offerData?.carrier || undefined,
+    vesselName: extracted.vesselName || existing.offerData?.vesselName || undefined,
+    voyageNumber: extracted.voyageNumber || existing.offerData?.voyageNumber || undefined,
+    validUntil: extracted.rateValidity || existing.offerData?.validUntil || undefined,
+    additionalCharges:
+      extracted.additionalCharges || existing.offerData?.additionalCharges || undefined,
+    totalCost: extracted.totalCost !== null ? extracted.totalCost : undefined,
+    notes: extracted.notes || existing.offerData?.notes || undefined,
+    receivedAt: extracted.emailReceivedDate || new Date().toISOString(),
+    sourceEmailId: input.emailMessageId || input.gmailMessageId || undefined,
+    originalEmailSubject: input.subject || undefined,
+    originalEmailBody: input.body ? input.body.slice(0, 800) : undefined,
+    receivedVia: "Gmail Automatic Sync",
+    responseClassification:
+      newStatus === "OFFER_RECEIVED" ||
+      newStatus === "CONFIRMED" ||
+      newStatus === "DECLINED" ||
+      newStatus === "AVAILABLE" ||
+      newStatus === "NOT_AVAILABLE"
+        ? (newStatus as ForwarderOfferData["responseClassification"])
+        : "NEEDS_REVIEW",
+    extractionSummary:
+      extracted.missingFields.length > 0
+        ? `Extracted ${extracted.presentFields.length} fields (${Math.round(extracted.extractionConfidence * 100)}% confidence). Not provided: ${extracted.missingFields.slice(0, 4).join(", ")}.`
+        : `Complete extraction (${Math.round(extracted.extractionConfidence * 100)}% confidence).`,
+    traceability: extracted.traceability || extracted.deterministicResult?.traceability,
+    reviewReasons,
+    confidenceScore: extracted.extractionConfidence,
+    hasConflicts: extracted.deterministicResult?.hasConflicts || false,
+    needsReview:
+      extracted.deterministicResult?.needsReview ||
+      unverifiedSender ||
+      newStatus === "NEEDS_REVIEW",
+    unverifiedSender,
+    containerRates: extracted.deterministicResult?.containerRates,
   };
 
   const updatedReq: ForwarderQuoteRequestRecord = {
-    ...list[idx],
+    ...existing,
     status: newStatus,
-    offerData: updatedOfferData,
+    offerData: mergedOfferData,
+    ratePerContainer: mergedOfferData.ratePerContainer || existing.ratePerContainer,
+    currency: mergedOfferData.currency || existing.currency,
     updatedAt: new Date().toISOString(),
   };
 
-  list[idx] = updatedReq;
+  const list = getLocalForwarderRequests();
+  const currentIdx = list.findIndex((r) => r.id === updatedReq.id);
+  if (currentIdx !== -1) {
+    list[currentIdx] = updatedReq;
+  } else {
+    list.unshift(updatedReq);
+  }
   saveLocalForwarderRequests(list);
+
+  // Record audit log
+  void recordQuotationAuditEvent({
+    eventType: newStatus === "NEEDS_REVIEW" ? "EXTRACTION_NEEDS_REVIEW" : "QUOTATION_SAVED",
+    movementNumber: updatedReq.movementNumber,
+    bookingId: updatedReq.bookingId,
+    forwarderId: updatedReq.forwarderId,
+    forwarderName: updatedReq.forwarderName,
+    senderEmail: input.senderEmail,
+    gmailMessageId: input.gmailMessageId,
+    gmailThreadId: input.gmailThreadId,
+    summary: `Extracted quotation offer for ${updatedReq.forwarderName} (${updatedReq.id}): Rate ${mergedOfferData.ratePerContainer !== undefined ? `$${mergedOfferData.ratePerContainer}` : "N/A"} ${mergedOfferData.currency || ""}. Status: ${newStatus}.`,
+    details: {
+      status: newStatus,
+      rate: mergedOfferData.ratePerContainer,
+      currency: mergedOfferData.currency,
+      confidence: extracted.extractionConfidence,
+      reviewReasons,
+      unverifiedSender,
+    },
+  });
+
+  // Persist quotation, versioning, traceability and email message state to Supabase database
+  if (isSupabaseConfigured && updatedReq.bookingId) {
+    try {
+      await persistQuotationToDatabase({
+        emailMessageId: input.emailMessageId || "",
+        gmailMessageId: input.gmailMessageId,
+        gmailThreadId: input.gmailThreadId,
+        inReplyTo: input.inReplyTo,
+        references: input.references,
+        senderEmail: input.senderEmail,
+        senderName: input.senderName,
+        subject: input.subject,
+        body: input.body,
+        bookingId: updatedReq.bookingId,
+        movementNumber: updatedReq.movementNumber,
+        forwarderId: updatedReq.forwarderId,
+        forwarderName: updatedReq.forwarderName,
+        forwarderEmail: updatedReq.forwarderEmail,
+        forwarderCode: updatedReq.forwarderCode,
+        extracted,
+        newStatus,
+        offerExtracted,
+        unverifiedSender,
+        reviewReasons,
+      });
+    } catch (syncErr) {
+      console.warn("[MultiForwarderService] Notice persisting quotation to Supabase:", syncErr);
+    }
+  }
 
   if (typeof window !== "undefined") {
     window.dispatchEvent(
-      new CustomEvent("nashmia_forwarder_offer_received", {
+      new CustomEvent("nashmia_multi_forwarder_updated", {
         detail: {
+          updatedRequestId: updatedReq.id,
           requestId: updatedReq.id,
           bookingId: updatedReq.bookingId,
-          forwarderId: updatedReq.forwarderId,
-          offer: updatedReq.offerData,
+          movementNumber: updatedReq.movementNumber,
+          request: updatedReq,
           status: newStatus,
+          offer: updatedReq.offerData,
+          rate: mergedOfferData.ratePerContainer,
         },
       }),
     );
-    window.dispatchEvent(
-      new CustomEvent("nashmia_multi_forwarder_updated", {
-        detail: { updatedRequestId: updatedReq.id, bookingId: updatedReq.bookingId },
-      }),
-    );
+    if (offerExtracted || mergedOfferData.ratePerContainer) {
+      window.dispatchEvent(
+        new CustomEvent("nashmia_forwarder_offer_received", {
+          detail: {
+            requestId: updatedReq.id,
+            bookingId: updatedReq.bookingId,
+            movementNumber: updatedReq.movementNumber,
+            request: updatedReq,
+            offer: updatedReq.offerData,
+            rate: mergedOfferData.ratePerContainer,
+          },
+        }),
+      );
+    }
   }
 
   return {
     processed: true,
     request: updatedReq,
     statusUpdatedTo: newStatus,
-    offerExtracted: Boolean(validatedOffer.ratePerContainer || validatedOffer.spaceAvailable),
-    reason: `Successfully routed reply exclusively to ${req.forwarderName} (${req.id}). Status: ${newStatus}. Extracted via ${validatedOffer.extractionMethod}.`,
+    offerExtracted,
+    reason: `Successfully routed reply to ${req.forwarderName} (${req.id}). Status: ${newStatus}.`,
   };
+}
+
+export interface BookingForwarderSummary {
+  movementNumber: string;
+  totalForwarders: number;
+  quotationsReceived: number;
+  pendingReplies: number;
+  declinedCount: number;
+  bestRate?: number;
+  bestRateCurrency?: string;
+  bestRateForwarder?: string;
+  overallStatus:
+    | "OFFERS_RECEIVED"
+    | "AWAITING_QUOTES"
+    | "AWARDED"
+    | "CONFIRMED"
+    | "PENDING_CONFIRMATION"
+    | "NO_FORWARDERS";
+  lastResponseTime?: string;
+  awardedForwarder?: string;
+}
+
+/**
+ * Returns aggregated forwarder summary statistics for a booking
+ */
+export function getBookingForwarderSummary(
+  bookingIdOrMov: string,
+  allRequests?: ForwarderQuoteRequestRecord[],
+): BookingForwarderSummary {
+  const requests =
+    allRequests && allRequests.length > 0 ? allRequests : getLocalForwarderRequests();
+  const idLower = (bookingIdOrMov || "").trim().toLowerCase();
+
+  const linked = requests.filter((r) => {
+    const bId = (r.bookingId || "").trim().toLowerCase();
+    const mov = (r.movementNumber || "").trim().toLowerCase();
+    const ref = (r.bookingReference || "").trim().toLowerCase();
+    const rId = (r.id || "").trim().toLowerCase();
+    return (
+      bId === idLower ||
+      mov === idLower ||
+      ref === idLower ||
+      rId === idLower ||
+      (idLower.length > 3 &&
+        (bId.includes(idLower) || mov.includes(idLower) || idLower.includes(mov)))
+    );
+  });
+
+  const totalForwarders = linked.length;
+  const receivedQuotes = linked.filter(
+    (r) =>
+      r.status === "OFFER_RECEIVED" ||
+      r.status === "AWARDED" ||
+      r.status === "ACCEPTED" ||
+      r.status === "RESPONDED" ||
+      (r.offerData?.ratePerContainer !== undefined &&
+        r.offerData.ratePerContainer !== null &&
+        r.offerData.ratePerContainer > 0) ||
+      (r.ratePerContainer !== undefined && r.ratePerContainer !== null && r.ratePerContainer > 0),
+  );
+  const pendingReplies = linked.filter(
+    (r) =>
+      r.status === "AWAITING_OFFER" ||
+      r.status === "PENDING" ||
+      r.status === "SENT" ||
+      r.status === "REQUESTED",
+  );
+  const declinedCount = linked.filter((r) => r.status === "DECLINED").length;
+
+  const validRates = receivedQuotes
+    .map((r) => ({
+      rate: r.offerData?.ratePerContainer || r.ratePerContainer || 0,
+      currency: r.offerData?.currency || r.currency || "USD",
+      forwarder: r.forwarderName,
+    }))
+    .filter((x) => x.rate > 0);
+
+  const bestRateObj =
+    validRates.length > 0
+      ? validRates.reduce((min, curr) => (curr.rate < min.rate ? curr : min), validRates[0])
+      : undefined;
+
+  const awarded = linked.find((r) => r.status === "AWARDED" || r.status === "ACCEPTED");
+
+  let overallStatus: BookingForwarderSummary["overallStatus"] = "NO_FORWARDERS";
+  if (awarded) {
+    overallStatus = "AWARDED";
+  } else if (receivedQuotes.length > 0) {
+    overallStatus = "OFFERS_RECEIVED";
+  } else if (pendingReplies.length > 0) {
+    overallStatus = "AWAITING_QUOTES";
+  }
+
+  // Find latest response time or update time
+  const dates = linked
+    .map((r) => r.offerData?.receivedAt || r.updatedAt || r.sentAt)
+    .filter(Boolean)
+    .sort()
+    .reverse();
+
+  return {
+    movementNumber: bookingIdOrMov,
+    totalForwarders,
+    quotationsReceived: receivedQuotes.length,
+    pendingReplies: pendingReplies.length,
+    declinedCount,
+    bestRate: bestRateObj?.rate,
+    bestRateCurrency: bestRateObj?.currency,
+    bestRateForwarder: bestRateObj?.forwarder,
+    overallStatus,
+    lastResponseTime: dates[0],
+    awardedForwarder: awarded?.forwarderName,
+  };
+}
+
+/**
+ * Fetch all forwarder requests across all bookings directly from Supabase PostgreSQL database
+ * (Single source of truth).
+ */
+export async function fetchAllForwarderRequestsFromSupabase(): Promise<
+  ForwarderQuoteRequestRecord[]
+> {
+  if (isSupabaseConfigured) {
+    try {
+      const records = await fetchForwarderRequestsFromDatabase(null);
+      if (records && records.length > 0) {
+        return records;
+      }
+    } catch (err) {
+      console.warn(
+        "[MultiForwarderService] Error fetching all forwarder requests from database:",
+        err,
+      );
+    }
+  }
+  return getLocalForwarderRequests();
 }

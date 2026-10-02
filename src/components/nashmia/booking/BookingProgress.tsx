@@ -15,8 +15,8 @@ const STEPS = [
 
 export function BookingProgress({ currentStep, onSelectStep }: BookingProgressProps) {
   return (
-    <div className="overflow-x-auto pb-1 pt-2 scrollbar-none">
-      <div className="min-w-[580px] rounded-[20px] border border-white/80 bg-white/70 p-3 shadow-[0_8px_30px_rgba(15,23,42,0.03),inset_0_1px_1px_rgba(255,255,255,0.9)] backdrop-blur-xl">
+    <div className="w-full min-w-0 max-w-full overflow-x-auto pb-1 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div className="min-w-[460px] sm:min-w-[580px] rounded-[20px] border border-white/80 bg-white/70 p-3 shadow-[0_8px_30px_rgba(15,23,42,0.03),inset_0_1px_1px_rgba(255,255,255,0.9)] backdrop-blur-xl">
         <div className="relative flex items-center justify-between px-3 sm:px-6">
           {/* Background Connector Line */}
           <div className="absolute left-8 right-8 top-5 h-[2px] -translate-y-1/2 bg-[#E8F1F3]" />

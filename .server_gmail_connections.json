@@ -11,9 +11,26 @@
     "token_expires_at": "2026-09-10T09:22:38.510Z",
     "scope": "https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/gmail.labels https://www.googleapis.com/auth/gmail.metadata https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.profile openid https://mail.google.com/ https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/userinfo.email",
     "token_type": "Bearer",
-    "status": "connected",
+    "status": "expired",
     "last_sync_at": "2026-09-10T07:24:13.415Z",
     "created_at": "2026-09-10T07:24:13.415Z",
     "updated_at": "2026-09-10T08:22:39.511Z"
+  },
+  {
+    "id": "526137ac-f8c2-4242-ba41-d63212b67fa4",
+    "user_id": "ca671494-e1a7-4159-89e3-49bb6e3fbf70",
+    "google_email": "fleeksaas@gmail.com",
+    "google_user_id": null,
+    "display_name": "Saas",
+    "avatar_url": "https://lh3.googleusercontent.com/a/ACg8ocJtgEqu5pogiamE2e_K1F7NRHe5dhw-t9dCNg9-BSUqgn-3uQ=s96-c",
+    "access_token": "ya29.a0AX07Cmv2P007IUQLgRkIaYVRunRF-ji7p_5adYW_9jidd569sAoIk88cfw2_q42SNQRSXzGmw-qKGmC4FA0zibFDuojSEA__wjOC-r9mShNif5_mlBiA8dKLI6051vpltNeocY0-EUWhS2IBmCDP9yjjOYmHyBvvda2xMzTEkQvIUYxEZsMj1bMUfcE8koM7aFTgtsEaCgYKAUESARUSFQHGX2MiYgvaqK7SEjyhhgzn82fNDg0206",
+    "refresh_token": null,
+    "token_expires_at": "2026-10-02T08:15:01.786Z",
+    "scope": null,
+    "token_type": "Bearer",
+    "status": "connected",
+    "last_sync_at": "2026-10-02T07:15:02.787Z",
+    "created_at": "2026-10-02T07:15:02.787Z",
+    "updated_at": "2026-10-02T07:15:02.787Z"
   }
 ]

@@ -12,6 +12,7 @@ import {
   connectGmailAccount,
   disconnectGmailAccount,
   fetchGmailConnectionState,
+  getCachedGmailConnectionState,
   getGmailAccessToken,
   sendEmailDirectlyViaGmail,
   fetchLiveGmailMessages,
@@ -21,7 +22,7 @@ import {
 import { useAuth } from "./auth-context";
 import { supabase, isSupabaseConfigured } from "./supabase";
 import { safeUuid, updateLocalBooking } from "./supabase-services";
-import { toast } from "sonner";
+import { showPillToast } from "./pill-toast";
 import { processIncomingForwarderEmailReply } from "./multi-forwarder-service";
 import type { ComposeEmailFormValues, EmailMessageRecord } from "@/types/email.types";
 
@@ -48,7 +49,8 @@ const GmailContext = createContext<GmailContextType | undefined>(undefined);
 
 export function GmailProvider({ children }: { children: ReactNode }) {
   const { userId } = useAuth();
-  const [isConnected, setIsConnected] = useState(false);
+
+  const [isConnected, setIsConnected] = useState<boolean>(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [googleEmail, setGoogleEmail] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState<string | null>(null);
@@ -57,7 +59,19 @@ export function GmailProvider({ children }: { children: ReactNode }) {
   const [liveMessages, setLiveMessages] = useState<GmailFetchedMessage[]>([]);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
 
-  // Check initial connection state
+  // Hydrate from localStorage safely in useEffect after mounting so SSR matches
+  useEffect(() => {
+    const cached = getCachedGmailConnectionState();
+    if (cached) {
+      if (cached.isConnected) setIsConnected(true);
+      if (cached.email) setGoogleEmail(cached.email);
+      if (cached.displayName) setDisplayName(cached.displayName);
+      if (cached.avatarUrl) setAvatarUrl(cached.avatarUrl);
+      if (cached.lastSyncAt) setLastSyncAt(cached.lastSyncAt);
+    }
+  }, []);
+
+  // Check initial connection state in the background without blocking the initial render
   const checkStatus = useCallback(async () => {
     try {
       const state = await fetchGmailConnectionState(userId);
@@ -72,7 +86,11 @@ export function GmailProvider({ children }: { children: ReactNode }) {
   }, [userId]);
 
   useEffect(() => {
-    void checkStatus();
+    // Non-critical: defer background connection check by 2.5s so initial dashboard render is instant
+    const timer = setTimeout(() => {
+      void checkStatus();
+    }, 2500);
+    return () => clearTimeout(timer);
   }, [checkStatus]);
 
   const connect = useCallback(async (): Promise<boolean> => {
@@ -85,15 +103,21 @@ export function GmailProvider({ children }: { children: ReactNode }) {
       setAvatarUrl(result.avatarUrl || null);
       setLastSyncAt(new Date().toISOString());
 
-      toast.success("Connected to Gmail", {
-        description: `Signed in as ${result.email}. You can now send real emails directly.`,
-      });
+      showPillToast.info(
+        `Signed in as ${result.email}. You can now send real emails directly.`,
+        "Connected to Gmail",
+      );
       return true;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to connect Gmail account";
-      toast.error("Gmail Connection Error", {
-        description: msg,
-      });
+      if (msg.includes("popup was blocked") || msg.includes("popup-blocked")) {
+        showPillToast.info(
+          "Popups were blocked by your browser. Please allow popups for this site in your browser's address bar and click Connect again.",
+          "Popup Blocked",
+        );
+      } else {
+        showPillToast.error(msg, "Gmail Connection Notice");
+      }
       return false;
     } finally {
       setIsConnecting(false);
@@ -109,7 +133,7 @@ export function GmailProvider({ children }: { children: ReactNode }) {
       setAvatarUrl(null);
       setLastSyncAt(null);
       setLiveMessages([]);
-      toast.info("Disconnected from Gmail");
+      showPillToast.info("Disconnected from Gmail account", "Gmail Disconnected");
       if (typeof window !== "undefined") {
         window.dispatchEvent(
           new CustomEvent("gmail_connection_changed", {
@@ -119,7 +143,7 @@ export function GmailProvider({ children }: { children: ReactNode }) {
       }
     } catch (err: unknown) {
       console.error("[GmailContext] Disconnect error:", err);
-      toast.error("Failed to disconnect Gmail account");
+      showPillToast.error("Failed to disconnect Gmail account", "Gmail Notice");
     }
   }, [userId, googleEmail]);
 
@@ -351,15 +375,24 @@ export function GmailProvider({ children }: { children: ReactNode }) {
         setLastSyncAt(nowIso);
 
         if (importedCount > 0 && !options?.silent) {
-          toast.success("Gmail Inbox Synchronized", {
-            description: `Received and processed ${importedCount} incoming message(s)${
+          showPillToast.info(
+            `Received and processed ${importedCount} incoming message(s)${
               confirmedCount > 0 ? ` • ${confirmedCount} movement(s) confirmed` : ""
             }.`,
-          });
+            "Gmail Inbox Synchronized",
+          );
         }
 
         // Only dispatch cross-component events if new data was actually imported or confirmed
         if (typeof window !== "undefined" && (importedCount > 0 || confirmedCount > 0)) {
+          window.dispatchEvent(
+            new CustomEvent("nashmia_emails_updated", {
+              detail: { importedCount, confirmedCount },
+            }),
+          );
+          window.dispatchEvent(
+            new CustomEvent("nashmia_documents_updated", { detail: { updated: true } }),
+          );
           window.dispatchEvent(
             new CustomEvent("supabase_realtime_bookings_change", {
               detail: { updated: true, confirmedCount },
@@ -415,7 +448,7 @@ export function GmailProvider({ children }: { children: ReactNode }) {
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : "Failed to sync inbox";
         if (!options?.silent) {
-          toast.error("Inbox Sync Notice", { description: msg });
+          showPillToast.error(msg, "Inbox Sync Notice");
         }
         return { imported: 0 };
       } finally {
@@ -426,28 +459,28 @@ export function GmailProvider({ children }: { children: ReactNode }) {
     [userId, googleEmail],
   );
 
-  // Continuous Background Polling & Window Focus sync
+  // Continuous Fast Background Polling & Window Focus sync
   useEffect(() => {
     if (!isConnected) return;
 
     let lastSyncTime = Date.now();
 
-    // Initial sync after client settles
+    // Initial sync quickly after client settles (1500ms)
     const initialTimer = setTimeout(() => {
       lastSyncTime = Date.now();
       void syncInboxToApp({ silent: true });
-    }, 8000);
+    }, 1500);
 
-    // Periodic polling every 35 seconds when visible so emails appear promptly without freezing
+    // Periodic polling every 30 seconds when tab is active so emails stay fresh without client lag
     const interval = setInterval(() => {
       if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
       lastSyncTime = Date.now();
       void syncInboxToApp({ silent: true });
-    }, 35000);
+    }, 30000);
 
-    // Sync immediately when user switches back to the tab if at least 20 seconds have elapsed
+    // Sync immediately when user switches back to the tab if > 3s have elapsed
     const handleFocus = () => {
-      if (Date.now() - lastSyncTime > 20000) {
+      if (Date.now() - lastSyncTime > 3000) {
         lastSyncTime = Date.now();
         void syncInboxToApp({ silent: true });
       }
@@ -458,7 +491,11 @@ export function GmailProvider({ children }: { children: ReactNode }) {
       setTimeout(() => {
         lastSyncTime = Date.now();
         void syncInboxToApp({ silent: true });
-      }, 8000);
+      }, 1500);
+      setTimeout(() => {
+        lastSyncTime = Date.now();
+        void syncInboxToApp({ silent: true });
+      }, 5000);
     };
 
     window.addEventListener("focus", handleFocus);

@@ -7,6 +7,11 @@ const description =
   "Sign in to your Nashmia Industries container logistics workspace — manage shipments, bookings, rate cards, and consignments.";
 
 export const Route = createFileRoute("/login")({
+  validateSearch: (search: Record<string, unknown>): { redirect?: string } => {
+    return {
+      redirect: typeof search.redirect === "string" ? search.redirect : undefined,
+    };
+  },
   head: () => ({
     meta: [
       { title },

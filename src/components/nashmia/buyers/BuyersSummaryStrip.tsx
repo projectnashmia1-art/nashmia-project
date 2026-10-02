@@ -1,4 +1,4 @@
-import { Activity, CheckCircle2, Container, Globe2, TrendingUp, Users } from "lucide-react";
+import { CheckCircle2, Container, Globe2, Users } from "lucide-react";
 
 interface BuyersSummaryStripProps {
   totalBuyers: number;
@@ -13,119 +13,191 @@ export function BuyersSummaryStrip({
   withActiveMovements,
   totalCountries,
 }: BuyersSummaryStripProps) {
-  const activeRate = totalBuyers > 0 ? Math.round((activeBuyers / totalBuyers) * 100) : 0;
-
-  const cards = [
-    {
-      label: "TOTAL BUYERS",
-      value: totalBuyers,
-      sublabel: "Registered accounts",
-      badge: "+1 this month",
-      badgeType: "positive" as const,
-      icon: Users,
-      iconBg: "bg-[#E8F5F6]",
-      iconBorder: "border-[#C7E8E8]",
-      iconColor: "text-[#0FA3B1]",
-      topLine: "from-[#0FA3B1] to-[#45DFEB]",
-    },
-    {
-      label: "ACTIVE ACCOUNTS",
-      value: activeBuyers,
-      sublabel: `${activeRate}% active engagement`,
-      badge: "Live Network",
-      badgeType: "emerald" as const,
-      icon: CheckCircle2,
-      iconBg: "bg-emerald-50",
-      iconBorder: "border-emerald-200/80",
-      iconColor: "text-emerald-600",
-      topLine: "from-emerald-500 to-teal-400",
-    },
-    {
-      label: "WITH MOVEMENTS",
-      value: withActiveMovements,
-      sublabel: "Allocated containers",
-      badge: "Active routing",
-      badgeType: "indigo" as const,
-      icon: Container,
-      iconBg: "bg-indigo-50",
-      iconBorder: "border-indigo-200/80",
-      iconColor: "text-indigo-600",
-      topLine: "from-indigo-500 to-blue-400",
-    },
-    {
-      label: "GLOBAL DESTINATIONS",
-      value: totalCountries,
-      sublabel: "UK, PK, EU & US corridors",
-      badge: "6 Corridors",
-      badgeType: "cyan" as const,
-      icon: Globe2,
-      iconBg: "bg-cyan-50",
-      iconBorder: "border-cyan-200/80",
-      iconColor: "text-cyan-600",
-      topLine: "from-cyan-500 to-sky-400",
-    },
-  ];
-
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-      {cards.map((card) => {
-        const Icon = card.icon;
-        return (
-          <div
-            key={card.label}
-            className="group relative flex flex-col justify-between overflow-hidden rounded-2xl border border-slate-200/90 bg-white p-5 shadow-[0_2px_10px_-2px_rgba(0,0,0,0.03),0_8px_20px_-6px_rgba(0,0,0,0.04)] transition-all duration-200 hover:-translate-y-1 hover:border-slate-300 hover:shadow-[0_12px_30px_-6px_rgba(0,0,0,0.08)]"
-          >
-            {/* Top Accent Gradient Line on Hover */}
-            <div
-              className={`absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r ${card.topLine} opacity-0 transition-opacity duration-200 group-hover:opacity-100`}
-            />
+    <div className="relative w-full min-w-0 max-w-full">
+      {/* Soft warm ambient blur glow behind the widgets matching the uploaded design */}
+      <div className="pointer-events-none absolute -top-8 inset-x-0 mx-auto h-72 w-full max-w-full sm:max-w-4xl bg-gradient-to-r from-amber-400/20 via-orange-300/15 to-teal-400/15 blur-3xl opacity-65 -z-10" />
 
-            {/* Top Row: Icon + Label + Badge */}
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <span
-                  className={`grid size-11 place-items-center rounded-xl border ${card.iconBorder} ${card.iconBg} ${card.iconColor} transition-transform duration-200 group-hover:scale-105`}
-                >
-                  <Icon className="size-5" />
-                </span>
-                <div>
-                  <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400">
-                    {card.label}
-                  </p>
-                  <p className="text-[12px] text-slate-500">{card.sublabel}</p>
-                </div>
-              </div>
-
-              {card.badgeType === "emerald" ? (
-                <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
-                  <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  {card.badge}
-                </span>
-              ) : card.badgeType === "indigo" ? (
-                <span className="inline-flex items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700">
-                  {card.badge}
-                </span>
-              ) : card.badgeType === "cyan" ? (
-                <span className="inline-flex items-center gap-1 rounded-full border border-cyan-200 bg-cyan-50 px-2 py-0.5 text-[11px] font-semibold text-cyan-700">
-                  {card.badge}
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1 rounded-full border border-[#C7E8E8] bg-[#E8F5F6] px-2 py-0.5 text-[11px] font-semibold text-[#0FA3B1]">
-                  <TrendingUp className="size-3" />
-                  {card.badge}
-                </span>
-              )}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-4.5">
+        {/* ========================================================================= */}
+        {/* 1. CARD 1: Payment History Style -> Active Accounts                       */}
+        {/* ========================================================================= */}
+        <div className="group relative overflow-hidden rounded-[24px] sm:rounded-[26px] bg-white p-5 sm:p-6 border border-slate-100/90 shadow-[0_12px_32px_-8px_rgba(0,0,0,0.06),0_2px_6px_-1px_rgba(0,0,0,0.02)] transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_18px_38px_-8px_rgba(0,0,0,0.09)] flex flex-col justify-between min-h-[145px] sm:min-h-[155px]">
+          {/* Top: Circular outline icon + Two-line title */}
+          <div className="flex items-center gap-3">
+            <div className="size-11 sm:size-12 rounded-full border border-slate-200/90 bg-white flex items-center justify-center text-slate-700 shadow-2xs shrink-0">
+              <CheckCircle2 className="size-5 stroke-[1.8] text-slate-700" />
             </div>
-
-            {/* Metric Value */}
-            <div className="mt-4 flex items-baseline justify-between">
-              <span className="num text-[32px] font-bold tracking-tight text-slate-900 leading-none">
-                {card.value}
+            <div className="flex flex-col">
+              <span className="text-[14px] sm:text-[15px] font-medium leading-[1.2] text-slate-800">
+                Active
+              </span>
+              <span className="text-[14px] sm:text-[15px] font-medium leading-[1.2] text-slate-800">
+                Accounts
               </span>
             </div>
           </div>
-        );
-      })}
+
+          {/* Bottom: Big metric + 5 vertical equalizer bars */}
+          <div className="mt-4 flex items-end justify-between">
+            <span className="text-[28px] sm:text-[32px] font-bold text-slate-900 tracking-tight leading-none">
+              {activeBuyers}
+            </span>
+            {/* 5-bar vertical sparkline */}
+            <div className="flex items-end gap-1.5 h-6 pb-0.5">
+              <span className="w-1.5 h-2 rounded-full bg-slate-900/90" />
+              <span className="w-1.5 h-3.5 rounded-full bg-slate-900/90" />
+              <span className="w-1.5 h-6 rounded-full bg-slate-900" />
+              <span className="w-1.5 h-5 rounded-full bg-slate-900" />
+              <span className="w-1.5 h-2.5 rounded-full bg-slate-900/80" />
+            </div>
+          </div>
+        </div>
+
+        {/* ========================================================================= */}
+        {/* 3. CARD 2: Credit Age Style -> Active Movements (Warm Copper/Amber Glass)  */}
+        {/* ========================================================================= */}
+        <div
+          className="group relative overflow-hidden rounded-[24px] sm:rounded-[26px] p-5 sm:p-6 border border-amber-400/20 shadow-[0_16px_36px_-10px_rgba(110,65,25,0.3)] transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_20px_42px_-10px_rgba(110,65,25,0.4)] flex flex-col justify-between min-h-[145px] sm:min-h-[155px]"
+          style={{
+            background: `
+              radial-gradient(circle at 85% 15%, rgba(165, 105, 45, 0.85) 0%, transparent 60%),
+              radial-gradient(circle at 20% 80%, rgba(125, 75, 30, 0.5) 0%, transparent 60%),
+              linear-gradient(135deg, #44311e 0%, #684824 52%, #382515 100%)
+            `,
+          }}
+        >
+          {/* Specular edge */}
+          <div className="pointer-events-none absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-amber-200/30 to-transparent" />
+
+          {/* Top: Translucent Golden Icon circle + Two-line title */}
+          <div className="flex items-center gap-3">
+            <div className="size-11 sm:size-12 rounded-full border border-amber-200/30 bg-white/5 backdrop-blur-xs flex items-center justify-center text-amber-100 shadow-[inset_0_1px_1px_rgba(255,255,255,0.2)] shrink-0">
+              <Container className="size-5 stroke-[1.8] text-amber-100" />
+            </div>
+            <div className="flex flex-col">
+              <span className="text-[14px] sm:text-[15px] font-medium leading-[1.2] text-amber-100/95">
+                Active
+              </span>
+              <span className="text-[14px] sm:text-[15px] font-medium leading-[1.2] text-amber-100/95">
+                Movements
+              </span>
+            </div>
+          </div>
+
+          {/* Bottom: Big metric + unit and golden sine wave sparkline */}
+          <div className="mt-4 flex items-end justify-between">
+            <div className="flex items-baseline">
+              <span className="text-[28px] sm:text-[32px] font-bold text-white tracking-tight leading-none">
+                {withActiveMovements}
+              </span>
+              <span className="text-[14px] font-normal text-amber-200/80 ml-1">mvts</span>
+            </div>
+
+            {/* Golden sine wave sparkline with vertex dots */}
+            <div className="pb-1">
+              <svg className="w-16 h-5 overflow-visible" viewBox="0 0 64 22" fill="none">
+                <path
+                  d="M 2 15 C 10 15 14 5 22 5 C 30 5 34 18 42 18 C 50 18 54 8 62 8"
+                  stroke="rgba(253, 230, 138, 0.75)"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                />
+                <circle cx="22" cy="5" r="2" fill="rgba(253, 230, 138, 0.95)" />
+                <circle cx="42" cy="18" r="2" fill="rgba(253, 230, 138, 0.95)" />
+                <circle cx="62" cy="8" r="2" fill="rgba(253, 230, 138, 0.95)" />
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        {/* ========================================================================= */}
+        {/* 4. CARD 3: Total Accounts Style -> Total Buyers                           */}
+        {/* ========================================================================= */}
+        <div className="group relative overflow-hidden rounded-[24px] sm:rounded-[26px] bg-white p-5 sm:p-6 border border-slate-100/90 shadow-[0_12px_32px_-8px_rgba(0,0,0,0.06),0_2px_6px_-1px_rgba(0,0,0,0.02)] transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_18px_38px_-8px_rgba(0,0,0,0.09)] flex flex-col justify-between min-h-[145px] sm:min-h-[155px]">
+          {/* Top: Icon circle + Two-line title */}
+          <div className="flex items-center gap-3">
+            <div className="size-11 sm:size-12 rounded-full border border-slate-200/90 bg-white flex items-center justify-center text-slate-700 shadow-2xs shrink-0">
+              <Users className="size-5 stroke-[1.8] text-slate-700" />
+            </div>
+            <div className="flex flex-col">
+              <span className="text-[14px] sm:text-[15px] font-medium leading-[1.2] text-slate-800">
+                Total
+              </span>
+              <span className="text-[14px] sm:text-[15px] font-medium leading-[1.2] text-slate-800">
+                Buyers
+              </span>
+            </div>
+          </div>
+
+          {/* Bottom: Big metric + rhythmic bracket pulse step wave */}
+          <div className="mt-4 flex items-end justify-between">
+            <span className="text-[28px] sm:text-[32px] font-bold text-slate-900 tracking-tight leading-none">
+              {totalBuyers}
+            </span>
+            {/* Rhythmic bracket step arch sparkline */}
+            <div className="pb-1.5">
+              <svg className="w-16 h-4 overflow-visible" viewBox="0 0 64 16" fill="none">
+                <path
+                  d="M 2 13 C 4 13 5 6 8 6 C 11 6 12 13 14 13 H 18 C 20 13 21 6 24 6 C 27 6 28 13 30 13 H 34 C 36 13 37 6 40 6 C 43 6 44 13 46 13 H 50 C 52 13 53 6 56 6 C 59 6 60 13 62 13"
+                  stroke="#0f172a"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        {/* ========================================================================= */}
+        {/* 5. CARD 4: Hard Inquiries Style -> Global Corridors                       */}
+        {/* ========================================================================= */}
+        <div className="group relative overflow-hidden rounded-[24px] sm:rounded-[26px] bg-white p-5 sm:p-6 border border-slate-100/90 shadow-[0_12px_32px_-8px_rgba(0,0,0,0.06),0_2px_6px_-1px_rgba(0,0,0,0.02)] transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_18px_38px_-8px_rgba(0,0,0,0.09)] flex flex-col justify-between min-h-[145px] sm:min-h-[155px]">
+          {/* Top: Icon circle + Two-line title */}
+          <div className="flex items-center gap-3">
+            <div className="size-11 sm:size-12 rounded-full border border-slate-200/90 bg-white flex items-center justify-center text-slate-700 shadow-2xs shrink-0">
+              <Globe2 className="size-5 stroke-[1.8] text-slate-700" />
+            </div>
+            <div className="flex flex-col">
+              <span className="text-[14px] sm:text-[15px] font-medium leading-[1.2] text-slate-800">
+                Global
+              </span>
+              <span className="text-[14px] sm:text-[15px] font-medium leading-[1.2] text-slate-800">
+                Corridors
+              </span>
+            </div>
+          </div>
+
+          {/* Bottom: Big metric + 3x5 dot matrix pattern */}
+          <div className="mt-4 flex items-end justify-between">
+            <span className="text-[28px] sm:text-[32px] font-bold text-slate-900 tracking-tight leading-none">
+              {totalCountries}
+            </span>
+            {/* 3x5 dot matrix pattern matching the image */}
+            <div className="grid grid-rows-3 grid-flow-col gap-x-1.5 gap-y-1 pb-1">
+              <span className="size-1 rounded-full bg-slate-300" />
+              <span className="size-1.5 rounded-full bg-slate-900" />
+              <span className="size-1 rounded-full bg-slate-300" />
+
+              <span className="size-1 rounded-full bg-slate-200" />
+              <span className="size-1 rounded-full bg-slate-400" />
+              <span className="size-1 rounded-full bg-slate-200" />
+
+              <span className="size-1.5 rounded-full bg-slate-900" />
+              <span className="size-1.5 rounded-full bg-slate-900" />
+              <span className="size-1 rounded-full bg-slate-300" />
+
+              <span className="size-1 rounded-full bg-slate-200" />
+              <span className="size-1 rounded-full bg-slate-400" />
+              <span className="size-1 rounded-full bg-slate-200" />
+
+              <span className="size-1 rounded-full bg-slate-300" />
+              <span className="size-1.5 rounded-full bg-slate-900" />
+              <span className="size-1 rounded-full bg-slate-300" />
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

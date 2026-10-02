@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { LifecycleDropdownSelect } from "@/components/nashmia/common/LifecycleDropdownSelect";
 import type { RequestStatus, RequestPriority, RequestsFilterState } from "@/types/requests";
 
 interface RequestsToolbarProps {
@@ -18,12 +19,10 @@ interface RequestsToolbarProps {
   onFilterChange: (updates: Partial<RequestsFilterState>) => void;
   statusCounts: Record<string, number>;
   totalFiltered: number;
-  forwarderOffersCount?: number;
 }
 
-const STATUS_TABS: { label: string; value: RequestStatus | "All" | "Forwarder Offers" }[] = [
+const STATUS_TABS: { label: string; value: RequestStatus | "All" }[] = [
   { label: "All Requests", value: "All" },
-  { label: "Forwarder Offers", value: "Forwarder Offers" },
   { label: "Pending Review", value: "Pending Review" },
   { label: "Rate Verification", value: "Rate Verification" },
   { label: "Line Allocation", value: "Line Allocation" },
@@ -36,7 +35,6 @@ export const RequestsToolbar = memo(function RequestsToolbar({
   onFilterChange,
   statusCounts,
   totalFiltered,
-  forwarderOffersCount = 0,
 }: RequestsToolbarProps) {
   const hasActiveFilters =
     filters.search !== "" ||
@@ -86,48 +84,54 @@ export const RequestsToolbar = memo(function RequestsToolbar({
         {/* Filters & View switcher */}
         <div className="flex flex-wrap items-center gap-2">
           {/* Priority filter */}
-          <select
+          <LifecycleDropdownSelect
             value={filters.priority}
-            onChange={(e) =>
-              onFilterChange({ priority: e.target.value as RequestPriority | "All" })
-            }
-            className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-[13px] font-medium text-slate-700 shadow-sm focus:border-[#0FA3B1] focus:outline-none focus:ring-1 focus:ring-[#0FA3B1]"
-          >
-            <option value="All">All Priorities</option>
-            <option value="Urgent">🔴 Urgent Priority</option>
-            <option value="High">🟠 High Priority</option>
-            <option value="Normal">🟢 Normal Priority</option>
-            <option value="Flexible">⚪ Flexible</option>
-          </select>
+            onChange={(val) => onFilterChange({ priority: val as RequestPriority | "All" })}
+            options={[
+              { value: "All", label: "All Priorities" },
+              { value: "Urgent", label: "🔴 Urgent Priority" },
+              { value: "High", label: "🟠 High Priority" },
+              { value: "Normal", label: "🟢 Normal Priority" },
+              { value: "Flexible", label: "⚪ Flexible" },
+            ]}
+            placeholder="All Priorities"
+            activeColor="teal"
+            triggerClassName="h-10 min-w-[140px]"
+          />
 
           {/* Carrier Filter */}
-          <select
+          <LifecycleDropdownSelect
             value={filters.carrier}
-            onChange={(e) => onFilterChange({ carrier: e.target.value })}
-            className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-[13px] font-medium text-slate-700 shadow-sm focus:border-[#0FA3B1] focus:outline-none focus:ring-1 focus:ring-[#0FA3B1]"
-          >
-            <option value="">All Shipping Lines</option>
-            <option value="MSC">MSC Mediterranean Shipping</option>
-            <option value="Maersk">Maersk Line</option>
-            <option value="CMA CGM">CMA CGM</option>
-            <option value="Hapag-Lloyd">Hapag-Lloyd</option>
-            <option value="ONE">ONE (Ocean Network Express)</option>
-          </select>
+            onChange={(val) => onFilterChange({ carrier: val })}
+            options={[
+              { value: "", label: "All Shipping Lines" },
+              { value: "MSC", label: "MSC Mediterranean" },
+              { value: "Maersk", label: "Maersk Line" },
+              { value: "CMA CGM", label: "CMA CGM" },
+              { value: "Hapag-Lloyd", label: "Hapag-Lloyd" },
+              { value: "ONE", label: "ONE Express" },
+            ]}
+            placeholder="All Shipping Lines"
+            activeColor="teal"
+            triggerClassName="h-10 min-w-[155px]"
+          />
 
           {/* Sort By */}
-          <select
+          <LifecycleDropdownSelect
             value={filters.sortBy}
-            onChange={(e) =>
-              onFilterChange({ sortBy: e.target.value as RequestsFilterState["sortBy"] })
-            }
-            className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-[13px] font-medium text-slate-700 shadow-sm focus:border-[#0FA3B1] focus:outline-none focus:ring-1 focus:ring-[#0FA3B1]"
-          >
-            <option value="date-desc">Newest First</option>
-            <option value="date-asc">Oldest First</option>
-            <option value="priority-desc">Highest Priority</option>
-            <option value="rate-desc">Highest Freight Rate</option>
-            <option value="buyer-asc">Buyer Name (A-Z)</option>
-          </select>
+            onChange={(val) => onFilterChange({ sortBy: val as RequestsFilterState["sortBy"] })}
+            options={[
+              { value: "date-desc", label: "Newest First" },
+              { value: "date-asc", label: "Oldest First" },
+              { value: "priority-desc", label: "Highest Priority" },
+              { value: "rate-desc", label: "Highest Freight Rate" },
+              { value: "buyer-asc", label: "Buyer Name (A-Z)" },
+            ]}
+            placeholder="Sort By"
+            icon={<ArrowUpDown className="size-3.5" />}
+            activeColor="teal"
+            triggerClassName="h-10 min-w-[140px]"
+          />
 
           {/* Reset Filters */}
           {hasActiveFilters && (
@@ -192,11 +196,7 @@ export const RequestsToolbar = memo(function RequestsToolbar({
       <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
         {STATUS_TABS.map((tab) => {
           const count =
-            tab.value === "All"
-              ? statusCounts["All"] || 0
-              : tab.value === "Forwarder Offers"
-                ? forwarderOffersCount
-                : statusCounts[tab.value] || 0;
+            tab.value === "All" ? statusCounts["All"] || 0 : statusCounts[tab.value] || 0;
           const isActive = filters.status === tab.value;
 
           return (

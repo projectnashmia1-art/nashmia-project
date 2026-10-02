@@ -122,8 +122,27 @@ export function SignUpForm() {
         toast.success("Account Created Successfully", {
           description: `Welcome to Nashmia Logistics, ${trimmedName}!`,
         });
+
+        let targetUrl = "/";
+        try {
+          if (typeof window !== "undefined") {
+            const params = new URLSearchParams(window.location.search);
+            const redirectParam = params.get("redirect");
+            if (
+              redirectParam &&
+              redirectParam.startsWith("/") &&
+              !redirectParam.startsWith("/login") &&
+              !redirectParam.startsWith("/signup")
+            ) {
+              targetUrl = redirectParam;
+            }
+          }
+        } catch {
+          targetUrl = "/";
+        }
+
         setTimeout(() => {
-          navigate({ to: "/" });
+          navigate({ to: targetUrl });
         }, 400);
       }
     } catch (err: unknown) {

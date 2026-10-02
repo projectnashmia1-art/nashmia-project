@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useMemo } from "react";
 import {
   Ship,
   ArrowRight,
@@ -7,7 +7,6 @@ import {
   AlertCircle,
   FileEdit,
   Mail,
-  MoreVertical,
   Calendar,
   DollarSign,
   Package,
@@ -16,69 +15,26 @@ import {
   ExternalLink,
   ChevronRight,
   Users,
-  Scale,
+  Sparkles,
+  Trophy,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PortFlagDisplay } from "@/components/nashmia/common/PortFlagDisplay";
+import {
+  getLocalForwarderRequests,
+  getBookingForwarderSummary,
+} from "@/lib/multi-forwarder-service";
 import type { BookingRequestRecord, RequestStatus, RequestPriority } from "@/types/requests";
-import type { ForwarderOfferCardItem } from "@/lib/forwarder-card-service";
 
 interface RequestsCardGridProps {
   requests: BookingRequestRecord[];
-  forwarderCards?: ForwarderOfferCardItem[];
+  forwarderRequests?: ForwarderQuoteRequestRecord[];
   onSelectRequest: (request: BookingRequestRecord) => void;
   onApproveRequest: (request: BookingRequestRecord) => void;
   onRequestRevision: (request: BookingRequestRecord) => void;
   onComposeEmail?: (request: BookingRequestRecord) => void;
   onRequestQuotes?: (request: BookingRequestRecord) => void;
-  onViewForwarderOffers?: (bookingId?: string) => void;
-  onCompareForwarderOffers?: (request: BookingRequestRecord) => void;
-}
-
-function getStatusBadge(status: RequestStatus) {
-  switch (status) {
-    case "Pending Review":
-      return {
-        label: "Pending Review",
-        classes: "border-amber-200 bg-amber-50 text-amber-800",
-        dot: "bg-amber-500",
-      };
-    case "Rate Verification":
-      return {
-        label: "Rate Check",
-        classes: "border-indigo-200 bg-indigo-50 text-indigo-800",
-        dot: "bg-indigo-500",
-      };
-    case "Line Allocation":
-      return {
-        label: "Line Allocation",
-        classes: "border-cyan-200 bg-cyan-50 text-cyan-800",
-        dot: "bg-cyan-500",
-      };
-    case "Approved":
-      return {
-        label: "CONFIRMED",
-        classes: "border-emerald-200 bg-emerald-50 text-emerald-800",
-        dot: "bg-emerald-500",
-      };
-    case "Revision Requested":
-      return {
-        label: "Revision Required",
-        classes: "border-rose-200 bg-rose-50 text-rose-800",
-        dot: "bg-rose-500",
-      };
-    case "Declined":
-      return {
-        label: "Declined",
-        classes: "border-slate-200 bg-slate-100 text-slate-700",
-        dot: "bg-slate-400",
-      };
-    default:
-      return {
-        label: status,
-        classes: "border-slate-200 bg-slate-50 text-slate-700",
-        dot: "bg-slate-400",
-      };
-  }
+  onViewQuotations?: (request: BookingRequestRecord) => void;
 }
 
 function getPriorityBadge(priority: RequestPriority) {
@@ -108,15 +64,27 @@ function getPriorityBadge(priority: RequestPriority) {
 
 export const RequestsCardGrid = memo(function RequestsCardGrid({
   requests,
-  forwarderCards = [],
+  forwarderRequests,
   onSelectRequest,
   onApproveRequest,
   onRequestRevision,
   onComposeEmail,
   onRequestQuotes,
-  onViewForwarderOffers,
-  onCompareForwarderOffers,
+  onViewQuotations,
 }: RequestsCardGridProps) {
+  const allForwarderRequests = useMemo(() => {
+    const fromProps = forwarderRequests || [];
+    const fromLocal = getLocalForwarderRequests();
+    const map = new Map<string, ForwarderQuoteRequestRecord>();
+    for (const r of fromLocal) {
+      if (r?.id) map.set(r.id, r);
+    }
+    for (const r of fromProps) {
+      if (r?.id) map.set(r.id, r);
+    }
+    return Array.from(map.values());
+  }, [forwarderRequests]);
+
   if (requests.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-slate-50/50 p-12 text-center">
@@ -135,8 +103,20 @@ export const RequestsCardGrid = memo(function RequestsCardGrid({
   return (
     <div className="grid grid-cols-1 gap-4.5 md:grid-cols-2 xl:grid-cols-3">
       {requests.map((req) => {
-        const statusMeta = getStatusBadge(req.status);
         const priorityMeta = getPriorityBadge(req.priority);
+        const fwdSummary = getBookingForwarderSummary(
+          req.movementNumber || req.bookingReference || req.id,
+          allForwarderRequests,
+        );
+
+        const isConfirmed = req.status === "Approved" || req.confirmationStatus === "CONFIRMED";
+        const isAwarded =
+          !isConfirmed &&
+          (req.status === "Line Allocation" || fwdSummary.overallStatus === "AWARDED");
+        const isOffers =
+          !isConfirmed &&
+          !isAwarded &&
+          (fwdSummary.overallStatus === "OFFERS_RECEIVED" || req.status === "Rate Verification");
 
         return (
           <div
@@ -147,8 +127,8 @@ export const RequestsCardGrid = memo(function RequestsCardGrid({
               {/* Top Header Bar */}
               <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-3">
                 <div className="flex items-center gap-2">
-                  <span className="font-mono text-[13px] font-bold tracking-tight text-slate-900">
-                    {req.reference}
+                  <span className="font-mono text-[13.5px] font-bold tracking-tight text-slate-900">
+                    {req.movementNumber || req.reference}
                   </span>
                   <span
                     className={`rounded-md px-2 py-0.5 text-[10.5px] uppercase ${priorityMeta.classes}`}
@@ -157,40 +137,60 @@ export const RequestsCardGrid = memo(function RequestsCardGrid({
                   </span>
                 </div>
 
-                <div
-                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11.5px] font-semibold ${statusMeta.classes}`}
-                >
-                  <span className={`size-1.5 rounded-full ${statusMeta.dot}`} />
-                  <span>{statusMeta.label}</span>
-                </div>
+                {isConfirmed ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-[11px] font-bold text-emerald-800">
+                    <CheckCircle2 className="size-3 text-emerald-600" />
+                    CONFIRMED
+                  </span>
+                ) : isAwarded ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-cyan-200 bg-cyan-50 px-2.5 py-0.5 text-[11px] font-bold text-cyan-800">
+                    <span className="size-1.5 rounded-full bg-cyan-500" />
+                    AWARDED
+                  </span>
+                ) : isOffers ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-0.5 text-[11px] font-bold text-indigo-800">
+                    <Sparkles className="size-3 text-indigo-600" />
+                    OFFERS RECEIVED
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-[11px] font-semibold text-slate-700">
+                    {req.status}
+                  </span>
+                )}
               </div>
 
               {/* Route & Cargo Specs */}
-              <div className="mt-3.5 rounded-xl border border-slate-100 bg-slate-50/60 p-3">
+              <div className="mt-3.5 rounded-xl border border-slate-200/90 bg-white p-3 shadow-2xs">
                 {/* Port Route */}
                 <div className="flex items-center justify-between text-[13px]">
-                  <div className="min-w-0">
-                    <span className="font-bold text-slate-900">{req.polCode}</span>
-                    <p className="line-clamp-1 text-[11.5px] text-slate-500">{req.polName}</p>
-                  </div>
+                  <PortFlagDisplay
+                    portCode={req.polCode}
+                    portName={req.polName}
+                    align="left"
+                    size="md"
+                    className="max-w-[42%]"
+                  />
 
-                  <div className="flex flex-col items-center px-3 text-[#0FA3B1]">
+                  <div className="flex flex-col items-center px-2 text-[#0FA3B1] shrink-0">
                     <div className="flex items-center gap-1">
-                      <span className="h-px w-6 bg-[#0FA3B1]/40" />
+                      <span className="h-px w-5 bg-[#0FA3B1]/40" />
                       <Ship className="size-3.5" />
-                      <span className="h-px w-6 bg-[#0FA3B1]/40" />
+                      <span className="h-px w-5 bg-[#0FA3B1]/40" />
                     </div>
                     <span className="text-[10px] font-medium text-slate-500">Ocean Freight</span>
                   </div>
 
-                  <div className="min-w-0 text-right">
-                    <span className="font-bold text-slate-900">{req.podCode}</span>
-                    <p className="line-clamp-1 text-[11.5px] text-slate-500">{req.podName}</p>
-                  </div>
+                  <PortFlagDisplay
+                    portCode={req.podCode}
+                    portName={req.podName}
+                    align="right"
+                    size="md"
+                    className="max-w-[42%]"
+                  />
                 </div>
 
-                {/* ETD / ETA schedule */}
-                <div className="mt-2.5 flex items-center justify-between border-t border-slate-200/60 pt-2 text-[11.5px] text-slate-600">
+                {/* ETD schedule */}
+                <div className="mt-2.5 flex items-center justify-between border-t border-slate-100 pt-2 text-[11.5px] text-slate-600">
                   <div className="flex items-center gap-1">
                     <Calendar className="size-3 text-slate-400" />
                     <span>
@@ -207,142 +207,112 @@ export const RequestsCardGrid = memo(function RequestsCardGrid({
                 </div>
               </div>
 
-              {/* Parties: Shipper -> Consignee */}
-              <div className="mt-3.5 space-y-2 text-[12.5px]">
+              {/* Parties & Cargo Details */}
+              <div className="mt-3.5 space-y-1.5 text-[12.5px]">
                 <div className="flex items-start justify-between gap-2">
-                  <span className="text-[11.5px] font-medium text-slate-400">Shipper:</span>
-                  <div className="text-right">
-                    <span className="font-semibold text-slate-800">{req.supplierName}</span>
-                    {req.supplierCity && (
-                      <p className="text-[11px] text-slate-500">{req.supplierCity}</p>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex items-start justify-between gap-2">
-                  <span className="text-[11.5px] font-medium text-slate-400">Consignee:</span>
-                  <div className="text-right">
-                    <span className="font-semibold text-slate-800">{req.buyerName}</span>
-                    <p className="text-[11px] text-slate-500">{req.buyerCountry}</p>
-                  </div>
-                </div>
-
-                {/* Cargo Details */}
-                <div className="flex items-start justify-between gap-2 pt-1 border-t border-slate-100">
-                  <span className="text-[11.5px] font-medium text-slate-400">Cargo:</span>
-                  <div className="text-right">
-                    <span className="font-medium text-slate-800 line-clamp-1">
-                      {req.cargo.description}
-                    </span>
-                    <p className="text-[11px] text-slate-500">
-                      {req.containerCount}x {req.containerSize} ({req.containerType}) ·{" "}
-                      {Math.round(req.cargo.totalWeightKg / 1000)}t
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Carrier & Rate Banner */}
-              <div className="mt-3.5 flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2 text-[12px]">
-                <div className="flex items-center gap-1.5">
-                  <span className="rounded-md bg-white px-2 py-0.5 text-[11px] font-bold text-slate-800 border border-slate-200">
-                    {req.preferredCarrier}
-                  </span>
-                  {req.vesselName && (
-                    <span className="text-[11px] text-slate-500 font-mono">{req.vesselName}</span>
-                  )}
-                </div>
-
-                <div className="text-right">
-                  <span className="text-[13.5px] font-bold text-slate-900">
-                    ${req.totalFreight.toLocaleString()}{" "}
-                    <span className="text-[10.5px] font-normal text-slate-500">{req.currency}</span>
+                  <span className="text-[11.5px] font-medium text-slate-400">Buyer:</span>
+                  <span className="font-semibold text-slate-800 text-right truncate">
+                    {req.buyerName}
                   </span>
                 </div>
-              </div>
-
-              {/* Forwarder Offers Indicator (if quotes received) */}
-              {(() => {
-                const offers = forwarderCards.filter(
-                  (c) => c.bookingId === req.id || c.movementNumber === req.reference,
-                );
-                if (offers.length === 0) return null;
-                const lowestRate = Math.min(
-                  ...offers.map((o) => o.ratePerContainer || 999999).filter((r) => r < 999999),
-                );
-                return (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onCompareForwarderOffers
-                        ? onCompareForwarderOffers(req)
-                        : onViewForwarderOffers?.(req.id)
-                    }
-                    className="mt-2.5 flex w-full items-center justify-between rounded-lg border border-teal-200 bg-[#E8F5F6]/50 px-2.5 py-1.5 text-[11.5px] text-[#0D919E] hover:bg-[#E8F5F6] transition-colors cursor-pointer"
+                <div className="flex items-start justify-between gap-2">
+                  <span className="text-[11.5px] font-medium text-slate-400">
+                    Supplier / Load Point:
+                  </span>
+                  <span
+                    className="font-medium text-slate-700 text-right truncate"
+                    title={`${req.supplierName} (${req.supplierLoadPoint || req.supplierCity || req.polName})`}
                   >
-                    <div className="flex items-center gap-1.5 font-semibold">
-                      <Scale className="size-3.5 text-[#0FA3B1]" />
-                      <span>
-                        Compare {offers.length} Forwarder Offer{offers.length > 1 ? "s" : ""}
-                      </span>
-                    </div>
-                    {lowestRate < 999999 && (
-                      <span className="font-bold text-slate-800">
-                        From ${lowestRate.toLocaleString()} USD
-                      </span>
-                    )}
-                  </button>
-                );
-              })()}
-
-              {/* Gate Cut-Off notice */}
-              {req.gateCutoff && (
-                <div className="mt-2.5 flex items-center gap-1.5 text-[11.5px] text-amber-700">
-                  <Clock className="size-3.5 text-amber-500" />
-                  <span>
-                    Gate Cut-off: <strong>{req.gateCutoff}</strong>
+                    {req.supplierName}
+                    <span className="text-slate-400 font-normal ml-1">
+                      · {req.supplierLoadPoint || req.supplierCity || req.polName}
+                    </span>
                   </span>
                 </div>
-              )}
-              {/* Awarded Forwarder Confirmation Info */}
-              {req.status === "Approved" && req.confirmedBy && (
-                <div className="mt-2.5 flex items-center justify-between rounded-lg border border-emerald-200/80 bg-emerald-50/60 px-2.5 py-1.5 text-[11.5px] text-emerald-950">
-                  <span className="font-medium text-emerald-800">Assigned Forwarder:</span>
-                  <span className="font-bold text-emerald-900">{req.confirmedBy}</span>
+                <div className="flex items-start justify-between gap-2 pt-1 border-t border-slate-100">
+                  <span className="text-[11.5px] font-medium text-slate-400">
+                    Container Type & Qty:
+                  </span>
+                  <span className="font-semibold text-slate-900">
+                    {req.containerCount}x {req.containerSize}{" "}
+                    <span className="font-normal text-slate-500">({req.containerType})</span>
+                  </span>
                 </div>
-              )}
+              </div>
+
+              {/* Multi-Forwarder Intelligence Banner */}
+              <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3 space-y-2 shadow-2xs">
+                <div className="flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-1.5 font-semibold text-slate-900">
+                    <Users className="size-3.5 text-[#0FA3B1]" />
+                    <span>{fwdSummary.totalForwarders} Forwarders</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <span className="text-emerald-700 font-bold bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
+                      {fwdSummary.quotationsReceived} Received
+                    </span>
+                    <span className="text-amber-700 font-medium bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">
+                      {fwdSummary.pendingReplies} Pending
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between border-t border-slate-100 pt-1.5 text-xs">
+                  <span className="text-slate-500 text-[11px]">
+                    {fwdSummary.bestRate ? "Best Quotation Rate:" : "Target Freight:"}
+                  </span>
+                  <div className="text-right">
+                    <span className="font-bold text-slate-900 text-[13px]">
+                      ${(fwdSummary.bestRate || req.totalFreight).toLocaleString()}{" "}
+                      <span className="text-[10.5px] font-normal text-slate-500">
+                        {fwdSummary.bestRateCurrency || req.currency}
+                      </span>
+                    </span>
+                    {fwdSummary.bestRateForwarder && (
+                      <span className="block text-[10px] text-emerald-700 font-medium">
+                        via {fwdSummary.bestRateForwarder}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Award Status Banner */}
+              <div className="mt-2.5">
+                {isAwarded && (fwdSummary.awardedForwarder || req.forwarderName) ? (
+                  <div className="flex items-center justify-between rounded-lg border border-cyan-200/80 bg-cyan-50/70 px-2.5 py-1.5 text-[11.5px] text-cyan-950">
+                    <span className="font-medium text-cyan-800">Award Status:</span>
+                    <span className="font-bold text-cyan-900 flex items-center gap-1">
+                      <Trophy className="size-3 text-cyan-700" />
+                      AWARDED ({fwdSummary.awardedForwarder || req.forwarderName})
+                    </span>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11.5px] text-slate-600 shadow-2xs">
+                    <span className="font-medium text-slate-500">Award Status:</span>
+                    <span className="font-medium text-slate-700">
+                      {fwdSummary.quotationsReceived > 0
+                        ? "Awaiting Award Decision"
+                        : "Awaiting Quotations"}
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Bottom Actions Bar */}
             <div className="mt-4 flex items-center gap-2 border-t border-slate-100 pt-3">
-              {req.status === "Approved" ? (
-                <div className="flex-1 flex items-center justify-center gap-1.5 h-8.5 px-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold shadow-2xs">
-                  <CheckCircle2 className="size-3.5 text-emerald-600 shrink-0" />
-                  <span className="truncate">Approved & Confirmed</span>
-                </div>
-              ) : (
+              {(onViewQuotations || onRequestQuotes) && (
                 <Button
                   type="button"
                   size="sm"
-                  onClick={() => onApproveRequest(req)}
-                  className="flex-1 h-8.5 gap-1 bg-[#0FA3B1] text-xs font-semibold text-white hover:bg-[#0D919E]"
+                  onClick={() =>
+                    onViewQuotations ? onViewQuotations(req) : onRequestQuotes?.(req)
+                  }
+                  className="flex-1 h-8.5 gap-1.5 bg-[#0FA3B1] hover:bg-[#0D919E] text-white text-xs font-bold shadow-2xs cursor-pointer"
                 >
-                  <CheckCircle2 className="size-3.5" />
-                  Approve & Confirm
-                </Button>
-              )}
-
-              {req.status !== "Revision Requested" && req.status !== "Approved" && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onRequestRevision(req)}
-                  className="h-8.5 text-xs text-amber-800 border-amber-200 hover:bg-amber-50"
-                  title="Request changes from shipper"
-                >
-                  <FileEdit className="size-3.5" />
-                  Revision
+                  <Users className="size-3.5" />
+                  <span>View Quotations ({fwdSummary.quotationsReceived})</span>
                 </Button>
               )}
 
@@ -352,38 +322,11 @@ export const RequestsCardGrid = memo(function RequestsCardGrid({
                 size="sm"
                 onClick={() => onSelectRequest(req)}
                 className="h-8.5 px-2.5 text-xs text-slate-700 border-slate-200 hover:bg-slate-50"
-                title="View complete dossier"
+                title="View full booking details"
               >
                 Details
                 <ChevronRight className="size-3.5 ml-0.5" />
               </Button>
-
-              {onRequestQuotes && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onRequestQuotes(req)}
-                  className="h-8.5 px-2 text-xs text-[#0FA3B1] border-[#0FA3B1]/30 bg-[#E8F5F6]/30 hover:bg-[#E8F5F6] font-medium"
-                  title="Request quotes from multiple forwarders"
-                >
-                  <Users className="size-3.5 mr-1" />
-                  Quotes
-                </Button>
-              )}
-
-              {onComposeEmail && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => onComposeEmail(req)}
-                  className="size-8.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100"
-                  title="Send email regarding this request"
-                >
-                  <Mail className="size-3.5" />
-                </Button>
-              )}
             </div>
           </div>
         );

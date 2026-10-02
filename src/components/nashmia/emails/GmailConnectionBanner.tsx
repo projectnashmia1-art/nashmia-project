@@ -1,14 +1,12 @@
 import { useState } from "react";
 import {
-  Mail,
   CheckCircle2,
-  AlertCircle,
   RefreshCw,
   LogOut,
-  Sparkles,
   ExternalLink,
   ShieldCheck,
-  Inbox,
+  Zap,
+  Mail,
 } from "lucide-react";
 import { useGmail } from "@/lib/use-gmail";
 import { toast } from "sonner";
@@ -81,51 +79,50 @@ export function GmailConnectionBanner({ onRefreshEmails, className }: GmailConne
       <div
         id="gmail-connected-banner"
         className={cn(
-          "rounded-2xl border border-emerald-200/80 bg-gradient-to-r from-emerald-50/70 via-white to-emerald-50/30 p-4 sm:p-5 shadow-sm transition-all",
+          "rounded-2xl border border-slate-200/90 bg-white p-4 sm:p-5 shadow-xs transition-all hover:border-slate-300",
           className,
         )}
       >
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="flex items-start sm:items-center gap-3.5">
-            <div className="relative">
-              {avatarUrl ? (
-                <img
-                  src={avatarUrl}
-                  alt={displayName || "Google User"}
-                  className="size-10 rounded-full border-2 border-emerald-500 object-cover shadow-sm"
-                  referrerPolicy="no-referrer"
-                />
-              ) : (
-                <div className="grid size-10 place-items-center rounded-full bg-emerald-600 text-white font-bold text-sm shadow-sm">
-                  {(displayName?.[0] || googleEmail?.[0] || "G").toUpperCase()}
-                </div>
-              )}
-              <span className="absolute -bottom-0.5 -right-0.5 size-3.5 rounded-full border-2 border-white bg-emerald-500 flex items-center justify-center">
-                <CheckCircle2 className="size-2 text-white" />
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          {/* Left: Account Profile & Status */}
+          <div className="flex items-start sm:items-center gap-3.5 min-w-0">
+            <div className="relative shrink-0">
+              <div className="grid size-11 place-items-center rounded-full bg-gradient-to-br from-[#0FA3B1] to-[#0b7a85] text-white font-bold text-base shadow-2xs">
+                {(displayName?.[0] || googleEmail?.[0] || "G").toUpperCase()}
+              </div>
+              <span className="absolute -bottom-0.5 -right-0.5 size-4 rounded-full border-2 border-white bg-emerald-500 flex items-center justify-center shadow-2xs">
+                <CheckCircle2 className="size-2.5 text-white" />
               </span>
             </div>
 
-            <div>
+            <div className="min-w-0 space-y-1">
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-sm font-bold text-slate-900">
+                <span className="text-[14.5px] font-bold text-slate-900 tracking-tight truncate">
                   {displayName || "Connected Account"}
                 </span>
-                <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-100/70 px-2 py-0.5 text-[11px] font-semibold text-emerald-800">
-                  <span className="size-1.5 rounded-full bg-emerald-600 animate-pulse" />
-                  Gmail Live Active
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700">
+                  <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  Live Sync Active
+                </span>
+                <span className="hidden sm:inline-flex items-center gap-1 text-[11px] font-medium text-slate-500 bg-slate-100 border border-slate-200 rounded-md px-2 py-0.5">
+                  <ShieldCheck className="size-3 text-emerald-600" />
+                  Google Verified
                 </span>
               </div>
-              <div className="flex items-center gap-2 text-xs text-slate-600 mt-0.5">
-                <span className="font-mono">{googleEmail}</span>
+
+              <div className="flex items-center gap-2 text-xs text-slate-600 flex-wrap">
+                <span className="font-mono text-slate-700 font-medium">{googleEmail}</span>
                 {lastSyncAt && (
                   <>
-                    <span>•</span>
-                    <span className="text-slate-500">
-                      Synced{" "}
-                      {new Date(lastSyncAt).toLocaleTimeString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
+                    <span className="text-slate-300">•</span>
+                    <span className="text-slate-500 text-[11.5px]">
+                      Last synced:{" "}
+                      <span className="font-medium text-slate-700">
+                        {new Date(lastSyncAt).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </span>
                     </span>
                   </>
                 )}
@@ -133,33 +130,42 @@ export function GmailConnectionBanner({ onRefreshEmails, className }: GmailConne
             </div>
           </div>
 
-          <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+          {/* Right: Actions */}
+          <div className="flex items-center gap-2 self-start lg:self-center shrink-0 flex-wrap">
             <button
               type="button"
               onClick={handleSync}
               disabled={isSyncing}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-xs hover:bg-slate-50 transition-colors disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-800 shadow-2xs hover:bg-slate-50 hover:border-slate-300 active:scale-[0.99] transition-all disabled:opacity-50 cursor-pointer"
             >
               <RefreshCw
                 className={cn(
                   "size-3.5 text-slate-600",
-                  isSyncing && "animate-spin text-emerald-600",
+                  isSyncing && "animate-spin text-[#0FA3B1]",
                 )}
               />
               <span>{isSyncing ? "Syncing..." : "Sync Gmail"}</span>
             </button>
 
+            <a
+              href="https://mail.google.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 shadow-2xs hover:bg-slate-50 hover:text-slate-900 transition-all"
+            >
+              <ExternalLink className="size-3.5 text-slate-400" />
+              <span className="hidden sm:inline">Open Mailbox</span>
+            </a>
+
             <button
               type="button"
               onClick={handleDisconnect}
               disabled={isDisconnecting}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200/60 bg-white px-2.5 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 transition-colors disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-white px-3 py-2 text-xs font-medium text-rose-600 hover:bg-rose-50/70 hover:border-rose-300 transition-all disabled:opacity-50 cursor-pointer"
               title="Disconnect Gmail Account"
             >
               <LogOut className={cn("size-3.5", isDisconnecting && "animate-spin")} />
-              <span className="hidden sm:inline">
-                {isDisconnecting ? "Disconnecting..." : "Disconnect"}
-              </span>
+              <span>{isDisconnecting ? "Disconnecting..." : "Disconnect"}</span>
             </button>
           </div>
         </div>
@@ -171,13 +177,14 @@ export function GmailConnectionBanner({ onRefreshEmails, className }: GmailConne
     <div
       id="gmail-connect-promo-banner"
       className={cn(
-        "rounded-2xl border border-blue-200/70 bg-gradient-to-r from-blue-50/60 via-indigo-50/30 to-white p-4 sm:p-5 shadow-xs transition-all",
+        "rounded-2xl border border-slate-200/90 bg-white p-5 sm:p-6 shadow-xs transition-all hover:border-slate-300",
         className,
       )}
     >
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex items-start gap-3.5">
-          <div className="grid size-11 shrink-0 place-items-center rounded-2xl bg-white shadow-xs border border-blue-100">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
+        {/* Left: Google / Gmail Icon & Info */}
+        <div className="flex items-start gap-4">
+          <div className="grid size-12 shrink-0 place-items-center rounded-2xl bg-white border border-slate-200/90 shadow-2xs">
             <svg
               version="1.1"
               xmlns="http://www.w3.org/2000/svg"
@@ -204,28 +211,43 @@ export function GmailConnectionBanner({ onRefreshEmails, className }: GmailConne
             </svg>
           </div>
 
-          <div>
-            <div className="flex items-center gap-2">
-              <h3 className="text-sm font-bold text-slate-900">Connect your Gmail Account</h3>
-              <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
-                Official Google Workspace
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <h3 className="text-base font-bold text-slate-900 tracking-tight">
+                Connect Gmail for Dispatch & Tracking
+              </h3>
+              <span className="inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-0.5 text-[11px] font-semibold text-blue-700">
+                <ShieldCheck className="size-3 text-blue-600" />
+                Google Workspace Verified
               </span>
             </div>
-            <p className="text-xs text-slate-600 mt-0.5 max-w-xl">
-              Enable the Gmail API to dispatch official booking requests, shipping instructions, and
-              container manifests directly from your verified Google mailbox with end-to-end
-              delivery tracking.
+            <p className="text-[13px] text-slate-600 max-w-2xl leading-relaxed">
+              Dispatch RFQ bookings, send container shipping instructions, and track forwarder
+              quotations directly through your official company Google account.
             </p>
+
+            {/* Feature Pills */}
+            <div className="pt-1 flex items-center gap-2 flex-wrap text-[11.5px] text-slate-500 font-medium">
+              <span className="flex items-center gap-1 bg-slate-50 border border-slate-200/80 px-2.5 py-0.5 rounded-md text-slate-700">
+                <Zap className="size-3 text-amber-500" /> Instant RFQ Dispatch
+              </span>
+              <span className="flex items-center gap-1 bg-slate-50 border border-slate-200/80 px-2.5 py-0.5 rounded-md text-slate-700">
+                <Mail className="size-3 text-[#0FA3B1]" /> Real-time Quotation Sync
+              </span>
+              <span className="flex items-center gap-1 bg-slate-50 border border-slate-200/80 px-2.5 py-0.5 rounded-md text-slate-700">
+                <ShieldCheck className="size-3 text-emerald-600" /> Secure OAuth 2.0
+              </span>
+            </div>
           </div>
         </div>
 
-        {/* Official Google Sign In Button */}
-        <div className="shrink-0 self-start md:self-auto">
+        {/* Right: Official Google Connect Button */}
+        <div className="shrink-0 self-start lg:self-center">
           <button
             type="button"
             onClick={handleConnect}
             disabled={isConnecting}
-            className="inline-flex items-center justify-center gap-2.5 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-xs font-semibold text-slate-800 shadow-xs hover:bg-slate-50 active:bg-slate-100 transition-all disabled:opacity-60 cursor-pointer"
+            className="inline-flex items-center justify-center gap-3 rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-xs font-semibold text-slate-800 shadow-2xs hover:bg-slate-50 hover:border-slate-400 active:scale-[0.99] transition-all disabled:opacity-60 cursor-pointer"
           >
             <div className="size-4 shrink-0">
               <svg

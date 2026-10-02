@@ -197,6 +197,14 @@ export async function refreshGoogleAccessToken(
 
   const { clientId, clientSecret } = resolveGoogleCredentials();
 
+  if (!clientSecret) {
+    const errorMsg = "client_secret is missing.";
+    console.warn(
+      `[ServerGmailToken] Cannot refresh Google token for ${connection.google_email}: client_secret is missing. Interactive re-authorization via popup required.`,
+    );
+    return { success: false, error: errorMsg };
+  }
+
   console.log(
     `[ServerGmailToken] Refreshing expired access token for ${connection.google_email}...`,
   );
@@ -206,11 +214,8 @@ export async function refreshGoogleAccessToken(
       client_id: clientId,
       refresh_token: connection.refresh_token,
       grant_type: "refresh_token",
+      client_secret: clientSecret,
     });
-
-    if (clientSecret) {
-      postBody.set("client_secret", clientSecret);
-    }
 
     const response = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
@@ -348,10 +353,13 @@ export async function getOrRefreshActiveGmailConnection(
       console.warn(
         `[ServerGmailToken] Automatic refresh failed for ${activeConn.google_email}: ${refreshResult.error}`,
       );
-      // If we still have an access token that hasn't strictly passed current time, return it with warning
-      if (expiresAtMs > now) {
-        return { connection: activeConn };
+      // If token is past its expiration date and refresh failed, mark as expired to prevent 401 request cascades
+      if (!expiresAtMs || expiresAtMs <= now) {
+        activeConn.status = "expired";
+        await persistGmailConnection(activeConn);
+        return { connection: null, error: refreshResult.error };
       }
+      // If we still have an access token that hasn't strictly passed current time, return it with warning
       return { connection: activeConn, error: refreshResult.error };
     }
   }
@@ -616,4 +624,195 @@ export async function disconnectGmailConnection(
       console.warn("[ServerGmailToken] Notice during Supabase disconnect:", err);
     }
   }
+}
+
+/**
+ * Builds standard RFC 2822 Raw Email String on server
+ */
+function createServerRawEmailMessage(params: {
+  from: string;
+  fromName?: string;
+  to: string;
+  toName?: string;
+  cc?: string;
+  bcc?: string;
+  subject: string;
+  body: string;
+  bodyHtml?: string;
+  messageId?: string;
+}): string {
+  const boundary = `----=_Part_${Date.now()}_${Math.random().toString(36).substring(2)}`;
+  const dateStr = new Date().toUTCString();
+
+  const fromFormatted = params.fromName
+    ? `"${params.fromName.replace(/"/g, "")}" <${params.from}>`
+    : params.from;
+
+  let toFormatted = params.to;
+  if (params.to.includes(",") || params.to.includes(";")) {
+    const addresses = params.to
+      .split(/[,;]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    toFormatted = addresses
+      .map((addr) => (params.toName ? `"${params.toName.replace(/"/g, "")}" <${addr}>` : addr))
+      .join(", ");
+  } else if (params.toName) {
+    toFormatted = `"${params.toName.replace(/"/g, "")}" <${params.to}>`;
+  }
+
+  const lines: string[] = [`From: ${fromFormatted}`, `To: ${toFormatted}`];
+
+  if (params.cc && params.cc.trim()) {
+    lines.push(`Cc: ${params.cc.trim()}`);
+  }
+  if (params.bcc && params.bcc.trim()) {
+    lines.push(`Bcc: ${params.bcc.trim()}`);
+  }
+
+  // UTF-8 encoded subject
+  const utf8Bytes = Buffer.from(params.subject || "(No Subject)", "utf-8");
+  const encodedSubject = `=?UTF-8?B?${utf8Bytes.toString("base64")}?=`;
+  lines.push(`Subject: ${encodedSubject}`);
+  lines.push(`Date: ${dateStr}`);
+  lines.push(`MIME-Version: 1.0`);
+
+  if (params.messageId) {
+    lines.push(`Message-ID: <${params.messageId}@nashmiaindustries.com>`);
+  }
+
+  lines.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
+  lines.push("");
+
+  // Plaintext Part
+  lines.push(`--${boundary}`);
+  lines.push("Content-Type: text/plain; charset=UTF-8");
+  lines.push("Content-Transfer-Encoding: 8bit");
+  lines.push("");
+  lines.push(params.body || "");
+  lines.push("");
+
+  // HTML Part
+  const htmlContent = params.bodyHtml || (params.body ? params.body.replace(/\n/g, "<br/>") : "");
+  lines.push(`--${boundary}`);
+  lines.push("Content-Type: text/html; charset=UTF-8");
+  lines.push("Content-Transfer-Encoding: 8bit");
+  lines.push("");
+  lines.push(
+    `<!DOCTYPE html><html><body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #1e293b;">${htmlContent}</body></html>`,
+  );
+  lines.push("");
+
+  lines.push(`--${boundary}--`);
+
+  return lines.join("\r\n");
+}
+
+function base64UrlEncodeServer(str: string): string {
+  return Buffer.from(str, "utf-8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+/**
+ * Server-side Send Email Handler via active Gmail Connection
+ */
+export async function sendEmailViaServerHandler(params: {
+  userId?: string | null;
+  accessToken?: string | null;
+  from?: string;
+  fromName?: string;
+  to: string;
+  toName?: string;
+  cc?: string;
+  bcc?: string;
+  subject: string;
+  body: string;
+  bodyHtml?: string;
+  bookingId?: string | null;
+}): Promise<{
+  success: boolean;
+  gmail_message_id?: string;
+  id?: string;
+  gmail_thread_id?: string;
+  threadId?: string;
+  error?: string;
+}> {
+  let token = params.accessToken || null;
+
+  if (!token) {
+    const { connection } = await getOrRefreshActiveGmailConnection(params.userId);
+    token = connection?.access_token || null;
+  }
+
+  if (!token) {
+    return {
+      success: false,
+      error: "Gmail authentication is not active. Please connect your Gmail account in settings.",
+    };
+  }
+
+  const fromEmail = params.from || "me";
+  const rawEmail = createServerRawEmailMessage({
+    from: fromEmail,
+    fromName: params.fromName,
+    to: params.to,
+    toName: params.toName,
+    cc: params.cc,
+    bcc: params.bcc,
+    subject: params.subject,
+    body: params.body,
+    bodyHtml: params.bodyHtml,
+    messageId: `nashmia-srv-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+  });
+
+  const base64EncodedRaw = base64UrlEncodeServer(rawEmail);
+
+  let response = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ raw: base64EncodedRaw }),
+  });
+
+  // If 401, attempt token refresh and retry
+  if (response.status === 401) {
+    const { connection } = await getOrRefreshActiveGmailConnection(params.userId, true);
+    if (connection?.access_token) {
+      token = connection.access_token;
+      response = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ raw: base64EncodedRaw }),
+      });
+    }
+  }
+
+  if (!response.ok) {
+    const errText = await response.text();
+    let parsed: { error?: { message?: string } } = {};
+    try {
+      parsed = JSON.parse(errText);
+    } catch {
+      // not json
+    }
+    const errorMsg = parsed?.error?.message || errText || `Gmail API error (${response.status})`;
+    return { success: false, error: errorMsg };
+  }
+
+  const data = (await response.json()) as { id: string; threadId: string };
+  return {
+    success: true,
+    gmail_message_id: data.id,
+    id: data.id,
+    gmail_thread_id: data.threadId,
+    threadId: data.threadId,
+  };
 }

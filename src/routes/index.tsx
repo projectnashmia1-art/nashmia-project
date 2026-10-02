@@ -1,8 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
-
-import { AppSidebar, MobileSidebar } from "@/components/nashmia/AppSidebar";
+import { AppLayout } from "@/components/nashmia/AppLayout";
 import {
+  DashboardDataProvider,
   KpiGrid,
   Lifecycle,
   NeedsAttention,
@@ -12,6 +11,7 @@ import {
   TopHeader,
   UpcomingCutoffs,
 } from "@/components/nashmia/DashboardSections";
+import { ErrorBoundary } from "@/components/common/ErrorBoundary";
 
 const title = "Container Operations Dashboard | Nashmia Industries";
 const description =
@@ -30,46 +30,50 @@ export const Route = createFileRoute("/")({
 });
 
 function Dashboard() {
-  const [collapsed, setCollapsed] = useState(false);
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
-
   return (
-    <div className="relative min-h-screen bg-white">
-      <div className="env-light" aria-hidden />
-
-      {/* Navigation Sidebars */}
-      <AppSidebar collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />
-      <MobileSidebar open={mobileNavOpen} onOpenChange={setMobileNavOpen} />
-
-      <main className="px-4 pb-24 pt-6 sm:px-6 sm:pt-8 lg:pb-10 lg:pr-8">
-        <div
-          className="space-y-6 transition-[margin-left] duration-300 ease-glass lg:ml-[var(--offset)]"
-          style={{ "--offset": collapsed ? "88px" : "272px" } as React.CSSProperties}
-        >
-          <div className="mx-auto max-w-[1600px] space-y-6">
-            <TopHeader onOpenMobileMenu={() => setMobileNavOpen(true)} />
+    <AppLayout
+      maxWidth="max-w-[1600px]"
+      mainClassName="px-4 pb-24 pt-6 sm:px-6 sm:pt-8 lg:pb-10 lg:pr-8"
+    >
+      {({ onOpenMobileMenu }) => (
+        <DashboardDataProvider>
+          <div className="space-y-6">
+            <TopHeader onOpenMobileMenu={onOpenMobileMenu} />
             <PageTitle />
-            <KpiGrid />
+
+            <ErrorBoundary moduleName="KPI Metrics">
+              <KpiGrid />
+            </ErrorBoundary>
 
             <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
               <div className="xl:col-span-2">
-                <Lifecycle />
+                <ErrorBoundary moduleName="Lifecycle Tracker">
+                  <Lifecycle />
+                </ErrorBoundary>
               </div>
-              <NeedsAttention />
+              <ErrorBoundary moduleName="Action Items">
+                <NeedsAttention />
+              </ErrorBoundary>
             </div>
 
             <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
               <div className="xl:col-span-2">
-                <RecentMovements />
+                <ErrorBoundary moduleName="Recent Movements Table">
+                  <RecentMovements />
+                </ErrorBoundary>
               </div>
               <div className="space-y-5">
-                <UpcomingCutoffs />
-                <QuickActions />
+                <ErrorBoundary moduleName="Upcoming Cut-offs">
+                  <UpcomingCutoffs />
+                </ErrorBoundary>
+                <ErrorBoundary moduleName="Quick Actions">
+                  <QuickActions />
+                </ErrorBoundary>
               </div>
             </div>
           </div>
-        </div>
-      </main>
-    </div>
+        </DashboardDataProvider>
+      )}
+    </AppLayout>
   );
 }

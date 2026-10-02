@@ -7,6 +7,11 @@ const description =
   "Create your Nashmia Industries logistics operations account to manage container bookings, voyage intelligence, and forwarder directories.";
 
 export const Route = createFileRoute("/signup")({
+  validateSearch: (search: Record<string, unknown>): { redirect?: string } => {
+    return {
+      redirect: typeof search.redirect === "string" ? search.redirect : undefined,
+    };
+  },
   head: () => ({
     meta: [
       { title },

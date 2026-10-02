@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { INITIAL_SUPPLIERS, SupplierAccountFull, SUPPLIER_MOVEMENTS } from "@/lib/suppliers-data";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { SupplierAccountFull, SupplierMovementRecord } from "@/lib/suppliers-data";
 import { AddSupplierModal } from "./AddSupplierModal";
 import { SupplierCardGrid } from "./SupplierCardGrid";
 import { SupplierDetailDrawer } from "./SupplierDetailDrawer";
@@ -12,10 +13,17 @@ import { toast } from "sonner";
 import { useAuth } from "@/lib/auth-context";
 import {
   fetchSuppliersFromSupabase,
+  fetchBookingsFromSupabase,
   insertSupplierToSupabase,
   updateSupplierInSupabase,
 } from "@/lib/supabase-services";
+import { useCachedSuppliers, invalidateCachedSuppliers, entityCacheKeys } from "@/lib/cache";
 import { useSupabaseRealtime } from "@/hooks/use-supabase-realtime";
+import {
+  DirectorySummaryStripSkeleton,
+  DirectoryCardGridSkeleton,
+  DirectoryTableSkeleton,
+} from "@/components/nashmia/skeletons/DirectorySkeletons";
 
 interface SuppliersDirectoryPageProps {
   onOpenMobileMenu?: () => void;
@@ -23,8 +31,22 @@ interface SuppliersDirectoryPageProps {
 
 export function SuppliersDirectoryPage({ onOpenMobileMenu }: SuppliersDirectoryPageProps) {
   const { userId, isConfigured } = useAuth();
+  const queryClient = useQueryClient();
+
+  // Cached suppliers query with query deduplication, navigation cache reuse & background revalidation
+  const {
+    data: cachedSuppliers = [],
+    isLoading: isQueryLoading,
+    refetch: refetchSuppliers,
+  } = useCachedSuppliers(userId, { enabled: isConfigured });
+
+  const { data: allBookings = [] } = useQuery({
+    queryKey: ["dashboard-bookings", userId],
+    queryFn: () => fetchBookingsFromSupabase(userId),
+    enabled: true,
+  });
+
   const [suppliers, setSuppliers] = useState<SupplierAccountFull[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCountry, setSelectedCountry] = useState("all");
   const [selectedStatus, setSelectedStatus] = useState("all");
@@ -38,34 +60,19 @@ export function SuppliersDirectoryPage({ onOpenMobileMenu }: SuppliersDirectoryP
   const [selectedSupplier, setSelectedSupplier] = useState<SupplierAccountFull | null>(null);
   const [isDetailDrawerOpen, setIsDetailDrawerOpen] = useState(false);
 
-  // Load suppliers from Supabase
-  const loadSuppliers = useCallback(async () => {
-    try {
-      if (!isConfigured) {
-        setSuppliers([]);
-        setIsLoading(false);
-        return;
-      }
-      const data = await fetchSuppliersFromSupabase(userId);
-      setSuppliers(data || []);
-    } catch (err) {
-      console.warn("[SuppliersDirectoryPage] Error loading suppliers:", err);
-      setSuppliers([]);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [userId, isConfigured]);
-
+  // Synchronize local state with cache whenever cached data arrives or updates in background
   useEffect(() => {
-    void loadSuppliers();
-  }, [loadSuppliers]);
+    setSuppliers(cachedSuppliers || []);
+  }, [cachedSuppliers]);
 
-  // Realtime subscription
+  const isLoading = isQueryLoading && suppliers.length === 0;
+
+  // Realtime subscription: invalidates query cache to trigger silent background revalidation
   useSupabaseRealtime(
     "suppliers",
     useCallback(() => {
-      void loadSuppliers();
-    }, [loadSuppliers]),
+      void invalidateCachedSuppliers(queryClient, userId);
+    }, [queryClient, userId]),
     isConfigured,
   );
 
@@ -143,12 +150,13 @@ export function SuppliersDirectoryPage({ onOpenMobileMenu }: SuppliersDirectoryP
       try {
         if (isConfigured) {
           await updateSupplierInSupabase(editId, data);
+          await invalidateCachedSuppliers(queryClient, userId);
         }
       } catch (err: unknown) {
         toast.error("Failed to update supplier in Supabase", {
           description: err instanceof Error ? err.message : "Database error",
         });
-        void loadSuppliers();
+        void refetchSuppliers();
       }
     } else {
       // Add new
@@ -167,6 +175,7 @@ export function SuppliersDirectoryPage({ onOpenMobileMenu }: SuppliersDirectoryP
             created,
             ...prev.filter((s) => s.id !== tempSupplier.id && s.id !== created.id),
           ]);
+          await invalidateCachedSuppliers(queryClient, userId);
         }
       } catch (err: unknown) {
         console.warn("Supplier insert notice:", err);
@@ -190,6 +199,7 @@ export function SuppliersDirectoryPage({ onOpenMobileMenu }: SuppliersDirectoryP
     try {
       if (isConfigured) {
         await updateSupplierInSupabase(supplierId, { status: nextStatus });
+        await invalidateCachedSuppliers(queryClient, userId);
       }
       toast.info(
         nextStatus === "Inactive" ? `${target.name} archived` : `${target.name} activated`,
@@ -198,7 +208,7 @@ export function SuppliersDirectoryPage({ onOpenMobileMenu }: SuppliersDirectoryP
       toast.error("Could not update supplier status", {
         description: err instanceof Error ? err.message : "Database error",
       });
-      void loadSuppliers();
+      void refetchSuppliers();
     }
   };
 
@@ -229,74 +239,112 @@ export function SuppliersDirectoryPage({ onOpenMobileMenu }: SuppliersDirectoryP
   // Movements belonging to selected supplier
   const selectedSupplierMovements = useMemo(() => {
     if (!selectedSupplier) return [];
-    return SUPPLIER_MOVEMENTS.filter((m) => m.supplierId === selectedSupplier.id);
-  }, [selectedSupplier]);
+    const sId = (selectedSupplier.id || "").toLowerCase();
+    const sName = (selectedSupplier.name || "").toLowerCase();
+
+    return (allBookings || [])
+      .filter((b) => {
+        const rowSuppId = (b.supplier_id || "").toLowerCase();
+        const rowSuppName = (b.supplier_name || "").toLowerCase();
+        return (
+          rowSuppId === sId ||
+          (sId && rowSuppId && rowSuppId === sId) ||
+          (sName && rowSuppName === sName)
+        );
+      })
+      .map((b) => ({
+        id: b.id,
+        ref: b.booking_reference || b.movement_number || b.id,
+        supplierId: selectedSupplier.id,
+        supplierName: selectedSupplier.name,
+        loadPoint: selectedSupplier.loadPoint || "Default Load Point",
+        buyerName: b.buyer_name || b.customer_name || "Buyer",
+        containersCount: b.container_count || 1,
+        containerSize: (b.container_size as "40HC") || "40HC",
+        polCode: b.pol_code || "POL",
+        polName: b.pol_name || b.origin || "Origin",
+        podCode: b.pod_code || "POD",
+        podName: b.pod_name || b.destination || "Destination",
+        carrier: b.carrier || "Carrier",
+        vessel: b.vessel_name || "Vessel",
+        status: (b.status || "In Transit") as SupplierMovementRecord["status"],
+        etd: b.etd || "—",
+        eta: b.eta || "—",
+      }));
+  }, [selectedSupplier, allBookings]);
 
   const activeCount = suppliers.filter((s) => s.status === "Active").length;
   const loadPointsCount = new Set(suppliers.map((s) => s.loadPoint)).size;
   const activeMovementsCount = suppliers.reduce((acc, s) => acc + (s.activeContainers || 0), 0);
 
   return (
-    <div className="min-h-screen bg-slate-50/50 pb-16 text-slate-900">
-      {/* Main Container */}
-      <div className="mx-auto max-w-[1520px] px-4 py-6 sm:px-6 lg:px-8 space-y-6">
-        {/* 1. Header with Eyebrow, Title & + Register Supplier Button */}
-        <SuppliersHeader onOpenMobileMenu={onOpenMobileMenu} onAddSupplier={handleOpenAddModal} />
+    <div className="relative z-10 w-full min-w-0 max-w-full space-y-6 text-slate-900 pb-12">
+      {/* 1. Header with Eyebrow, Title & + Register Supplier Button */}
+      <SuppliersHeader onOpenMobileMenu={onOpenMobileMenu} onAddSupplier={handleOpenAddModal} />
 
-        {/* 2. Summary KPI Cards Strip */}
+      {/* 2. Summary KPI Cards Strip */}
+      {isLoading ? (
+        <DirectorySummaryStripSkeleton />
+      ) : (
         <SuppliersSummaryStrip
           totalCount={suppliers.length || 28}
           activeCount={activeCount || 25}
           loadPointsCount={loadPointsCount || 31}
           activeMovementsCount={activeMovementsCount || 19}
         />
+      )}
 
-        {/* 3. Toolbar: Spotlight Search, Quick Filters & Dropdowns */}
-        <SuppliersToolbar
-          searchQuery={searchQuery}
-          onSearchChange={setSearchQuery}
-          selectedCountry={selectedCountry}
-          onCountryChange={setSelectedCountry}
-          selectedStatus={selectedStatus}
-          onStatusChange={setSelectedStatus}
-          selectedLoadPoint={selectedLoadPoint}
-          onLoadPointChange={setSelectedLoadPoint}
-          sortBy={sortBy}
-          onSortChange={setSortBy}
-          viewMode={viewMode}
-          onViewModeChange={setViewMode}
-          onResetFilters={handleResetFilters}
-        />
+      {/* 3. Toolbar: Spotlight Search, Quick Filters & Dropdowns */}
+      <SuppliersToolbar
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
+        selectedCountry={selectedCountry}
+        onCountryChange={setSelectedCountry}
+        selectedStatus={selectedStatus}
+        onStatusChange={setSelectedStatus}
+        selectedLoadPoint={selectedLoadPoint}
+        onLoadPointChange={setSelectedLoadPoint}
+        sortBy={sortBy}
+        onSortChange={setSortBy}
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
+        onResetFilters={handleResetFilters}
+      />
 
-        {/* 4. Primary Experience: Supplier Card Grid or Table List */}
-        {filteredSuppliers.length === 0 ? (
-          <SuppliersEmptyState
-            isSearchEmpty={
-              searchQuery !== "" ||
-              selectedCountry !== "all" ||
-              selectedStatus !== "all" ||
-              selectedLoadPoint !== "all"
-            }
-            onResetFilters={handleResetFilters}
-            onAddSupplier={handleOpenAddModal}
-          />
-        ) : viewMode === "grid" ? (
-          <SupplierCardGrid
-            suppliers={filteredSuppliers}
-            onSelectSupplier={handleSelectSupplier}
-            onEditSupplier={handleOpenEditModal}
-            onToggleArchive={handleToggleArchive}
-            onAddSupplier={handleOpenAddModal}
-          />
+      {/* 4. Primary Experience: Supplier Card Grid or Table List */}
+      {isLoading ? (
+        viewMode === "grid" ? (
+          <DirectoryCardGridSkeleton count={8} />
         ) : (
-          <SuppliersTable
-            suppliers={filteredSuppliers}
-            onSelectSupplier={handleSelectSupplier}
-            onEditSupplier={handleOpenEditModal}
-            onToggleArchive={handleToggleArchive}
-          />
-        )}
-      </div>
+          <DirectoryTableSkeleton rows={8} />
+        )
+      ) : filteredSuppliers.length === 0 ? (
+        <SuppliersEmptyState
+          isSearchEmpty={
+            searchQuery !== "" ||
+            selectedCountry !== "all" ||
+            selectedStatus !== "all" ||
+            selectedLoadPoint !== "all"
+          }
+          onResetFilters={handleResetFilters}
+          onAddSupplier={handleOpenAddModal}
+        />
+      ) : viewMode === "grid" ? (
+        <SupplierCardGrid
+          suppliers={filteredSuppliers}
+          onSelectSupplier={handleSelectSupplier}
+          onEditSupplier={handleOpenEditModal}
+          onToggleArchive={handleToggleArchive}
+          onAddSupplier={handleOpenAddModal}
+        />
+      ) : (
+        <SuppliersTable
+          suppliers={filteredSuppliers}
+          onSelectSupplier={handleSelectSupplier}
+          onEditSupplier={handleOpenEditModal}
+          onToggleArchive={handleToggleArchive}
+        />
+      )}
 
       {/* Add / Edit Supplier Modal */}
       <AddSupplierModal

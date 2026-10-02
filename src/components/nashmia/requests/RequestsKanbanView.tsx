@@ -10,6 +10,8 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { getPortCountryMeta } from "@/lib/port-flags";
+import { CountryFlagSvg } from "@/components/nashmia/common/CountryFlagSvg";
 import type { BookingRequestRecord, RequestStatus } from "@/types/requests";
 
 interface RequestsKanbanViewProps {
@@ -138,11 +140,25 @@ export const RequestsKanbanView = memo(function RequestsKanbanView({
                       From: {req.supplierName}
                     </p>
 
-                    {/* Route */}
-                    <div className="mt-2 flex items-center justify-between rounded-lg bg-slate-50 px-2 py-1 text-[11.5px] font-medium text-slate-700">
-                      <span>{req.polCode}</span>
-                      <ArrowRight className="size-3 text-slate-400" />
-                      <span>{req.podCode}</span>
+                    {/* Route with Small Country Flags SVG */}
+                    <div className="mt-2 flex items-center justify-between rounded-lg bg-white border border-slate-200/80 px-2.5 py-1.5 text-[11.5px] font-medium text-slate-700 shadow-2xs">
+                      <span className="flex items-center gap-1.5 font-semibold text-slate-900">
+                        <CountryFlagSvg
+                          countryCode={getPortCountryMeta(req.polCode, req.polName).countryCode}
+                          size="xs"
+                          title={getPortCountryMeta(req.polCode, req.polName).countryName}
+                        />
+                        <span>{req.polCode}</span>
+                      </span>
+                      <ArrowRight className="size-3 text-slate-400 shrink-0" />
+                      <span className="flex items-center gap-1.5 font-semibold text-slate-900">
+                        <span>{req.podCode}</span>
+                        <CountryFlagSvg
+                          countryCode={getPortCountryMeta(req.podCode, req.podName).countryCode}
+                          size="xs"
+                          title={getPortCountryMeta(req.podCode, req.podName).countryName}
+                        />
+                      </span>
                     </div>
 
                     {/* Footer specs */}

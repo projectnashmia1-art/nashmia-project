@@ -14,6 +14,8 @@ import type { EmailMessageRecord, EmailStatus } from "@/types/email.types";
 import { cn } from "@/lib/utils";
 import { classifyConfirmationDeterministic } from "@/lib/forwarder-confirmation-detector";
 import { getLocalBookings } from "@/lib/supabase-services";
+import { EmailListSkeleton } from "@/components/nashmia/skeletons/EmailSkeletons";
+import { LifecycleDropdownSelect } from "@/components/nashmia/common/LifecycleDropdownSelect";
 
 interface EmailListPanelProps {
   emails: EmailMessageRecord[];
@@ -305,34 +307,38 @@ export function EmailListPanel({
             </div>
 
             <div className="grid grid-cols-2 gap-2 text-xs">
-              <div>
-                <label className="text-[11px] text-slate-400 block mb-1">Status</label>
-                <select
-                  value={selectedStatusFilter}
-                  onChange={(e) => setSelectedStatusFilter(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-slate-800 font-medium focus:outline-none"
-                >
-                  <option value="ALL">All Statuses</option>
-                  <option value="SENT">Sent</option>
-                  <option value="PENDING">Pending</option>
-                  <option value="DRAFT">Drafts</option>
-                  <option value="FAILED">Failed</option>
-                </select>
-              </div>
+              <LifecycleDropdownSelect
+                label="Status"
+                value={selectedStatusFilter}
+                onChange={(val) => setSelectedStatusFilter(val)}
+                options={[
+                  { value: "ALL", label: "All Statuses" },
+                  { value: "SENT", label: "Sent" },
+                  { value: "PENDING", label: "Pending" },
+                  { value: "DRAFT", label: "Drafts" },
+                  { value: "FAILED", label: "Failed" },
+                ]}
+                placeholder="All Statuses"
+                size="sm"
+                activeColor="teal"
+                triggerClassName="h-8.5 w-full text-xs font-medium"
+              />
 
-              <div>
-                <label className="text-[11px] text-slate-400 block mb-1">Category</label>
-                <select
-                  value={selectedTypeFilter}
-                  onChange={(e) => setSelectedTypeFilter(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-slate-800 font-medium focus:outline-none"
-                >
-                  <option value="ALL">All Categories</option>
-                  <option value="BOOKING_REQUEST">Booking Request</option>
-                  <option value="BOOKING_CONFIRMATION">Booking Confirmation</option>
-                  <option value="GENERAL">General</option>
-                </select>
-              </div>
+              <LifecycleDropdownSelect
+                label="Category"
+                value={selectedTypeFilter}
+                onChange={(val) => setSelectedTypeFilter(val)}
+                options={[
+                  { value: "ALL", label: "All Categories" },
+                  { value: "BOOKING_REQUEST", label: "Booking Request" },
+                  { value: "BOOKING_CONFIRMATION", label: "Confirmation" },
+                  { value: "GENERAL", label: "General" },
+                ]}
+                placeholder="All Categories"
+                size="sm"
+                activeColor="teal"
+                triggerClassName="h-8.5 w-full text-xs font-medium"
+              />
             </div>
           </div>
         )}
@@ -341,26 +347,7 @@ export function EmailListPanel({
       {/* 2. Scrollable Email Conversation Cards */}
       <div className="flex-1 overflow-y-auto pr-1 space-y-3.5 scrollbar-thin scrollbar-thumb-slate-200">
         {isLoading ? (
-          // Clean Skeleton Cards
-          <div className="space-y-3.5">
-            {[1, 2, 3, 4].map((i) => (
-              <div
-                key={i}
-                className="bg-white rounded-2xl p-5 border border-slate-200/70 shadow-xs animate-pulse space-y-3"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="size-11 rounded-full bg-slate-100" />
-                  <div className="flex-1 space-y-1.5">
-                    <div className="h-4 bg-slate-100 rounded w-1/3" />
-                    <div className="h-3 bg-slate-100 rounded w-1/2" />
-                  </div>
-                  <div className="h-3 bg-slate-100 rounded w-16" />
-                </div>
-                <div className="h-3 bg-slate-100 rounded w-full" />
-                <div className="h-3 bg-slate-100 rounded w-4/5" />
-              </div>
-            ))}
-          </div>
+          <EmailListSkeleton count={4} />
         ) : filteredList.length === 0 ? (
           // Empty State
           <div className="bg-white rounded-2xl p-12 border border-slate-200/70 text-center space-y-3 shadow-xs">
@@ -466,21 +453,28 @@ export function EmailListPanel({
                   <div className="absolute left-0 top-3 bottom-3 w-1.5 rounded-r-full bg-emerald-500 shadow-sm" />
                 )}
 
-                {/* Top Row: Avatar, Sender Name & Time */}
+                {/* Top Row: Avatar Initials, Sender Name & Time */}
                 <div className="flex items-start gap-3">
                   <div className="relative shrink-0">
-                    <img
-                      src={avatarUrl}
-                      alt={senderName}
+                    <div
                       className={cn(
-                        "size-11 rounded-full object-cover ring-1",
-                        isConfirmed ? "ring-emerald-200" : "ring-slate-100",
+                        "size-11 rounded-full grid place-items-center font-bold text-xs tracking-wider shadow-2xs border",
+                        isConfirmed
+                          ? "bg-emerald-100/90 text-emerald-800 border-emerald-300"
+                          : "bg-slate-100 text-slate-700 border-slate-200",
                       )}
-                      referrerPolicy="no-referrer"
-                    />
+                    >
+                      {senderName
+                        .split(" ")
+                        .map((n) => n[0])
+                        .filter(Boolean)
+                        .slice(0, 2)
+                        .join("")
+                        .toUpperCase() || "EM"}
+                    </div>
                     {isConfirmed && (
-                      <div className="absolute -bottom-0.5 -right-0.5 size-4 rounded-full bg-emerald-500 text-white flex items-center justify-center ring-2 ring-white">
-                        <CheckCircle2 className="size-3" />
+                      <div className="absolute -bottom-0.5 -right-0.5 size-4 rounded-full bg-emerald-500 text-white flex items-center justify-center ring-2 ring-white shadow-2xs">
+                        <CheckCircle2 className="size-2.5" />
                       </div>
                     )}
                   </div>

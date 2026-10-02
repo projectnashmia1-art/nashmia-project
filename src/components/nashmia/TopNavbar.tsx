@@ -27,11 +27,14 @@ import {
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { AINotificationCenter } from "@/components/nashmia/AINotificationCenter";
+import { NotificationCenterTrigger } from "@/components/nashmia/NotificationCenterTrigger";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
 import { useNotifications } from "@/lib/notifications-context";
 import { SupabaseStatusIndicator } from "./SupabaseStatusIndicator";
 import { UserProfile } from "@/components/auth/UserProfile";
+import { GlobalSearch } from "@/components/nashmia/search/GlobalSearch";
+import { purgeAllDataAndReload } from "@/lib/cache/purge-legacy-cache";
 
 interface TopNavbarProps {
   onOpenMobileMenu?: () => void;
@@ -41,7 +44,6 @@ export function TopNavbar({ onOpenMobileMenu }: TopNavbarProps) {
   const navigate = useNavigate();
   const { user, profile, signOut } = useAuth();
   const { unreadCount, isMounted } = useNotifications();
-  const [searchQuery, setSearchQuery] = useState("");
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
 
   const displayName =
@@ -108,20 +110,7 @@ export function TopNavbar({ onOpenMobileMenu }: TopNavbarProps) {
 
       {/* Center: Quick Search */}
       <div className="hidden max-w-md flex-1 px-6 md:block">
-        <div className="glass-apple-subtle flex h-10 w-full items-center gap-2.5 rounded-[12px] border border-white/80 px-3.5 shadow-sm transition-all focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/20">
-          <Search className="size-4 shrink-0 text-muted-foreground" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            aria-label="Search operations"
-            placeholder="Search containers, vessels, bookings, cut-offs..."
-            className="w-full bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground/75"
-          />
-          <kbd className="hidden rounded-[6px] border border-white/90 bg-white/70 px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground shadow-xs lg:inline-block">
-            ⌘K
-          </kbd>
-        </div>
+        <GlobalSearch variant="navbar" />
       </div>
 
       {/* Right: Actions & User Profile Placeholder */}
@@ -139,30 +128,11 @@ export function TopNavbar({ onOpenMobileMenu }: TopNavbarProps) {
         </Link>
 
         {/* Notifications Button */}
-        <Popover>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              id="top-notifications-button"
-              aria-label="Notifications"
-              className="glass-apple-subtle relative grid size-9.5 place-items-center rounded-[12px] border border-white/80 text-foreground transition-all duration-200 ease-glass hover:-translate-y-0.5 hover:bg-white/80 focus:outline-none"
-            >
-              <Bell className="size-4" />
-              {isMounted && unreadCount > 0 && (
-                <span className="absolute -top-1 -right-1 flex min-w-[18px] h-[18px] items-center justify-center rounded-full bg-[#0FA3B1] px-1 text-[10px] font-bold text-white shadow-[0_2px_6px_rgba(15,163,177,0.4)] ring-2 ring-white animate-in zoom-in-50">
-                  {unreadCount > 9 ? "9+" : unreadCount}
-                </span>
-              )}
-            </button>
-          </PopoverTrigger>
-          <PopoverContent
-            align="end"
-            sideOffset={8}
-            className="w-auto p-0 border-0 bg-transparent shadow-none"
-          >
-            <AINotificationCenter />
-          </PopoverContent>
-        </Popover>
+        <NotificationCenterTrigger
+          id="top-notifications-button"
+          className="glass-apple-subtle grid size-9.5 place-items-center rounded-[12px] border border-white/80 text-foreground transition-all duration-200 ease-glass hover:-translate-y-0.5 hover:bg-white/80"
+          iconClassName="size-4"
+        />
 
         {/* User Profile Placeholder Dropdown */}
         <DropdownMenu>
@@ -225,6 +195,20 @@ export function TopNavbar({ onOpenMobileMenu }: TopNavbarProps) {
                 <SlidersHorizontal className="size-4 text-muted-foreground" />
                 <span>System Settings</span>
               </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => {
+                toast.loading("Purging client storage and reloading from Supabase...", {
+                  duration: 1000,
+                });
+                setTimeout(() => {
+                  purgeAllDataAndReload();
+                }, 400);
+              }}
+              className="cursor-pointer gap-2.5 rounded-[10px] px-3 py-2 text-[12.5px] font-medium text-amber-700 hover:text-amber-800 focus:bg-amber-50 transition-colors"
+            >
+              <Sparkles className="size-4 text-amber-600" />
+              <span>Purge Cache & Reload</span>
             </DropdownMenuItem>
             <DropdownMenuSeparator className="bg-white/80" />
             <DropdownMenuItem

@@ -17,7 +17,7 @@ import type {
   ComposeEmailFormValues,
 } from "@/types/email.types";
 import { useAuth } from "./auth-context";
-import { toast } from "sonner";
+import { showPillToast } from "./pill-toast";
 
 export const EMAILS_QUERY_KEY = ["emails"];
 
@@ -31,7 +31,11 @@ export function useEmails(selectedFolder: EmailFolderId = "all") {
   const query = useQuery({
     queryKey: [...EMAILS_QUERY_KEY, userId],
     queryFn: () => fetchEmailsFromSupabase(userId),
-    staleTime: 1000 * 60, // 60 seconds (prevents quota exhaustion)
+    staleTime: 1000, // 1 second - ensure instant freshness
+    refetchInterval: 3000, // Fast 3s polling for real-time incoming emails
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: "always",
+    refetchOnMount: "always",
   });
 
   // Real-time synchronization with window events and storage
@@ -143,12 +147,6 @@ export function useSendEmail() {
     onSuccess: (result, values) => {
       queryClient.invalidateQueries({ queryKey: EMAILS_QUERY_KEY });
       if (result.success) {
-        toast.success("Email Dispatched Successfully", {
-          description: result.gmailMessageId
-            ? `Gmail Message ID: ${result.gmailMessageId}`
-            : "Message recorded in database and sent.",
-        });
-
         // Dispatch custom event for real-time notification integration
         if (typeof window !== "undefined") {
           const match = `${values.subject} ${values.body}`.match(
@@ -176,14 +174,15 @@ export function useSendEmail() {
           result.errorMessage?.includes("Units per minute");
 
         if (isQuota) {
-          toast.warning("Email Queued (Quota Cooldown)", {
-            description:
-              "Gmail per-minute user limit reached on Google Cloud. Your message is recorded and queued.",
-          });
+          showPillToast.info(
+            "Gmail per-minute user limit reached on Google Cloud. Your message is recorded and queued.",
+            "Email Queued (Quota Cooldown)",
+          );
         } else {
-          toast.error("Email Transmission Failed", {
-            description: result.errorMessage || "Unable to complete Gmail API delivery.",
-          });
+          showPillToast.error(
+            result.errorMessage || "Unable to complete Gmail API delivery.",
+            "Email Transmission Failed",
+          );
         }
       }
     },
@@ -193,14 +192,12 @@ export function useSendEmail() {
         msg.includes("Quota") || msg.includes("rateLimit") || msg.includes("Units per minute");
 
       if (isQuota) {
-        toast.warning("Google API Quota Window Active", {
-          description:
-            "Google Cloud per-minute user limit reached. Please wait ~60s before sending again.",
-        });
+        showPillToast.info(
+          "Google Cloud per-minute user limit reached. Please wait ~60s before sending again.",
+          "Google API Quota Window Active",
+        );
       } else {
-        toast.error("Failed to Send Email", {
-          description: msg,
-        });
+        showPillToast.error(msg, "Failed to Send Email");
       }
     },
   });
@@ -217,15 +214,11 @@ export function useSaveDraft() {
     mutationFn: (values: ComposeEmailFormValues) => saveDraftEmailInSupabase(userId, values),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: EMAILS_QUERY_KEY });
-      toast.success("Draft Saved", {
-        description: "Your message has been safely saved to drafts.",
-      });
+      showPillToast.build("Your message has been safely saved to drafts.", "Draft Saved");
     },
     onError: (err: unknown) => {
       const msg = err instanceof Error ? err.message : "Could not save draft to database.";
-      toast.error("Failed to Save Draft", {
-        description: msg,
-      });
+      showPillToast.error(msg, "Failed to Save Draft");
     },
   });
 }
@@ -241,20 +234,17 @@ export function useRetryEmail() {
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: EMAILS_QUERY_KEY });
       if (res.success) {
-        toast.success("Email Retried & Sent Successfully", {
-          description: "Transmission completed via backend.",
-        });
+        showPillToast.build(
+          "Transmission completed via backend.",
+          "Email Retried & Sent Successfully",
+        );
       } else {
-        toast.error("Retry Attempt Failed", {
-          description: res.errorMessage || "Could not send email.",
-        });
+        showPillToast.error(res.errorMessage || "Could not send email.", "Retry Attempt Failed");
       }
     },
     onError: (err: unknown) => {
       const msg = err instanceof Error ? err.message : "Failed to contact email dispatch service.";
-      toast.error("Retry Failed", {
-        description: msg,
-      });
+      showPillToast.error(msg, "Retry Failed");
     },
   });
 }

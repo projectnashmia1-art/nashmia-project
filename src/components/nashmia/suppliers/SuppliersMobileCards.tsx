@@ -2,15 +2,13 @@ import { useState } from "react";
 import {
   Archive,
   ArchiveRestore,
-  ArrowRight,
-  Check,
-  Container,
-  Copy,
+  Bookmark,
   Edit2,
-  MapPin,
-  MoreHorizontal,
+  Eye,
+  MoreVertical,
   Plus,
-  Warehouse,
+  Share2,
+  Star,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -32,10 +30,34 @@ interface SuppliersMobileCardsProps {
   onToggleArchive: (supplierId: string) => void;
 }
 
+const AVATAR_GRADIENTS = [
+  "from-sky-400 via-teal-400 to-cyan-500",
+  "from-indigo-400 via-sky-400 to-teal-400",
+  "from-amber-400 via-orange-400 to-rose-400",
+  "from-teal-400 via-emerald-400 to-cyan-500",
+  "from-blue-500 via-indigo-400 to-sky-400",
+];
+
 function getAvatarInitials(name: string): string {
   const parts = name.trim().split(" ");
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return (parts[0][0] + parts[1][0]).toUpperCase();
+}
+
+function getCountryFlag(countryCode: string): string {
+  const flags: Record<string, string> = {
+    GB: "🇬🇧",
+    PK: "🇵🇰",
+    ES: "🇪🇸",
+    DE: "🇩🇪",
+    IT: "🇮🇹",
+    FR: "🇫🇷",
+    NL: "🇳🇱",
+    US: "🇺🇸",
+    AE: "🇦🇪",
+    CN: "🇨🇳",
+  };
+  return flags[countryCode] || "🌐";
 }
 
 export function SuppliersMobileCards({
@@ -44,65 +66,83 @@ export function SuppliersMobileCards({
   onEditSupplier,
   onToggleArchive,
 }: SuppliersMobileCardsProps) {
-  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [bookmarkedMap, setBookmarkedMap] = useState<Record<string, boolean>>({});
 
-  const copyToClipboard = (text: string, label: string, e: React.MouseEvent) => {
+  const toggleBookmark = (supplier: SupplierAccountFull, e: React.MouseEvent) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(text);
-    setCopiedField(label);
-    toast.success(`Copied ${label}`, {
-      description: text,
-      duration: 2000,
-    });
-    setTimeout(() => setCopiedField(null), 2000);
+    const nextState = !bookmarkedMap[supplier.id];
+    setBookmarkedMap((prev) => ({ ...prev, [supplier.id]: nextState }));
+    toast.success(
+      nextState ? `Saved ${supplier.name} to favorites` : `Removed ${supplier.name} from saved`,
+    );
+  };
+
+  const handleShare = (supplier: SupplierAccountFull, e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(window.location.href);
+    toast.success(`Share link copied for ${supplier.name}`);
   };
 
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:hidden">
-      {suppliers.map((supplier) => {
+      {suppliers.map((supplier, index) => {
         const initials = getAvatarInitials(supplier.name);
-        const isInactive = supplier.status === "Inactive" || supplier.status === "Archived";
+        const isArchived = supplier.status === "Archived";
+        const isBookmarked = !!bookmarkedMap[supplier.id];
+        const flag = getCountryFlag(supplier.countryCode);
+        const avatarGradient = AVATAR_GRADIENTS[index % AVATAR_GRADIENTS.length];
 
         return (
           <div
             key={supplier.id}
             onClick={() => onSelectSupplier(supplier)}
+            style={{
+              background: "linear-gradient(180deg, #FFFFFF 0%, #F5FBFC 45%, #D4F0F6 100%)",
+            }}
             className={cn(
-              "group relative flex cursor-pointer flex-col justify-between rounded-[20px] border border-white/85 bg-white/85 p-5 shadow-[0_10px_30px_rgba(0,0,0,0.04)] backdrop-blur-2xl transition-all duration-300 active:scale-[0.99]",
-              isInactive && "opacity-75 bg-slate-50/70",
+              "group relative flex min-h-[350px] flex-col justify-between overflow-hidden rounded-[30px] border border-white/90 p-5.5 shadow-[0_16px_36px_-10px_rgba(15,163,177,0.16)] transition-all active:scale-[0.99]",
+              isArchived && "opacity-75 grayscale-[20%]",
             )}
           >
+            {/* Top Bar: Avatar + Share & Options */}
             <div>
-              {/* Card Header: Avatar, Name, Status, Three-dot Menu */}
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="grid size-11 shrink-0 place-items-center rounded-full border border-[#6A80A9]/20 bg-[#E8F1F3] text-[13px] font-bold text-[#6A80A9]">
-                    {initials}
-                  </div>
-                  <div className="min-w-0">
-                    <h3 className="font-semibold text-[#000000] text-[16px] truncate">
-                      {supplier.name}
-                    </h3>
-                    <div className="flex items-center gap-2 text-[12px] text-slate-400">
-                      <span>{supplier.country}</span>
-                      <span>·</span>
-                      <span className="font-mono">{supplier.code}</span>
+              <div className="flex items-start justify-between">
+                <div className="relative">
+                  <div
+                    className={cn(
+                      "size-15 rounded-full border-2 border-white bg-gradient-to-br p-0.5 shadow-[0_4px_14px_rgba(15,163,177,0.2)] flex items-center justify-center",
+                      avatarGradient,
+                    )}
+                  >
+                    <div className="size-full rounded-full bg-white/20 backdrop-blur-xs flex items-center justify-center text-white font-bold text-[17px]">
+                      {initials}
                     </div>
                   </div>
+                  <span
+                    className="absolute -bottom-1 -right-1 flex size-5.5 items-center justify-center rounded-full bg-white text-[11px] shadow-xs border border-slate-100"
+                    title={supplier.country}
+                  >
+                    {flag}
+                  </span>
                 </div>
 
-                <div
-                  onClick={(e) => e.stopPropagation()}
-                  className="flex items-center gap-1 shrink-0"
-                >
+                <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={(e) => handleShare(supplier, e)}
+                    className="grid size-8 place-items-center rounded-full text-slate-400 hover:text-slate-800 hover:bg-white/80"
+                  >
+                    <Share2 className="size-4" />
+                  </button>
+
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <button
                         type="button"
                         aria-label={`Actions for ${supplier.name}`}
-                        className="grid size-8 place-items-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-black"
+                        className="grid size-8 place-items-center rounded-full text-slate-400 hover:bg-white/80 hover:text-slate-800"
                       >
-                        <MoreHorizontal className="size-4" />
+                        <MoreVertical className="size-4" />
                       </button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent
@@ -116,13 +156,14 @@ export function SuppliersMobileCards({
                         onClick={() => onSelectSupplier(supplier)}
                         className="flex cursor-pointer items-center gap-2 rounded-[10px] px-2.5 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100"
                       >
-                        <span>View Supplier</span>
+                        <Eye className="size-4 text-[#0FA3B1]" />
+                        <span>View Details</span>
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         onClick={() => onEditSupplier(supplier)}
                         className="flex cursor-pointer items-center gap-2 rounded-[10px] px-2.5 py-2 text-[13px] text-slate-700 hover:bg-slate-100"
                       >
-                        <Edit2 className="size-3.5 text-slate-400" />
+                        <Edit2 className="size-4 text-slate-500" />
                         <span>Edit Supplier</span>
                       </DropdownMenuItem>
                       <DropdownMenuItem asChild>
@@ -131,8 +172,8 @@ export function SuppliersMobileCards({
                           search={{ supplierId: supplier.id }}
                           className="flex cursor-pointer items-center gap-2 rounded-[10px] px-2.5 py-2 text-[13px] text-slate-700 hover:bg-slate-100"
                         >
-                          <Plus className="size-3.5 text-[#6A80A9]" />
-                          <span>Create Booking</span>
+                          <Plus className="size-4 text-[#0FA3B1]" />
+                          <span>New Booking</span>
                         </Link>
                       </DropdownMenuItem>
                       <DropdownMenuSeparator className="my-1 bg-slate-100" />
@@ -142,13 +183,13 @@ export function SuppliersMobileCards({
                       >
                         {supplier.status === "Active" ? (
                           <>
-                            <Archive className="size-3.5 text-amber-600" />
-                            <span>Archive</span>
+                            <Archive className="size-4 text-amber-600" />
+                            <span>Archive Supplier</span>
                           </>
                         ) : (
                           <>
-                            <ArchiveRestore className="size-3.5 text-emerald-600" />
-                            <span>Activate</span>
+                            <ArchiveRestore className="size-4 text-emerald-600" />
+                            <span>Restore Supplier</span>
                           </>
                         )}
                       </DropdownMenuItem>
@@ -157,76 +198,76 @@ export function SuppliersMobileCards({
                 </div>
               </div>
 
-              {/* Status Pill */}
-              <div className="mt-2.5 flex items-center gap-2">
-                <span
-                  className={cn(
-                    "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-medium tracking-tight",
-                    supplier.status === "Active"
-                      ? "bg-[#C7D5BF]/40 text-[#2B3B24] border border-[#C7D5BF]/60"
-                      : "bg-slate-100 text-slate-500 border border-slate-200",
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "size-1.5 rounded-full",
-                      supplier.status === "Active" ? "bg-[#3D5A32]" : "bg-slate-400",
-                    )}
-                  />
-                  <span>{supplier.status}</span>
-                </span>
-              </div>
+              {/* Title & tags */}
+              <div className="mt-3.5">
+                <h3 className="text-[19px] font-bold text-slate-900 tracking-tight leading-snug">
+                  {supplier.name}
+                </h3>
+                <p className="text-[13px] font-medium text-slate-500 mt-0.5 truncate">
+                  {supplier.companyName ||
+                    supplier.subtitle ||
+                    `${supplier.loadPointType} · ${supplier.city}`}
+                </p>
 
-              {/* LOAD POINT (VISUALLY PROMINENT) */}
-              <div className="mt-3.5 rounded-[14px] border border-[#6A80A9]/20 bg-[#E8F1F3]/40 p-3">
-                <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-[#6A80A9]">
-                  <Warehouse className="size-3" />
-                  <span>Pickup Load Point</span>
-                </div>
-                <div className="mt-1 flex items-start gap-2">
-                  <MapPin className="size-4 text-[#6A80A9] shrink-0 mt-0.5" />
-                  <div>
-                    <p className="font-semibold text-[#000000] text-[13.5px]">
-                      {supplier.loadPoint}
-                    </p>
-                    <p className="text-[11.5px] text-slate-500 mt-0.5">{supplier.address}</p>
-                  </div>
+                <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                  <span className="rounded-full bg-white/90 border border-slate-200/60 px-2.5 py-0.5 text-[10.5px] font-semibold text-slate-700 shadow-2xs">
+                    {supplier.countryCode} · {supplier.country}
+                  </span>
+                  <span className="rounded-full bg-white/90 border border-slate-200/60 px-2.5 py-0.5 text-[10.5px] font-semibold text-slate-700 shadow-2xs">
+                    {supplier.loadPointType}
+                  </span>
+                  <span className="rounded-full bg-white/90 border border-slate-200/60 px-2 py-0.5 text-[10px] font-mono font-semibold text-slate-500 shadow-2xs">
+                    {supplier.code}
+                  </span>
                 </div>
               </div>
 
-              {/* Contact Info */}
-              <div className="mt-3 flex items-center justify-between text-[12px] text-slate-600 border-t border-slate-100 pt-2.5">
-                <div>
-                  <p className="font-medium text-[#000000]">{supplier.contactPerson}</p>
-                  <p className="text-slate-400 truncate max-w-[190px]">{supplier.email}</p>
+              {/* 3 Metric Columns */}
+              <div className="mt-5 grid grid-cols-3 gap-2 border-t border-slate-200/50 pt-3.5">
+                <div className="flex flex-col">
+                  <span className="flex items-center gap-1 text-[14px] font-bold text-slate-900 leading-tight">
+                    <Star className="size-3 fill-slate-900 text-slate-900" />
+                    <span>4.9</span>
+                  </span>
+                  <span className="text-[11px] font-medium text-slate-400 mt-0.5">Rating</span>
                 </div>
-                <button
-                  type="button"
-                  onClick={(e) => copyToClipboard(supplier.email, "Email", e)}
-                  className="grid size-7 place-items-center rounded-md text-slate-400 hover:bg-slate-100"
-                >
-                  {copiedField === "Email" ? (
-                    <Check className="size-3 text-emerald-600" />
-                  ) : (
-                    <Copy className="size-3" />
-                  )}
-                </button>
+                <div className="flex flex-col">
+                  <span className="text-[14px] font-bold text-slate-900 leading-tight">
+                    {supplier.activeContainers} Active
+                  </span>
+                  <span className="text-[11px] font-medium text-slate-400 mt-0.5">Pipeline</span>
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-[14px] font-bold text-slate-900 leading-tight">
+                    {supplier.totalContainersMoved} Units
+                  </span>
+                  <span className="text-[11px] font-medium text-slate-400 mt-0.5">Total Vol</span>
+                </div>
               </div>
             </div>
 
-            {/* Footer */}
-            <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3">
-              <div className="flex items-center gap-1.5 text-[12px] font-semibold text-[#000000]">
-                <span className="font-mono text-[#6A80A9] font-bold">
-                  {supplier.activeContainers}
-                </span>
-                <span>Active Containers</span>
-              </div>
+            {/* Bottom Actions */}
+            <div className="mt-5 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onSelectSupplier(supplier)}
+                className="flex-1 rounded-full bg-white/95 text-slate-900 font-semibold text-[13px] py-2.5 px-4 shadow-2xs border border-white/90 text-center"
+              >
+                Get in touch
+              </button>
 
-              <div className="flex items-center gap-1 text-[12.5px] font-medium text-[#6A80A9]">
-                <span>View</span>
-                <ArrowRight className="size-3.5" />
-              </div>
+              <button
+                type="button"
+                onClick={(e) => toggleBookmark(supplier, e)}
+                className={cn(
+                  "size-10 rounded-full flex items-center justify-center shadow-2xs border border-white/90 shrink-0 transition-all",
+                  isBookmarked
+                    ? "bg-[#0FA3B1] text-white border-[#0FA3B1]"
+                    : "bg-white text-slate-800",
+                )}
+              >
+                <Bookmark className={cn("size-4 stroke-[2]", isBookmarked && "fill-white")} />
+              </button>
             </div>
           </div>
         );

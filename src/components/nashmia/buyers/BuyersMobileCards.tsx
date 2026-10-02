@@ -2,17 +2,13 @@ import { useState } from "react";
 import {
   Archive,
   ArchiveRestore,
-  Building2,
-  Check,
-  Container,
-  Copy,
+  Bookmark,
   Edit2,
   Eye,
-  Globe,
-  Mail,
   MoreVertical,
-  Phone,
   Plus,
+  Share2,
+  Star,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -34,12 +30,12 @@ interface BuyersMobileCardsProps {
   onToggleArchive: (buyerId: string) => void;
 }
 
-const AVATAR_TONES = [
-  { bg: "bg-[#6A80A9]/12", text: "text-[#6A80A9]", border: "border-[#6A80A9]/25" },
-  { bg: "bg-[#C7D5BF]/25", text: "text-[#4A5D3F]", border: "border-[#C7D5BF]/50" },
-  { bg: "bg-indigo-500/12", text: "text-indigo-600", border: "border-indigo-500/25" },
-  { bg: "bg-amber-500/12", text: "text-amber-700", border: "border-amber-500/25" },
-  { bg: "bg-teal-500/12", text: "text-teal-700", border: "border-teal-500/25" },
+const AVATAR_GRADIENTS = [
+  "from-sky-400 via-teal-400 to-cyan-500",
+  "from-indigo-400 via-sky-400 to-teal-400",
+  "from-amber-400 via-orange-400 to-rose-400",
+  "from-teal-400 via-emerald-400 to-cyan-500",
+  "from-blue-500 via-indigo-400 to-sky-400",
 ];
 
 function getAvatarInitials(name: string): string {
@@ -48,9 +44,20 @@ function getAvatarInitials(name: string): string {
   return (parts[0][0] + parts[1][0]).toUpperCase();
 }
 
-function getToneForId(id: string) {
-  const charCode = id.charCodeAt(id.length - 1) || 0;
-  return AVATAR_TONES[charCode % AVATAR_TONES.length];
+function getCountryFlag(countryCode: string): string {
+  const flags: Record<string, string> = {
+    GB: "🇬🇧",
+    PK: "🇵🇰",
+    ES: "🇪🇸",
+    DE: "🇩🇪",
+    IT: "🇮🇹",
+    FR: "🇫🇷",
+    SE: "🇸🇪",
+    US: "🇺🇸",
+    AE: "🇦🇪",
+    CN: "🇨🇳",
+  };
+  return flags[countryCode] || "🌐";
 }
 
 export function BuyersMobileCards({
@@ -59,79 +66,81 @@ export function BuyersMobileCards({
   onEditBuyer,
   onToggleArchive,
 }: BuyersMobileCardsProps) {
-  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [bookmarkedMap, setBookmarkedMap] = useState<Record<string, boolean>>({});
 
-  const copyToClipboard = (text: string, label: string, e: React.MouseEvent) => {
+  const toggleBookmark = (buyer: BuyerAccountFull, e: React.MouseEvent) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(text);
-    setCopiedId(text);
-    toast.success(`Copied ${label}`, {
-      description: text,
-      duration: 2000,
-    });
-    setTimeout(() => setCopiedId(null), 2000);
+    const nextState = !bookmarkedMap[buyer.id];
+    setBookmarkedMap((prev) => ({ ...prev, [buyer.id]: nextState }));
+    toast.success(
+      nextState ? `Saved ${buyer.name} to favorites` : `Removed ${buyer.name} from saved`,
+    );
+  };
+
+  const handleShare = (buyer: BuyerAccountFull, e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(window.location.href);
+    toast.success(`Share link copied for ${buyer.name}`);
   };
 
   return (
-    <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:hidden">
-      {buyers.map((buyer) => {
-        const tone = getToneForId(buyer.id);
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:hidden">
+      {buyers.map((buyer, index) => {
         const initials = getAvatarInitials(buyer.name);
         const isArchived = buyer.status === "Archived";
+        const isBookmarked = !!bookmarkedMap[buyer.id];
+        const flag = getCountryFlag(buyer.countryCode);
+        const avatarGradient = AVATAR_GRADIENTS[index % AVATAR_GRADIENTS.length];
 
         return (
           <div
             key={buyer.id}
             onClick={() => onSelectBuyer(buyer)}
+            style={{
+              background: "linear-gradient(180deg, #FFFFFF 0%, #F5FBFC 45%, #D4F0F6 100%)",
+            }}
             className={cn(
-              "group relative flex flex-col justify-between rounded-[20px] border border-white/80 bg-white/80 p-4.5 shadow-[0_10px_30px_rgba(15,23,42,0.04)] backdrop-blur-2xl transition-all duration-200 active:scale-[0.99]",
-              isArchived && "opacity-75 bg-slate-50/70",
+              "group relative flex min-h-[350px] flex-col justify-between overflow-hidden rounded-[30px] border border-white/90 p-5.5 shadow-[0_16px_36px_-10px_rgba(15,163,177,0.16)] transition-all active:scale-[0.99]",
+              isArchived && "opacity-75 grayscale-[20%]",
             )}
           >
-            {/* Top Bar: Avatar + Names + Status & Actions */}
+            {/* Top Bar: Avatar + Share & Options */}
             <div>
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex items-center gap-3">
+              <div className="flex items-start justify-between">
+                <div className="relative">
                   <div
                     className={cn(
-                      "grid size-11 shrink-0 place-items-center rounded-[14px] border text-[13px] font-bold tracking-tight shadow-xs",
-                      tone.bg,
-                      tone.text,
-                      tone.border,
+                      "size-15 rounded-full border-2 border-white bg-gradient-to-br p-0.5 shadow-[0_4px_14px_rgba(15,163,177,0.2)] flex items-center justify-center",
+                      avatarGradient,
                     )}
                   >
-                    {initials}
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-1.5">
-                      <h3 className="font-semibold text-black tracking-[-0.01em] text-[15px]">
-                        {buyer.name}
-                      </h3>
-                      <span className="rounded-[6px] border border-slate-200/80 bg-white/80 px-1.5 py-0.5 text-[10px] font-mono font-medium text-slate-500">
-                        {buyer.code}
-                      </span>
+                    <div className="size-full rounded-full bg-white/20 backdrop-blur-xs flex items-center justify-center text-white font-bold text-[17px]">
+                      {initials}
                     </div>
-                    <p className="text-xs text-slate-500 line-clamp-1">{buyer.company}</p>
                   </div>
+                  <span
+                    className="absolute -bottom-1 -right-1 flex size-5.5 items-center justify-center rounded-full bg-white text-[11px] shadow-xs border border-slate-100"
+                    title={buyer.country}
+                  >
+                    {flag}
+                  </span>
                 </div>
 
                 <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-1">
-                  <div className="inline-flex items-center gap-1.5 rounded-full border border-slate-200/60 bg-white px-2.5 py-1 text-[11px] font-medium">
-                    <span
-                      className={cn(
-                        "size-1.5 rounded-full",
-                        buyer.status === "Active" ? "bg-emerald-500" : "bg-slate-400",
-                      )}
-                    />
-                    <span>{buyer.status}</span>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={(e) => handleShare(buyer, e)}
+                    className="grid size-8 place-items-center rounded-full text-slate-400 hover:text-slate-800 hover:bg-white/80"
+                  >
+                    <Share2 className="size-4" />
+                  </button>
 
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <button
                         type="button"
                         aria-label={`Actions for ${buyer.name}`}
-                        className="grid size-9 place-items-center rounded-[10px] text-slate-400 hover:bg-slate-100 hover:text-slate-800"
+                        className="grid size-8 place-items-center rounded-full text-slate-400 hover:bg-white/80 hover:text-slate-800"
                       >
                         <MoreVertical className="size-4" />
                       </button>
@@ -147,7 +156,7 @@ export function BuyersMobileCards({
                         onClick={() => onSelectBuyer(buyer)}
                         className="flex cursor-pointer items-center gap-2 rounded-[10px] px-2.5 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100"
                       >
-                        <Eye className="size-4 text-[#6A80A9]" />
+                        <Eye className="size-4 text-[#0FA3B1]" />
                         <span>View Details</span>
                       </DropdownMenuItem>
                       <DropdownMenuItem
@@ -162,7 +171,7 @@ export function BuyersMobileCards({
                           to="/new-booking"
                           className="flex cursor-pointer items-center gap-2 rounded-[10px] px-2.5 py-2 text-[13px] text-slate-700 hover:bg-slate-100"
                         >
-                          <Plus className="size-4 text-[#C7D5BF]" />
+                          <Plus className="size-4 text-[#0FA3B1]" />
                           <span>New Booking</span>
                         </Link>
                       </DropdownMenuItem>
@@ -188,60 +197,74 @@ export function BuyersMobileCards({
                 </div>
               </div>
 
-              {/* Information Grid */}
-              <div className="mt-4 space-y-2 text-xs text-slate-600">
-                <div className="flex items-center justify-between border-b border-slate-100/80 pb-2">
-                  <span className="text-slate-400">Country</span>
-                  <span className="font-medium text-slate-800 flex items-center gap-1">
-                    <Globe className="size-3 text-slate-400" />
-                    {buyer.country}
+              {/* Title & tags */}
+              <div className="mt-3.5">
+                <h3 className="text-[19px] font-bold text-slate-900 tracking-tight leading-snug">
+                  {buyer.name}
+                </h3>
+                <p className="text-[13px] font-medium text-slate-500 mt-0.5 truncate">
+                  {buyer.company}
+                </p>
+
+                <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                  <span className="rounded-full bg-white/90 border border-slate-200/60 px-2.5 py-0.5 text-[10.5px] font-semibold text-slate-700 shadow-2xs">
+                    {buyer.countryCode} · {buyer.country}
+                  </span>
+                  <span className="rounded-full bg-white/90 border border-slate-200/60 px-2.5 py-0.5 text-[10.5px] font-semibold text-slate-700 shadow-2xs">
+                    {buyer.preferredPort || "Direct"}
+                  </span>
+                  <span className="rounded-full bg-white/90 border border-slate-200/60 px-2 py-0.5 text-[10px] font-mono font-semibold text-slate-500 shadow-2xs">
+                    {buyer.code}
                   </span>
                 </div>
+              </div>
 
-                <div className="flex items-center justify-between border-b border-slate-100/80 pb-2">
-                  <span className="text-slate-400">Contact</span>
-                  <span className="font-medium text-slate-800">{buyer.contactPerson}</span>
+              {/* 3 Metric Columns */}
+              <div className="mt-5 grid grid-cols-3 gap-2 border-t border-slate-200/50 pt-3.5">
+                <div className="flex flex-col">
+                  <span className="flex items-center gap-1 text-[14px] font-bold text-slate-900 leading-tight">
+                    <Star className="size-3 fill-slate-900 text-slate-900" />
+                    <span>4.9</span>
+                  </span>
+                  <span className="text-[11px] font-medium text-slate-400 mt-0.5">Rating</span>
                 </div>
-
-                <div className="flex items-center justify-between border-b border-slate-100/80 pb-2">
-                  <span className="text-slate-400">Email</span>
-                  <button
-                    type="button"
-                    onClick={(e) => copyToClipboard(buyer.email, "Email", e)}
-                    className="flex items-center gap-1 font-medium text-slate-700 hover:text-[#6A80A9]"
-                  >
-                    <Mail className="size-3 text-slate-400" />
-                    <span className="max-w-[170px] truncate">{buyer.email}</span>
-                  </button>
+                <div className="flex flex-col">
+                  <span className="text-[14px] font-bold text-slate-900 leading-tight">
+                    {buyer.activeMovements} Active
+                  </span>
+                  <span className="text-[11px] font-medium text-slate-400 mt-0.5">Pipeline</span>
                 </div>
-
-                <div className="flex items-center justify-between pb-1">
-                  <span className="text-slate-400">Phone</span>
-                  <button
-                    type="button"
-                    onClick={(e) => copyToClipboard(buyer.phone, "Phone", e)}
-                    className="flex items-center gap-1 font-mono text-slate-700 hover:text-[#6A80A9]"
-                  >
-                    <Phone className="size-3 text-slate-400" />
-                    <span>{buyer.phone}</span>
-                  </button>
+                <div className="flex flex-col">
+                  <span className="text-[14px] font-bold text-slate-900 leading-tight">
+                    {buyer.totalMovements} cgo
+                  </span>
+                  <span className="text-[11px] font-medium text-slate-400 mt-0.5">Total Vol</span>
                 </div>
               </div>
             </div>
 
-            {/* Bottom Meta: Container count & Tap hint */}
-            <div className="mt-3.5 flex items-center justify-between border-t border-slate-100 pt-3">
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200/60 bg-white px-2.5 py-1 text-[11.5px] font-semibold text-slate-700">
-                <Container className="size-3.5 text-[#6A80A9]" />
-                <span>
-                  {buyer.activeContainers} Active{" "}
-                  {buyer.activeContainers === 1 ? "Container" : "Containers"}
-                </span>
-              </span>
+            {/* Bottom Actions */}
+            <div className="mt-5 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onSelectBuyer(buyer)}
+                className="flex-1 rounded-full bg-white/95 text-slate-900 font-semibold text-[13px] py-2.5 px-4 shadow-2xs border border-white/90 text-center"
+              >
+                Get in touch
+              </button>
 
-              <span className="text-[11px] font-medium text-[#6A80A9] group-hover:underline">
-                View Movements →
-              </span>
+              <button
+                type="button"
+                onClick={(e) => toggleBookmark(buyer, e)}
+                className={cn(
+                  "size-10 rounded-full flex items-center justify-center shadow-2xs border border-white/90 shrink-0 transition-all",
+                  isBookmarked
+                    ? "bg-[#0FA3B1] text-white border-[#0FA3B1]"
+                    : "bg-white text-slate-800",
+                )}
+              >
+                <Bookmark className={cn("size-4 stroke-[2]", isBookmarked && "fill-white")} />
+              </button>
             </div>
           </div>
         );

@@ -9,18 +9,22 @@ import {
   MovementConfirmationResult,
 } from "./movement-confirmation-engine";
 import { safeUuid } from "./supabase-services";
-import { analyzeEmailForForwarderOffer, type OfferValidationResult } from "./ai-offer-extractor";
-import { getLocalForwarderRequests } from "./multi-forwarder-service";
 import type { ForwarderResponseClassification } from "@/types/requests";
+import { processIncomingForwarderEmailReply } from "./multi-forwarder-service";
 import {
-  saveExtractedForwarderOffer,
-  type SaveForwarderOfferResult,
-} from "./forwarder-offer-storage";
+  processIncomingEmailAttachments,
+  type SaveAndLinkAttachmentResult,
+  type IncomingAttachmentInput,
+} from "./document-attachment-service";
 
 export interface ProcessIncomingReplyInput {
   emailMessageId: string;
   gmailThreadId?: string | null;
   gmailMessageId?: string | null;
+  inReplyTo?: string | null;
+  references?: string | string[] | null;
+  headers?: Array<{ name: string; value: string }> | Record<string, unknown> | null;
+  rawHeaders?: Record<string, unknown> | null;
   subject?: string | null;
   body?: string | null;
   snippet?: string | null;
@@ -29,6 +33,7 @@ export interface ProcessIncomingReplyInput {
   recipientEmail?: string | null;
   direction?: string | null;
   userId?: string | null;
+  attachments?: IncomingAttachmentInput[];
 }
 
 export interface ProcessIncomingReplyResult {
@@ -37,14 +42,13 @@ export interface ProcessIncomingReplyResult {
   matchResult: MovementMatchResult;
   confirmationResult: ConfirmationDetectionResult;
   confirmationEngineResult: MovementConfirmationResult | null;
-  extractedOffer: OfferValidationResult | null;
-  savedOfferResult: SaveForwarderOfferResult | null;
   classification: ForwarderResponseClassification;
   isConfirmed: boolean;
   actionTaken: string;
   movementNumber: string | null;
   bookingId: string | null;
   message: string;
+  savedAttachments?: SaveAndLinkAttachmentResult[];
 }
 
 /**
@@ -57,21 +61,11 @@ export interface ProcessIncomingReplyResult {
  *         ↓
  * Save email to existing email_messages
  *         ↓
- * Identify Gmail Thread
+ * Identify Gmail Thread, Forwarder & Movement
  *         ↓
- * Identify Forwarder
+ * Detect Forwarder Confirmation / Status
  *         ↓
- * Identify Booking / Movement
- *         ↓
- * Analyze Email (AI / Document Understanding)
- *         ↓
- * Extract Offer Information
- *         ↓
- * Validate Extracted Data
- *         ↓
- * Save Offer to Supabase
- *         ↓
- * Update Existing Requests Page
+ * Process Attachments & Update Email Headers
  */
 export async function processIncomingEmailReply(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -82,6 +76,10 @@ export async function processIncomingEmailReply(
     emailMessageId,
     gmailThreadId,
     gmailMessageId,
+    inReplyTo,
+    references,
+    headers,
+    rawHeaders,
     subject = "",
     body = "",
     snippet = "",
@@ -100,6 +98,10 @@ export async function processIncomingEmailReply(
   const matchResult = await executeMovementForwarderMatch(supabase, {
     gmailThreadId,
     gmailMessageId,
+    inReplyTo,
+    references,
+    headers,
+    rawHeaders,
     subject,
     body,
     snippet,
@@ -117,77 +119,7 @@ export async function processIncomingEmailReply(
     isForwarderValidated: matchResult.isForwarderValidated,
   });
 
-  // Step 2: Intelligent Email Reading (AI / Document Understanding)
-  // Understands natural-language forwarder replies without requiring a rigid format:
-  // e.g., "Rate is USD 2,100 for 40HC. Space available on 18 Sep sailing. ETA Karachi 12 Oct."
-  // or "We can offer USD 1,950 all inclusive. ETD 20 September, transit 24 days."
-  // or "Unfortunately no space available for this sailing."
-  let offerValidation: OfferValidationResult | null = null;
-  let savedOfferResult: SaveForwarderOfferResult | null = null;
-
-  try {
-    // Look up requested booking specifications for strict validation against booking
-    const localRequests = getLocalForwarderRequests();
-    const matchedReq = localRequests.find(
-      (r) =>
-        (matchResult.movementNumber &&
-          r.movementNumber.toUpperCase().trim() ===
-            matchResult.movementNumber.toUpperCase().trim()) ||
-        (matchResult.bookingId && r.bookingId === matchResult.bookingId),
-    );
-
-    const requestedBooking = matchedReq
-      ? {
-          containerSize: matchedReq.containerSize,
-          containerCount: matchedReq.containerCount,
-          origin: matchedReq.origin,
-          destination: matchedReq.destination,
-          targetDeparture: matchedReq.requiredSailingDate || matchedReq.etd,
-          targetArrival: matchedReq.eta,
-        }
-      : undefined;
-
-    offerValidation = await analyzeEmailForForwarderOffer({
-      emailMessageId,
-      subject: subject || "",
-      body: body || "",
-      snippet: snippet || "",
-      senderEmail,
-      senderName: senderName || matchResult.forwarderName,
-      movementNumber: matchResult.movementNumber,
-      forwarderName: matchResult.forwarderName,
-      containerCount: matchedReq?.containerCount,
-      containerSize: matchedReq?.containerSize,
-      requestedBooking,
-    });
-
-    console.log(`[ReplyProcessor] 🤖 AI Offer Analysis:`, {
-      method: offerValidation.validatedOffer.extractionMethod,
-      rate: offerValidation.validatedOffer.ratePerContainer,
-      spaceAvailable: offerValidation.validatedOffer.spaceAvailable,
-      isDeclined: offerValidation.validatedOffer.isDeclined,
-      status: offerValidation.normalizedStatus,
-      summary: offerValidation.validatedOffer.summary,
-    });
-
-    // Step 3: Save Offer to Supabase & Update Existing Requests Page
-    savedOfferResult = await saveExtractedForwarderOffer({
-      bookingId: matchResult.bookingId,
-      movementNumber: matchResult.movementNumber,
-      forwarderId: matchResult.forwarderId,
-      forwarderName: matchResult.forwarderName,
-      forwarderEmail: matchResult.forwarderEmail || senderEmail,
-      emailMessageId,
-      gmailThreadId,
-      gmailMessageId,
-      offerValidation,
-      userId,
-    });
-  } catch (extractErr) {
-    console.warn("[ReplyProcessor] Notice during AI offer extraction/saving:", extractErr);
-  }
-
-  // Step 4: Detect forwarder confirmation (e.g., "Booking confirmed")
+  // Step 2: Detect forwarder confirmation (e.g., "Booking confirmed")
   const confirmationResult = await detectForwarderConfirmation({
     emailMessageId,
     subject: subject || "",
@@ -207,7 +139,7 @@ export async function processIncomingEmailReply(
     detectedBy: confirmationResult.detectedBy,
   });
 
-  // Step 5: Update email_messages record raw_headers with matching, offer & confirmation info
+  // Step 3: Update email_messages record raw_headers with matching & confirmation info
   const validMsgUuid = safeUuid(emailMessageId);
   if (validMsgUuid) {
     try {
@@ -234,24 +166,27 @@ export async function processIncomingEmailReply(
         confirmation_detected_by: confirmationResult.detectedBy,
         confirmation_details: confirmationResult.details || null,
         forwarder_validated: matchResult.isForwarderValidated,
-        offer_extracted: Boolean(offerValidation?.isValid),
-        offer_status: offerValidation?.normalizedStatus || null,
-        response_classification:
-          confirmationResult.classification || offerValidation?.normalizedStatus || null,
-        extracted_offer_summary: offerValidation?.validatedOffer.summary || null,
+        response_classification: confirmationResult.classification || null,
       };
 
-      await supabase
+      const { error: updErr } = await supabase
         .from("email_messages")
         .update({
           booking_id: safeUuid(matchResult.bookingId),
-          movement_id: safeUuid(matchResult.movementId),
           movement_number: matchResult.movementNumber,
           forwarder_id: safeUuid(matchResult.forwarderId),
           raw_headers: updatedHeaders,
-          updated_at: nowIso,
         })
         .eq("id", validMsgUuid);
+
+      if (updErr && (updErr.code === "PGRST204" || updErr.message?.includes("column"))) {
+        await supabase
+          .from("email_messages")
+          .update({
+            raw_headers: updatedHeaders,
+          })
+          .eq("id", validMsgUuid);
+      }
     } catch (updateErr) {
       console.warn("[ReplyProcessor] Notice updating email_messages:", updateErr);
     }
@@ -276,10 +211,6 @@ export async function processIncomingEmailReply(
             confirmationStatus: confirmationResult.confirmationStatus,
             classification: confirmationResult.classification,
             confidence: confirmationResult.confidence,
-            offerStatus: offerValidation?.normalizedStatus,
-            ratePerContainer: offerValidation?.validatedOffer.ratePerContainer,
-            spaceAvailable: offerValidation?.validatedOffer.spaceAvailable,
-            summary: offerValidation?.validatedOffer.summary,
             ...(matchResult.details || {}),
           },
           updated_at: nowIso,
@@ -318,43 +249,54 @@ export async function processIncomingEmailReply(
     }
   }
 
-  // -------------------------------------------------------------------------
-  // RESPONSE CLASSIFICATION (6 Canonical Categories)
-  // OFFER_RECEIVED | AVAILABLE | NOT_AVAILABLE | DECLINED | NEEDS_REVIEW | CONFIRMED
-  // "Rate available" ≠ "Booking confirmed".
-  // Only an explicit carrier booking confirmation triggers CONFIRMED.
-  // -------------------------------------------------------------------------
+  // Response classification
   let unifiedClassification: ForwarderResponseClassification = "NEEDS_REVIEW";
-
   if (confirmationResult.classification === "CONFIRMED") {
     unifiedClassification = "CONFIRMED";
-  } else if (offerValidation?.normalizedStatus === "CONFIRMED") {
-    unifiedClassification = "CONFIRMED";
-  } else if (offerValidation?.normalizedStatus === "OFFER_RECEIVED") {
-    unifiedClassification = "OFFER_RECEIVED";
-  } else if (
-    offerValidation?.normalizedStatus === "AVAILABLE" ||
-    confirmationResult.classification === "AVAILABLE"
-  ) {
+  } else if (confirmationResult.classification === "AVAILABLE") {
     unifiedClassification = "AVAILABLE";
-  } else if (
-    offerValidation?.normalizedStatus === "NOT_AVAILABLE" ||
-    confirmationResult.classification === "NOT_AVAILABLE"
-  ) {
+  } else if (confirmationResult.classification === "NOT_AVAILABLE") {
     unifiedClassification = "NOT_AVAILABLE";
-  } else if (
-    offerValidation?.normalizedStatus === "DECLINED" ||
-    confirmationResult.classification === "DECLINED"
-  ) {
+  } else if (confirmationResult.classification === "DECLINED") {
     unifiedClassification = "DECLINED";
-  } else if (confirmationResult.classification === "OFFER_RECEIVED") {
-    unifiedClassification = "OFFER_RECEIVED";
   } else {
     unifiedClassification = "NEEDS_REVIEW";
   }
 
-  // Step 6: If confirmation detected and forwarder validated -> Confirm Booking/Movement!
-  // CRITICAL: Only explicit carrier confirmation triggers the booking confirmation workflow.
+  // Step 3.5: Forwarder Quotation Extraction & Child Request Update
+  let forwarderQuoteExtracted = false;
+  try {
+    const fwdReplyResult = await processIncomingForwarderEmailReply({
+      emailMessageId: validMsgUuid || emailMessageId,
+      gmailThreadId,
+      gmailMessageId,
+      inReplyTo,
+      references,
+      headers,
+      rawHeaders,
+      subject,
+      body,
+      snippet,
+      senderEmail,
+      senderName,
+      bookingId: matchResult.bookingId,
+      movementNumber: matchResult.movementNumber,
+    });
+
+    if (fwdReplyResult.offerExtracted) {
+      forwarderQuoteExtracted = true;
+      if (unifiedClassification === "NEEDS_REVIEW" || unifiedClassification === "AVAILABLE") {
+        unifiedClassification = "OFFER_RECEIVED";
+      }
+      console.log(
+        `[ReplyProcessor] 💰 Extracted forwarder quotation offer for ${matchResult.forwarderName || senderEmail} against booking ${matchResult.bookingId || matchResult.movementNumber}`,
+      );
+    }
+  } catch (fwdReplyErr) {
+    console.warn("[ReplyProcessor] Notice processing forwarder quotation reply:", fwdReplyErr);
+  }
+
+  // Step 4: If confirmation detected and forwarder validated -> Confirm Booking/Movement!
   let confirmationEngineResult: MovementConfirmationResult | null = null;
   const isConfirmed = unifiedClassification === "CONFIRMED";
 
@@ -399,12 +341,65 @@ export async function processIncomingEmailReply(
     actionTaken = "DECLINED";
   } else if (unifiedClassification === "NOT_AVAILABLE") {
     actionTaken = "NOT_AVAILABLE";
-  } else if (unifiedClassification === "OFFER_RECEIVED") {
-    actionTaken = "OFFER_EXTRACTED";
   } else if (unifiedClassification === "AVAILABLE") {
     actionTaken = "SPACE_AVAILABLE";
   } else if (unifiedClassification === "NEEDS_REVIEW") {
     actionTaken = "NEEDS_REVIEW";
+  }
+
+  // Step 5: Automatically save and link Forwarder Cut-Off & BL Attachments
+  let savedAttachments: SaveAndLinkAttachmentResult[] = [];
+  try {
+    let attachmentsToProcess = input.attachments || [];
+    if (attachmentsToProcess.length === 0 && validMsgUuid) {
+      const { data: dbMsg } = await supabase
+        .from("email_messages")
+        .select("attachments, raw_headers")
+        .eq("id", validMsgUuid)
+        .maybeSingle();
+
+      if (Array.isArray(dbMsg?.attachments) && dbMsg.attachments.length > 0) {
+        attachmentsToProcess = dbMsg.attachments as IncomingAttachmentInput[];
+      } else if (
+        dbMsg?.raw_headers &&
+        Array.isArray((dbMsg.raw_headers as Record<string, unknown>).attachments)
+      ) {
+        attachmentsToProcess = (dbMsg.raw_headers as Record<string, unknown>)
+          .attachments as IncomingAttachmentInput[];
+      }
+    }
+
+    savedAttachments = await processIncomingEmailAttachments(supabase, {
+      emailMessageId: validMsgUuid || emailMessageId,
+      gmailMessageId,
+      gmailThreadId,
+      inReplyTo,
+      references,
+      headers,
+      rawHeaders,
+      subject,
+      body,
+      senderEmail,
+      senderName,
+      bookingId: matchResult.bookingId,
+      movementNumber: matchResult.movementNumber,
+      movementId: matchResult.movementId,
+      forwarderId: matchResult.forwarderId,
+      forwarderName: matchResult.forwarderName,
+      userId,
+      attachments: attachmentsToProcess,
+    });
+
+    if (savedAttachments.length > 0) {
+      console.log(
+        `[ReplyProcessor] 📎 Processed ${savedAttachments.length} attachments: ${savedAttachments
+          .filter((s) => s.saved)
+          .map((s) => `[${s.category}] ${s.document?.name}`)
+          .join(", ")}`,
+      );
+    }
+  } catch (attErr) {
+    console.warn("[ReplyProcessor] Notice processing Cut-Off / BL attachments:", attErr);
   }
 
   return {
@@ -413,8 +408,6 @@ export async function processIncomingEmailReply(
     matchResult,
     confirmationResult,
     confirmationEngineResult,
-    extractedOffer: offerValidation,
-    savedOfferResult,
     classification: unifiedClassification,
     isConfirmed,
     actionTaken,
@@ -422,7 +415,7 @@ export async function processIncomingEmailReply(
     bookingId: matchResult.bookingId,
     message:
       confirmationEngineResult?.message ||
-      offerValidation?.validatedOffer.summary ||
       `Processed reply for ${matchResult.movementNumber || "message"}. Status: ${unifiedClassification}`,
+    savedAttachments,
   };
 }

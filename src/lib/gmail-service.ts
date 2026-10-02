@@ -18,8 +18,15 @@ export const GMAIL_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/gmail.modify",
   "https://www.googleapis.com/auth/gmail.compose",
+  "https://www.googleapis.com/auth/gmail.insert",
   "https://www.googleapis.com/auth/gmail.labels",
   "https://www.googleapis.com/auth/gmail.metadata",
+  "https://www.googleapis.com/auth/gmail.settings.basic",
+  "https://www.googleapis.com/auth/gmail.settings.sharing",
+  "https://www.googleapis.com/auth/gmail.addons.current.action.compose",
+  "https://www.googleapis.com/auth/gmail.addons.current.message.action",
+  "https://www.googleapis.com/auth/gmail.addons.current.message.metadata",
+  "https://www.googleapis.com/auth/gmail.addons.current.message.readonly",
   "https://www.googleapis.com/auth/userinfo.email",
   "https://www.googleapis.com/auth/userinfo.profile",
 ];
@@ -76,7 +83,21 @@ declare global {
     google?: {
       accounts?: {
         oauth2?: {
-          initCodeClient: (config: {
+          initTokenClient: (config: {
+            client_id: string;
+            scope: string;
+            prompt?: string;
+            callback: (response: {
+              access_token?: string;
+              expires_in?: string | number;
+              error?: string;
+              error_description?: string;
+            }) => void;
+            error_callback?: (error: unknown) => void;
+          }) => {
+            requestAccessToken: (options?: { prompt?: string }) => void;
+          };
+          initCodeClient?: (config: {
             client_id: string;
             scope: string;
             ux_mode?: "popup" | "redirect";
@@ -313,10 +334,49 @@ export function getCachedGoogleUser() {
 }
 
 /**
+ * Lazily loads the Google Identity Services (GIS) script only when an OAuth connection
+ * is actually initiated, preventing blocking of the initial application page load.
+ */
+async function ensureGoogleIdentityServicesLoaded(): Promise<void> {
+  if (typeof window === "undefined") return;
+  if (
+    window.google?.accounts?.oauth2?.initTokenClient ||
+    window.google?.accounts?.oauth2?.initCodeClient
+  ) {
+    return;
+  }
+
+  return new Promise<void>((resolve) => {
+    const existing = document.querySelector('script[src*="accounts.google.com/gsi/client"]');
+    if (existing) {
+      if (
+        window.google?.accounts?.oauth2?.initTokenClient ||
+        window.google?.accounts?.oauth2?.initCodeClient
+      ) {
+        resolve();
+      } else {
+        existing.addEventListener("load", () => resolve(), { once: true });
+        setTimeout(resolve, 800);
+      }
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.defer = true;
+    script.onload = () => resolve();
+    script.onerror = () => {
+      resolve();
+    };
+    document.head.appendChild(script);
+    setTimeout(resolve, 1000);
+  });
+}
+
+/**
  * Connects to Gmail via Google OAuth.
- * Uses Google Identity Services (GIS) initCodeClient with access_type=offline
- * to securely receive an authorization code and exchange it on the backend for
- * both access_token and refresh_token (stored securely in database).
+ * Uses Google Identity Services (GIS) initTokenClient for direct client-side token acquisition.
  * Falls back to Firebase popup if GIS is unavailable.
  */
 export async function connectGmailAccount(userId?: string | null): Promise<{
@@ -333,105 +393,126 @@ export async function connectGmailAccount(userId?: string | null): Promise<{
   try {
     isConnecting = true;
 
+    // Dynamically ensure Google Identity Services script is available on-demand
+    await ensureGoogleIdentityServicesLoaded();
+
     const googleClientId =
       (firebaseConfig as { oAuthClientId?: string })?.oAuthClientId ||
-      "463842413221-vie9drapegc0vcaduqpc54lpfjmp70ho.apps.googleusercontent.com";
+      "1052262935067-h1o99oo3pauajsoafi5va9flit9ntvvv.apps.googleusercontent.com";
 
-    let authCode: string | null = null;
-
-    // 1. Attempt Google Identity Services authorization code flow with offline access
-    if (typeof window !== "undefined" && window.google?.accounts?.oauth2?.initCodeClient) {
+    // 1. Primary: Google Identity Services Token Client (official client-side Workspace flow)
+    if (typeof window !== "undefined" && window.google?.accounts?.oauth2?.initTokenClient) {
       try {
-        console.log("[GmailService] Initiating Google OAuth with access_type=offline via GIS...");
-        authCode = await new Promise<string>((resolve, reject) => {
-          const client = window.google!.accounts!.oauth2!.initCodeClient({
-            client_id: googleClientId,
-            scope: GMAIL_SCOPES.join(" "),
-            ux_mode: "popup",
-            select_account: true,
-            access_type: "offline",
-            callback: (response) => {
-              if (response.code) {
-                resolve(response.code);
-              } else {
-                reject(
-                  new Error(
-                    response.error_description ||
-                      response.error ||
-                      "Failed to receive authorization code from Google.",
-                  ),
-                );
-              }
-            },
-            error_callback: (err) => {
-              reject(err);
-            },
-          });
-          client.requestCode();
+        console.log("[GmailService] Initiating Google Identity Services token client...");
+        const tokenResponse = await new Promise<{
+          access_token: string;
+          expires_in?: string | number;
+        }>((resolve, reject) => {
+          try {
+            const client = window.google!.accounts!.oauth2!.initTokenClient({
+              client_id: googleClientId,
+              scope: GMAIL_SCOPES.join(" "),
+              prompt: "consent",
+              callback: (response) => {
+                if (response.access_token) {
+                  resolve({
+                    access_token: response.access_token,
+                    expires_in: response.expires_in,
+                  });
+                } else {
+                  reject(
+                    new Error(
+                      response.error_description ||
+                        response.error ||
+                        "Google authorization was not completed.",
+                    ),
+                  );
+                }
+              },
+              error_callback: (err) => {
+                reject(err);
+              },
+            });
+            client.requestAccessToken({ prompt: "consent" });
+          } catch (initErr) {
+            reject(initErr);
+          }
         });
+
+        if (tokenResponse.access_token) {
+          cachedAccessToken = tokenResponse.access_token;
+          const expiresInSec = Number(tokenResponse.expires_in) || 3599;
+          cachedTokenExpiresAt = Date.now() + expiresInSec * 1000;
+
+          // Retrieve user profile details from Google UserInfo endpoint
+          let email = "";
+          let displayName = "Gmail User";
+          let avatarUrl: string | undefined = undefined;
+
+          try {
+            const userInfoRes = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+              headers: { Authorization: `Bearer ${cachedAccessToken}` },
+            });
+            if (userInfoRes.ok) {
+              const userInfo = await userInfoRes.json();
+              email = userInfo.email || "";
+              displayName = userInfo.name || email.split("@")[0] || "Gmail User";
+              avatarUrl = userInfo.picture || undefined;
+            }
+          } catch (uErr) {
+            console.warn("[GmailService] Notice fetching userinfo:", uErr);
+          }
+
+          cachedGoogleUser = {
+            email,
+            displayName,
+            photoURL: avatarUrl,
+            uid: "",
+          };
+
+          // Save connection on backend
+          try {
+            await fetch("/api/gmail/save-connection", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                accessToken: cachedAccessToken,
+                expiresIn: expiresInSec,
+                email,
+                displayName,
+                avatarUrl,
+                userId,
+              }),
+            });
+          } catch (saveErr) {
+            console.warn("[GmailService] Failed to save connection on backend:", saveErr);
+          }
+
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(
+              new CustomEvent("nashmia_gmail_connected", {
+                detail: { email, displayName, avatarUrl, timestamp: Date.now() },
+              }),
+            );
+          }
+
+          return {
+            success: true,
+            accessToken: cachedAccessToken,
+            email,
+            displayName,
+            avatarUrl,
+          };
+        }
       } catch (gisErr) {
-        console.warn("[GmailService] GIS code client prompt error/fallback:", gisErr);
+        console.warn(
+          "[GmailService] GIS token client notice, attempting Firebase fallback:",
+          gisErr,
+        );
       }
     }
 
-    // If an authorization code was obtained with access_type=offline:
-    if (authCode) {
-      console.log(
-        "[GmailService] Exchanging authorization code on server for tokens and refresh_token...",
-      );
-      const exchangeRes = await fetch("/api/gmail/oauth/exchange", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          code: authCode,
-          redirectUri: "postmessage",
-          userId,
-        }),
-      });
-
-      const exchangeData = (await exchangeRes.json()) as {
-        success: boolean;
-        accessToken?: string;
-        email?: string;
-        displayName?: string;
-        avatarUrl?: string;
-        tokenExpiresAt?: string;
-        error?: string;
-      };
-
-      if (exchangeData.success && exchangeData.accessToken) {
-        cachedAccessToken = exchangeData.accessToken;
-        cachedTokenExpiresAt = exchangeData.tokenExpiresAt
-          ? new Date(exchangeData.tokenExpiresAt).getTime()
-          : Date.now() + 3500 * 1000;
-
-        const email = exchangeData.email || "";
-        const displayName = exchangeData.displayName || email.split("@")[0] || "Gmail User";
-        const avatarUrl = exchangeData.avatarUrl;
-
-        cachedGoogleUser = {
-          email,
-          displayName,
-          photoURL: avatarUrl,
-          uid: "",
-        };
-
-        return {
-          success: true,
-          accessToken: cachedAccessToken,
-          email,
-          displayName,
-          avatarUrl,
-        };
-      }
-
-      console.warn(
-        "[GmailService] Code exchange on backend returned error, falling back to Firebase popup:",
-        exchangeData.error,
-      );
-    }
-
-    // 2. Fallback to Firebase GoogleAuthProvider popup
+    // 2. Secondary Fallback: Firebase Google Auth popup
     console.log("[GmailService] Executing Firebase Google Auth popup fallback...");
     const result = await signInWithPopup(firebaseAuth, googleProvider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
@@ -482,6 +563,27 @@ export async function connectGmailAccount(userId?: string | null): Promise<{
     };
   } catch (err: unknown) {
     console.error("[GmailService] Error during Google OAuth sign-in:", err);
+    const firebaseCode = (err as { code?: string })?.code;
+    const rawMessage = err instanceof Error ? err.message : String(err);
+
+    if (firebaseCode === "auth/popup-blocked" || rawMessage.includes("popup-blocked")) {
+      throw new Error(
+        "The Google authentication popup was blocked by your browser. Please allow popups for this site in your browser address bar and click Connect again.",
+      );
+    } else if (
+      firebaseCode === "auth/popup-closed-by-user" ||
+      rawMessage.includes("popup-closed-by-user")
+    ) {
+      throw new Error("Authentication popup was closed before signing in.");
+    } else if (
+      firebaseCode === "auth/cancelled-popup-request" ||
+      rawMessage.includes("cancelled-popup-request")
+    ) {
+      throw new Error("A previous authentication request was already pending.");
+    } else if (rawMessage.includes("Failed to receive Google OAuth access token")) {
+      throw new Error("Google did not return an access token with required Gmail scopes.");
+    }
+
     throw err;
   } finally {
     isConnecting = false;
@@ -550,9 +652,39 @@ export async function disconnectGmailAccount(
   }
 
   try {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem(GMAIL_STATUS_CACHE_KEY);
+    }
     await firebaseAuth.signOut();
   } catch (err) {
     console.warn("[GmailService] Firebase sign out notice:", err);
+  }
+}
+
+const GMAIL_STATUS_CACHE_KEY = "nashmia_gmail_conn_cache_v1";
+
+export function getCachedGmailConnectionState(): GmailConnectionStatus | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(GMAIL_STATUS_CACHE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as GmailConnectionStatus;
+      if (parsed && typeof parsed.isConnected === "boolean") {
+        return parsed;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function persistCachedGmailStatus(status: GmailConnectionStatus) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(GMAIL_STATUS_CACHE_KEY, JSON.stringify(status));
+  } catch {
+    // ignore
   }
 }
 
@@ -597,13 +729,15 @@ export async function fetchGmailConnectionState(
           uid: "",
         };
 
-        return {
+        const result: GmailConnectionStatus = {
           isConnected: true,
           email: data.email || null,
           displayName: data.displayName || null,
           avatarUrl: data.avatarUrl || null,
           lastSyncAt: data.lastSyncAt || null,
         };
+        persistCachedGmailStatus(result);
+        return result;
       }
     }
   } catch (err) {

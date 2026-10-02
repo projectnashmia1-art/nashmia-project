@@ -22,17 +22,29 @@ import {
   Plus,
   Send,
   Sparkles,
-  Scale,
 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
-import { toast } from "sonner";
+import { showPillToast } from "@/lib/pill-toast";
 import { Button } from "@/components/ui/button";
+import { getPortCountryMeta } from "@/lib/port-flags";
+import { CountryFlagSvg } from "@/components/nashmia/common/CountryFlagSvg";
 import { useAuth } from "@/lib/auth-context";
 import {
   fetchForwarderRequestsForBooking,
-  acceptForwarderOffer,
+  awardForwarderOffer,
+  updateForwarderQuotation,
+  updateForwarderQuoteStatus,
 } from "@/lib/multi-forwarder-service";
-import type { BookingRequestRecord, ForwarderQuoteRequestRecord } from "@/types/requests";
+import { AwardForwarderModal } from "./AwardForwarderModal";
+import { EditQuotationModal } from "./EditQuotationModal";
+import { QuotationStatusBadge } from "./QuotationStatusBadge";
+import type {
+  BookingRequestRecord,
+  ForwarderQuoteRequestRecord,
+  ForwarderOfferData,
+  CanonicalQuotationStatus,
+} from "@/types/requests";
+import { normalizeQuoteStatus } from "@/types/requests";
 
 interface RequestDetailDrawerProps {
   request: BookingRequestRecord | null;
@@ -42,8 +54,6 @@ interface RequestDetailDrawerProps {
   onRequestRevision: (request: BookingRequestRecord) => void;
   onComposeEmail?: (request: BookingRequestRecord) => void;
   onRequestQuotes?: (request: BookingRequestRecord) => void;
-  onRecordOffer?: (request: ForwarderQuoteRequestRecord) => void;
-  onCompareForwarderOffers?: (request: BookingRequestRecord) => void;
 }
 
 export const RequestDetailDrawer = memo(function RequestDetailDrawer({
@@ -54,28 +64,32 @@ export const RequestDetailDrawer = memo(function RequestDetailDrawer({
   onRequestRevision,
   onComposeEmail,
   onRequestQuotes,
-  onRecordOffer,
-  onCompareForwarderOffers,
 }: RequestDetailDrawerProps) {
   const { userId } = useAuth();
   const [forwarderRequests, setForwarderRequests] = useState<ForwarderQuoteRequestRecord[]>([]);
   const [isAwarding, setIsAwarding] = useState<string | null>(null);
+  const [awardModalTarget, setAwardModalTarget] = useState<ForwarderQuoteRequestRecord | null>(
+    null,
+  );
+  const [editQuotationTarget, setEditQuotationTarget] =
+    useState<ForwarderQuoteRequestRecord | null>(null);
+  const [expandedEmailId, setExpandedEmailId] = useState<string | null>(null);
 
   const loadForwarderRequests = useCallback(async () => {
-    if (!request?.id) return;
+    if (!request) return;
     try {
-      const list = await fetchForwarderRequestsForBooking(request.id);
+      const list = await fetchForwarderRequestsForBooking(request);
       setForwarderRequests(list);
     } catch (err) {
       console.warn("[RequestDetailDrawer] Error loading forwarder requests:", err);
     }
-  }, [request?.id]);
+  }, [request]);
 
   useEffect(() => {
-    if (isOpen && request?.id) {
+    if (isOpen && request) {
       void loadForwarderRequests();
     }
-  }, [isOpen, request?.id, loadForwarderRequests]);
+  }, [isOpen, request, loadForwarderRequests]);
 
   // Listen for realtime multi-forwarder updates
   useEffect(() => {
@@ -86,29 +100,72 @@ export const RequestDetailDrawer = memo(function RequestDetailDrawer({
     window.addEventListener("nashmia_multi_forwarder_updated", handleUpdate);
     window.addEventListener("nashmia_multi_forwarder_dispatched", handleUpdate);
     window.addEventListener("nashmia_forwarder_offer_received", handleUpdate);
+    window.addEventListener("nashmia_booking_awarded", handleUpdate);
 
     return () => {
       window.removeEventListener("nashmia_multi_forwarder_updated", handleUpdate);
       window.removeEventListener("nashmia_multi_forwarder_dispatched", handleUpdate);
       window.removeEventListener("nashmia_forwarder_offer_received", handleUpdate);
+      window.removeEventListener("nashmia_booking_awarded", handleUpdate);
     };
   }, [loadForwarderRequests]);
 
-  const handleAcceptOffer = async (requestId: string) => {
+  const handleAwardForwarder = async (requestId: string) => {
     setIsAwarding(requestId);
     try {
-      const res = await acceptForwarderOffer(requestId, userId);
-      toast.success("Quotation Accepted & Booking Confirmed!", {
-        description: `Awarded booking to ${res.request.forwarderName}. Booking status confirmed.`,
-      });
+      const res = await awardForwarderOffer(requestId, userId);
+      showPillToast.success(
+        `Designated ${res.request.forwarderName} as official forwarder. Status: Pending Confirmation.`,
+        "Forwarder Quotation Awarded!",
+        request?.reference || request?.movementNumber,
+      );
       void loadForwarderRequests();
     } catch (err: unknown) {
-      console.error("[RequestDetailDrawer] Error accepting offer:", err);
-      toast.error("Failed to award quotation", {
-        description: err instanceof Error ? err.message : "Please try again.",
-      });
+      console.error("[RequestDetailDrawer] Error awarding forwarder:", err);
+      showPillToast.error(
+        err instanceof Error ? err.message : "Please try again.",
+        "Failed to award forwarder",
+      );
     } finally {
       setIsAwarding(null);
+    }
+  };
+
+  const handleSaveQuotationCorrection = async (
+    requestId: string,
+    updatedOffer: Partial<ForwarderOfferData>,
+    updatedStatus?: CanonicalQuotationStatus,
+  ) => {
+    try {
+      await updateForwarderQuotation(requestId, updatedOffer, userId, updatedStatus);
+      showPillToast.success(
+        "Quotation details & status updated and recorded in audit log.",
+        "Quotation Corrected",
+        request?.reference || request?.movementNumber,
+      );
+      void loadForwarderRequests();
+    } catch (err: unknown) {
+      console.error("[RequestDetailDrawer] Error saving quotation correction:", err);
+      showPillToast.error(
+        err instanceof Error ? err.message : "Unable to save correction.",
+        "Failed to update quotation",
+      );
+    }
+  };
+
+  const handleStatusChange = async (requestId: string, newStatus: CanonicalQuotationStatus) => {
+    try {
+      await updateForwarderQuoteStatus(requestId, newStatus, undefined, userId);
+      showPillToast.success(
+        `Quotation status updated to ${newStatus}. (Quotation receipt does not auto-confirm booking)`,
+        "Status Updated",
+      );
+      void loadForwarderRequests();
+    } catch (err: unknown) {
+      showPillToast.error(
+        err instanceof Error ? err.message : "Unable to update status.",
+        "Status Update Failed",
+      );
     }
   };
 
@@ -119,7 +176,7 @@ export const RequestDetailDrawer = memo(function RequestDetailDrawer({
       {/* Backdrop */}
       <div
         onClick={onClose}
-        className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs transition-opacity duration-200"
+        className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm transition-opacity duration-200"
       />
 
       {/* Drawer Container */}
@@ -348,19 +405,37 @@ export const RequestDetailDrawer = memo(function RequestDetailDrawer({
 
             <div className="mt-3.5 grid grid-cols-2 gap-3 sm:grid-cols-4">
               <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
-                <span className="text-[11px] font-bold text-slate-400 uppercase">
-                  POL (Loading)
+                <span className="text-[11px] font-bold text-slate-400 uppercase flex items-center justify-between">
+                  <span>POL (Loading)</span>
+                  <CountryFlagSvg
+                    countryCode={getPortCountryMeta(request.polCode, request.polName).countryCode}
+                    size="sm"
+                    title={getPortCountryMeta(request.polCode, request.polName).countryName}
+                  />
                 </span>
-                <p className="mt-0.5 text-[15px] font-bold text-slate-900">{request.polCode}</p>
-                <p className="text-[11px] text-slate-500 line-clamp-1">{request.polName}</p>
+                <p className="mt-0.5 text-[15px] font-bold text-slate-900 flex items-center gap-1.5">
+                  <span>{request.polCode}</span>
+                </p>
+                <p className="text-[11px] text-slate-500 line-clamp-1" title={request.polName}>
+                  {request.polName}
+                </p>
               </div>
 
               <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
-                <span className="text-[11px] font-bold text-slate-400 uppercase">
-                  POD (Discharge)
+                <span className="text-[11px] font-bold text-slate-400 uppercase flex items-center justify-between">
+                  <span>POD (Discharge)</span>
+                  <CountryFlagSvg
+                    countryCode={getPortCountryMeta(request.podCode, request.podName).countryCode}
+                    size="sm"
+                    title={getPortCountryMeta(request.podCode, request.podName).countryName}
+                  />
                 </span>
-                <p className="mt-0.5 text-[15px] font-bold text-slate-900">{request.podCode}</p>
-                <p className="text-[11px] text-slate-500 line-clamp-1">{request.podName}</p>
+                <p className="mt-0.5 text-[15px] font-bold text-slate-900 flex items-center gap-1.5">
+                  <span>{request.podCode}</span>
+                </p>
+                <p className="text-[11px] text-slate-500 line-clamp-1" title={request.podName}>
+                  {request.podName}
+                </p>
               </div>
 
               <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
@@ -419,19 +494,6 @@ export const RequestDetailDrawer = memo(function RequestDetailDrawer({
               </div>
 
               <div className="flex items-center gap-1.5">
-                {forwarderRequests.length > 0 && onCompareForwarderOffers && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => onCompareForwarderOffers(request)}
-                    className="h-8 gap-1.5 border-teal-200 bg-[#E8F5F6]/60 text-[#0FA3B1] hover:bg-[#E8F5F6] text-xs font-semibold"
-                  >
-                    <Scale className="size-3.5" />
-                    <span>Compare All Offers</span>
-                  </Button>
-                )}
-
                 {onRequestQuotes && (
                   <Button
                     type="button"
@@ -497,31 +559,12 @@ export const RequestDetailDrawer = memo(function RequestDetailDrawer({
                                 {fwdReq.forwarderBadge}
                               </span>
                             )}
-                            {isAccepted && (
-                              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 border border-emerald-300 px-2 py-0.5 text-[10.5px] font-bold text-emerald-800">
-                                <CheckCircle2 className="size-3 text-emerald-600" />
-                                AWARDED & CONFIRMED
-                              </span>
-                            )}
-                            {!isAccepted && fwdReq.status === "OFFER_RECEIVED" && (
-                              <span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 border border-indigo-200 px-2 py-0.5 text-[10.5px] font-bold text-indigo-800">
-                                {fwdReq.offerData?.receivedVia?.includes("AI") && (
-                                  <Sparkles className="size-3 text-indigo-600" />
-                                )}
-                                Quote Received
-                              </span>
-                            )}
-                            {!isAccepted && fwdReq.status === "AWAITING_OFFER" && (
-                              <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 border border-amber-200 px-2 py-0.5 text-[10.5px] font-bold text-amber-800">
-                                <span className="size-1.5 rounded-full bg-amber-500 animate-pulse" />
-                                Awaiting Response
-                              </span>
-                            )}
-                            {fwdReq.status === "DECLINED" && (
-                              <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 border border-rose-200 px-2 py-0.5 text-[10.5px] font-semibold text-rose-800">
-                                No Space / Declined
-                              </span>
-                            )}
+                            <QuotationStatusBadge
+                              status={fwdReq.status}
+                              size="xs"
+                              allowChange
+                              onStatusChange={(st) => handleStatusChange(fwdReq.id, st)}
+                            />
                           </div>
 
                           <div className="mt-1 flex flex-wrap items-center gap-3 text-[11.5px] text-slate-500">
@@ -558,29 +601,30 @@ export const RequestDetailDrawer = memo(function RequestDetailDrawer({
                         </div>
 
                         {/* Actions */}
-                        <div className="flex items-center gap-1.5">
-                          {onRecordOffer && (
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {hasOffer && (
                             <Button
                               type="button"
                               variant="outline"
                               size="sm"
-                              onClick={() => onRecordOffer(fwdReq)}
-                              className="h-7 px-2.5 text-xs text-slate-700 border-slate-200 hover:bg-white"
+                              onClick={() => setEditQuotationTarget(fwdReq)}
+                              className="h-7 px-2 text-xs border-slate-200 text-slate-700 hover:bg-slate-100 gap-1"
+                              title="Review and correct extracted quotation details"
                             >
-                              {hasOffer ? "Edit Quote" : "Log Quote"}
+                              <FileEdit className="size-3 text-slate-500" />
+                              <span>Edit Quote</span>
                             </Button>
                           )}
-
-                          {!isAccepted && hasOffer && (
+                          {!isAccepted && hasOffer && fwdReq.status !== "NOT_AWARDED" && (
                             <Button
                               type="button"
                               size="sm"
-                              onClick={() => handleAcceptOffer(fwdReq.id)}
+                              onClick={() => setAwardModalTarget(fwdReq)}
                               disabled={isAwarding === fwdReq.id}
-                              className="h-7 px-2.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-semibold gap-1"
+                              className="h-7 px-2.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-bold gap-1 shadow-xs"
                             >
                               <CheckCircle2 className="size-3" />
-                              {isAwarding === fwdReq.id ? "Awarding..." : "Award Booking"}
+                              <span>Award Forwarder</span>
                             </Button>
                           )}
                         </div>
@@ -594,7 +638,8 @@ export const RequestDetailDrawer = memo(function RequestDetailDrawer({
                               Rate / Container
                             </span>
                             <span className="font-bold text-slate-900 text-[13px]">
-                              ${fwdReq.offerData.ratePerContainer?.toLocaleString()} USD
+                              ${fwdReq.offerData.ratePerContainer?.toLocaleString()}{" "}
+                              {fwdReq.offerData.currency || "USD"}
                             </span>
                           </div>
                           <div>
@@ -602,7 +647,8 @@ export const RequestDetailDrawer = memo(function RequestDetailDrawer({
                               Total Freight
                             </span>
                             <span className="font-bold text-[#0FA3B1] text-[13px]">
-                              ${fwdReq.offerData.totalFreight?.toLocaleString()} USD
+                              ${fwdReq.offerData.totalFreight?.toLocaleString()}{" "}
+                              {fwdReq.offerData.currency || "USD"}
                             </span>
                           </div>
                           <div>
@@ -654,16 +700,23 @@ export const RequestDetailDrawer = memo(function RequestDetailDrawer({
                           {fwdReq.offerData.notes && (
                             <div className="col-span-2 sm:col-span-4 text-[11px] text-slate-600 border-t border-slate-100 pt-1.5 mt-0.5 flex flex-wrap items-center justify-between gap-1">
                               <span>
-                                <strong>Offer Summary:</strong> {fwdReq.offerData.notes}
+                                <strong>Terms & Notes:</strong> {fwdReq.offerData.notes}
                               </span>
-                              {fwdReq.offerData.receivedVia && (
-                                <span className="inline-flex items-center gap-1 font-mono text-[10px] text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100">
-                                  {fwdReq.offerData.receivedVia.includes("AI") && (
-                                    <Sparkles className="size-2.5" />
-                                  )}
-                                  {fwdReq.offerData.receivedVia}
+                              {fwdReq.offerData.manuallyCorrected && (
+                                <span className="text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 font-semibold">
+                                  Manually Adjusted
                                 </span>
                               )}
+                            </div>
+                          )}
+                          {fwdReq.offerData.receivedVia && (
+                            <div className="col-span-2 sm:col-span-4 flex justify-end">
+                              <span className="inline-flex items-center gap-1 font-mono text-[10px] text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100">
+                                {fwdReq.offerData.receivedVia.includes("AI") && (
+                                  <Sparkles className="size-2.5" />
+                                )}
+                                {fwdReq.offerData.receivedVia}
+                              </span>
                             </div>
                           )}
                         </div>
@@ -845,6 +898,22 @@ export const RequestDetailDrawer = memo(function RequestDetailDrawer({
             )}
           </div>
         </div>
+        {/* Award Forwarder Modal */}
+        <AwardForwarderModal
+          isOpen={Boolean(awardModalTarget)}
+          onClose={() => setAwardModalTarget(null)}
+          bookingRequest={request}
+          forwarderRequest={awardModalTarget}
+          onConfirmAward={handleAwardForwarder}
+        />
+
+        {/* Edit Quotation Modal */}
+        <EditQuotationModal
+          isOpen={Boolean(editQuotationTarget)}
+          onClose={() => setEditQuotationTarget(null)}
+          forwarderRequest={editQuotationTarget}
+          onSave={handleSaveQuotationCorrection}
+        />
       </aside>
     </>
   );

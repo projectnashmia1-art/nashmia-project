@@ -1,4 +1,3 @@
-import { GoogleGenAI, Type } from "@google/genai";
 import type { ForwarderResponseClassification } from "@/types/requests";
 
 export type { ForwarderResponseClassification };
@@ -358,176 +357,6 @@ const confirmationAiCache = new Map<
   }
 >();
 
-async function classifyConfirmationAI(input: ConfirmationDetectionInput): Promise<{
-  status: ConfirmationStatus;
-  classification: ForwarderResponseClassification;
-  confidence: number;
-  reason: string;
-} | null> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!isValidGeminiApiKey(apiKey)) {
-    // API key not provided or not a valid Google AI Studio key; fall back to deterministic classification
-    return null;
-  }
-
-  const cacheKey = `${input.subject}|${(input.body || input.snippet || "").slice(0, 300)}`;
-  if (confirmationAiCache.has(cacheKey)) {
-    return confirmationAiCache.get(cacheKey)!;
-  }
-
-  try {
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          "User-Agent": "aistudio-build",
-        },
-      },
-    });
-
-    const cleanedText = cleanEmailBody(input.body, input.snippet);
-
-    const prompt = `You are a freight logistics specialist evaluating incoming email replies from freight forwarders.
-Analyze the forwarder email below and classify it into exactly ONE of the six canonical categories:
-
-1. CONFIRMED
-   - The forwarder explicitly and firmly confirms the actual booking / shipment reservation with the shipping line.
-   - Examples: "Booking confirmed.", "We confirm the booking.", "Your booking is confirmed.", "Booking confirmation attached."
-   - CRITICAL LOGISTICS RULE: "Rate available" ≠ "Booking confirmed". Do NOT mark a booking as CONFIRMED merely because a forwarder provided a rate or says space is available!
-
-2. OFFER_RECEIVED
-   - The forwarder provides a commercial quotation, freight rate, or pricing proposal (e.g., "$2,100 per 40HC", "USD 1,950 all inclusive").
-   - This is a rate quote, NOT a confirmed booking.
-
-3. AVAILABLE
-   - The forwarder states that space, equipment, or allocation is available, but does NOT provide a final freight rate or booking confirmation.
-   - Example: "Space is available for 40HC on MSC Oscar, rates to follow."
-
-4. NOT_AVAILABLE
-   - The forwarder indicates that space, vessel, or equipment is unavailable (e.g., "No space available", "Vessel fully booked", "Rolled over").
-
-5. DECLINED
-   - The forwarder explicitly declines, rejects, or refuses the booking request (e.g., "Cannot accept booking", "Booking declined").
-
-6. NEEDS_REVIEW
-   - The response is conditional ("subject to carrier approval", "waitlisted"), asks clarification questions, has equipment mismatches, or requires human review.
-
-Mapping to confirmation status:
-- CONFIRMED -> confirmation_status: "CONFIRMED"
-- OFFER_RECEIVED -> confirmation_status: "NOT_CONFIRMED"
-- AVAILABLE -> confirmation_status: "NOT_CONFIRMED"
-- NOT_AVAILABLE -> confirmation_status: "REJECTED"
-- DECLINED -> confirmation_status: "REJECTED"
-- NEEDS_REVIEW -> confirmation_status: "NEEDS_REVIEW"
-
-Context:
-Movement Number: ${input.movementNumber || "N/A"}
-Forwarder Name: ${input.forwarderName || "Forwarder"}
-Email Subject: ${input.subject}
-Email Body: ${cleanedText || input.snippet || "(empty body)"}
-
-Respond ONLY with a JSON object matching the schema.`;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            classification: {
-              type: Type.STRING,
-              enum: [
-                "OFFER_RECEIVED",
-                "AVAILABLE",
-                "NOT_AVAILABLE",
-                "DECLINED",
-                "NEEDS_REVIEW",
-                "CONFIRMED",
-              ],
-              description: "Canonical forwarder response classification category",
-            },
-            confirmation_status: {
-              type: Type.STRING,
-              enum: ["CONFIRMED", "NOT_CONFIRMED", "NEEDS_REVIEW", "REJECTED"],
-              description: "The classified confirmation status",
-            },
-            confidence: {
-              type: Type.NUMBER,
-              description: "Confidence score between 0.0 and 1.0",
-            },
-            reason: {
-              type: Type.STRING,
-              description: "Concise 1-2 sentence justification",
-            },
-          },
-          required: ["classification", "confirmation_status", "confidence", "reason"],
-        },
-      },
-    });
-
-    const text = response.text?.trim();
-    if (!text) return null;
-
-    const parsed = JSON.parse(text) as {
-      classification: ForwarderResponseClassification;
-      confirmation_status: ConfirmationStatus;
-      confidence: number;
-      reason: string;
-    };
-
-    if (
-      parsed &&
-      [
-        "OFFER_RECEIVED",
-        "AVAILABLE",
-        "NOT_AVAILABLE",
-        "DECLINED",
-        "NEEDS_REVIEW",
-        "CONFIRMED",
-      ].includes(parsed.classification)
-    ) {
-      // Enforce safeguard: Rate available ≠ Booking confirmed
-      let status = parsed.confirmation_status;
-      if (parsed.classification === "OFFER_RECEIVED" || parsed.classification === "AVAILABLE") {
-        status = "NOT_CONFIRMED";
-      } else if (
-        parsed.classification === "DECLINED" ||
-        parsed.classification === "NOT_AVAILABLE"
-      ) {
-        status = "REJECTED";
-      } else if (parsed.classification === "CONFIRMED") {
-        status = "CONFIRMED";
-      }
-
-      const res = {
-        classification: parsed.classification,
-        status,
-        confidence: Math.min(1.0, Math.max(0.0, Number(parsed.confidence) || 0.85)),
-        reason: parsed.reason || "Classified via logistics intelligence model.",
-      };
-      confirmationAiCache.set(cacheKey, res);
-      return res;
-    }
-
-    return null;
-  } catch {
-    // Gracefully handle any API errors (e.g. invalid key or network error) and fall back seamlessly
-    return null;
-  }
-}
-
-/**
- * Main Forwarder Confirmation Detection Engine (Step 4).
- *
- * Rules:
- * - Deterministic rules first.
- * - AI fallback for unstructured/ambiguous text (AI ONLY returns classification & reason).
- * - AI must NOT directly update database.
- * - "Rate available" ≠ "Booking confirmed".
- * - Does NOT mark movement CONFIRMED unless explicit booking confirmation is detected.
- */
 export async function detectForwarderConfirmation(
   input: ConfirmationDetectionInput,
 ): Promise<ConfirmationDetectionResult> {
@@ -535,10 +364,10 @@ export async function detectForwarderConfirmation(
   const body = input.body || "";
   const snippet = input.snippet || "";
 
-  // 1. Run deterministic rules first
+  // 1. Run deterministic rules
   const deterministicResult = classifyConfirmationDeterministic(subject, body, snippet);
 
-  if (deterministicResult && deterministicResult.confidence >= 0.85) {
+  if (deterministicResult) {
     return {
       confirmationStatus: deterministicResult.status,
       classification: deterministicResult.classification,
@@ -553,44 +382,13 @@ export async function detectForwarderConfirmation(
     };
   }
 
-  // 2. If deterministic rules are inconclusive, invoke AI classification (server-side only)
-  const aiResult = await classifyConfirmationAI(input);
-  if (aiResult) {
-    return {
-      confirmationStatus: aiResult.status,
-      classification: aiResult.classification,
-      confidence: aiResult.confidence,
-      reason: aiResult.reason,
-      detectedBy: "AI",
-      emailMessageId: input.emailMessageId,
-      details: {
-        analysis: "Evaluated via Gemini logistics model classification.",
-      },
-    };
-  }
-
-  // 3. Rule fallback if neither produced high confidence
-  if (deterministicResult) {
-    return {
-      confirmationStatus: deterministicResult.status,
-      classification: deterministicResult.classification,
-      confidence: deterministicResult.confidence,
-      reason: deterministicResult.reason,
-      detectedBy: "RULE_FALLBACK",
-      emailMessageId: input.emailMessageId,
-      details: {
-        matchedKeywords: deterministicResult.keywords,
-      },
-    };
-  }
-
   return {
     confirmationStatus: "NEEDS_REVIEW",
     classification: "NEEDS_REVIEW",
     confidence: 0.5,
     reason:
       "Email content does not match standard confirmation phrases and requires operator review.",
-    detectedBy: "RULE_FALLBACK",
+    detectedBy: "DETERMINISTIC",
     emailMessageId: input.emailMessageId,
   };
 }

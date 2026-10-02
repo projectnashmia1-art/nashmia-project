@@ -108,7 +108,7 @@ export interface BookingRequestRecord {
 
 export interface RequestsFilterState {
   search: string;
-  status: RequestStatus | "All" | "Forwarder Offers";
+  status: RequestStatus | "All";
   priority: RequestPriority | "All";
   pol: string;
   pod: string;
@@ -134,18 +134,77 @@ export interface RequestsStatsSummary {
 export type ForwarderResponseClassification =
   "OFFER_RECEIVED" | "AVAILABLE" | "NOT_AVAILABLE" | "DECLINED" | "NEEDS_REVIEW" | "CONFIRMED";
 
-export type ForwarderQuoteStatus =
-  | "REQUESTED"
-  | "AWAITING_OFFER"
+export type CanonicalQuotationStatus =
+  | "PENDING"
   | "OFFER_RECEIVED"
-  | "AVAILABLE"
-  | "NOT_AVAILABLE"
-  | "DECLINED"
   | "NEEDS_REVIEW"
-  | "CONFIRMED"
-  | "ACCEPTED"
+  | "NOT_AVAILABLE"
   | "AWARDED"
   | "NOT_AWARDED"
+  | "CONFIRMED";
+
+export const ALL_QUOTATION_STATUSES: CanonicalQuotationStatus[] = [
+  "PENDING",
+  "OFFER_RECEIVED",
+  "NEEDS_REVIEW",
+  "NOT_AVAILABLE",
+  "AWARDED",
+  "NOT_AWARDED",
+  "CONFIRMED",
+];
+
+export function normalizeQuoteStatus(status?: string | null): CanonicalQuotationStatus {
+  if (!status) return "PENDING";
+  const s = status.trim().toUpperCase().replace(/\s+/g, "_");
+  if (s === "OFFER_RECEIVED" || s === "QUOTE_RECEIVED" || s === "OFFER" || s === "QUOTED") {
+    return "OFFER_RECEIVED";
+  }
+  if (s === "NEEDS_REVIEW" || s === "REVIEW_NEEDED" || s === "RESPONDED") {
+    return "NEEDS_REVIEW";
+  }
+  if (
+    s === "NOT_AVAILABLE" ||
+    s === "UNAVAILABLE" ||
+    s === "DECLINED" ||
+    s === "NO_RESPONSE" ||
+    s === "REJECTED_BY_FORWARDER"
+  ) {
+    return "NOT_AVAILABLE";
+  }
+  if (s === "AWARDED" || s === "ACCEPTED") {
+    return "AWARDED";
+  }
+  if (s === "NOT_AWARDED" || s === "LOST" || s === "REJECTED") {
+    return "NOT_AWARDED";
+  }
+  if (s === "CONFIRMED" || s === "BOOKING_CONFIRMED") {
+    return "CONFIRMED";
+  }
+  if (
+    s === "PENDING" ||
+    s === "SENT" ||
+    s === "DELIVERED" ||
+    s === "REQUESTED" ||
+    s === "AWAITING_OFFER" ||
+    s === "AWAITING_QUOTE"
+  ) {
+    return "PENDING";
+  }
+  return "PENDING";
+}
+
+export type ForwarderQuoteStatus =
+  | CanonicalQuotationStatus
+  | "SENT"
+  | "DELIVERED"
+  | "REQUESTED"
+  | "AWAITING_OFFER"
+  | "AVAILABLE"
+  | "PENDING_CONFIRMATION"
+  | "DECLINED"
+  | "NO_RESPONSE"
+  | "ACCEPTED"
+  | "RESPONDED"
   | "EXPIRED";
 
 export interface ForwarderOfferData {
@@ -164,11 +223,26 @@ export interface ForwarderOfferData {
   vesselName?: string;
   voyageNumber?: string;
   validUntil?: string;
+  additionalCharges?: number | string;
+  totalCost?: number;
   notes?: string;
   receivedAt?: string;
   sourceEmailId?: string;
+  originalEmailBody?: string;
+  originalEmailSubject?: string;
   receivedVia?: "Gmail Automatic Sync" | "Manual Entry" | "Email Reply" | string;
   extractionSummary?: string;
+  manuallyCorrected?: boolean;
+  correctedAt?: string;
+  correctedBy?: string;
+  // Traceability & rule-based engine metadata
+  traceability?: Record<string, unknown>;
+  reviewReasons?: string[];
+  confidenceScore?: number;
+  hasConflicts?: boolean;
+  needsReview?: boolean;
+  unverifiedSender?: boolean;
+  containerRates?: Record<string, number>;
 }
 
 export interface ForwarderQuoteRequestRecord {
@@ -183,6 +257,7 @@ export interface ForwarderQuoteRequestRecord {
   forwarderContactPerson?: string;
   forwarderBadge?: string;
   status: ForwarderQuoteStatus;
+  awardStatus?: "AWARDED" | "NOT_AWARDED" | "PENDING";
   emailMessageId?: string;
   gmailThreadId?: string;
   gmailMessageId?: string;

@@ -683,3 +683,198 @@ CREATE POLICY "Users can delete their own notifications" ON public.notifications
 -- AUDIT_LOGS RLS (Strict user isolation; append-only)
 CREATE POLICY "Users can view their own audit_logs" ON public.audit_logs FOR SELECT TO authenticated USING (auth.uid() = user_id);
 CREATE POLICY "Users can insert their own audit_logs" ON public.audit_logs FOR INSERT TO authenticated WITH CHECK (auth.uid() = user_id OR user_id IS NULL);
+
+-- ============================================================================
+-- 14. FORWARDER REQUESTS & STRUCTURED QUOTATIONS (MULTI-TENANT & AUDITED)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS public.forwarder_requests (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+  booking_id UUID NOT NULL REFERENCES public.bookings(id) ON DELETE CASCADE,
+  forwarder_id UUID REFERENCES public.forwarders(id) ON DELETE SET NULL,
+  request_id TEXT NOT NULL,
+  movement_number TEXT,
+  gmail_thread_id TEXT,
+  status TEXT NOT NULL DEFAULT 'SENT',
+  quotation_status TEXT DEFAULT 'PENDING',
+  processing_status TEXT NOT NULL DEFAULT 'PENDING',
+  award_status TEXT DEFAULT 'NOT_AWARDED' CHECK (award_status IN ('NOT_AWARDED', 'AWARDED', 'PENDING')),
+  sent_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()),
+  responded_at TIMESTAMPTZ,
+  forwarder_name TEXT,
+  forwarder_email TEXT,
+  forwarder_code TEXT,
+  details JSONB DEFAULT '{}'::JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+  CONSTRAINT unq_forwarder_requests_booking_fwd UNIQUE (booking_id, forwarder_id)
+);
+
+CREATE TABLE IF NOT EXISTS public.quotations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id UUID REFERENCES public.organizations(id) ON DELETE SET NULL,
+  booking_id UUID NOT NULL REFERENCES public.bookings(id) ON DELETE CASCADE,
+  forwarder_request_id UUID REFERENCES public.forwarder_requests(id) ON DELETE CASCADE,
+  email_message_id UUID REFERENCES public.email_messages(id) ON DELETE SET NULL,
+  forwarder_id UUID REFERENCES public.forwarders(id) ON DELETE SET NULL,
+  movement_number TEXT,
+  rate NUMERIC(12, 2) CHECK (rate IS NULL OR rate >= 0),
+  currency TEXT DEFAULT 'USD' CHECK (currency IS NULL OR currency ~ '^[A-Z]{3,4}$'),
+  container_type TEXT DEFAULT '40HC',
+  container_quantity INTEGER DEFAULT 1,
+  availability TEXT,
+  etd TEXT,
+  eta TEXT,
+  transit_time INTEGER,
+  freight_charges NUMERIC(12, 2),
+  documentation_charges NUMERIC(12, 2),
+  local_charges NUMERIC(12, 2),
+  thc NUMERIC(12, 2),
+  additional_charges TEXT,
+  total_cost NUMERIC(12, 2) CHECK (total_cost IS NULL OR total_cost >= 0),
+  free_days INTEGER,
+  vessel TEXT,
+  voyage TEXT,
+  pol TEXT,
+  pod TEXT,
+  rate_validity TEXT,
+  expiry_date TEXT,
+  notes TEXT,
+  extraction_status TEXT DEFAULT 'SAVED',
+  processing_status TEXT NOT NULL DEFAULT 'PROCESSED',
+  confidence_status TEXT DEFAULT 'HIGH',
+  confidence_score NUMERIC(4, 3) DEFAULT 0.950 CHECK (confidence_score IS NULL OR (confidence_score >= 0.0 AND confidence_score <= 1.0)),
+  validation_errors JSONB DEFAULT '[]'::JSONB,
+  metadata JSONB DEFAULT '{}'::JSONB,
+  is_current BOOLEAN DEFAULT true,
+  version_number INTEGER DEFAULT 1 CHECK (version_number >= 1),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+CREATE TABLE IF NOT EXISTS public.quotation_versions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+  quotation_id UUID NOT NULL REFERENCES public.quotations(id) ON DELETE CASCADE,
+  booking_id UUID REFERENCES public.bookings(id) ON DELETE CASCADE,
+  forwarder_id UUID REFERENCES public.forwarders(id) ON DELETE SET NULL,
+  version_number INTEGER NOT NULL CHECK (version_number >= 1),
+  rate NUMERIC(12, 2) CHECK (rate IS NULL OR rate >= 0),
+  currency TEXT DEFAULT 'USD',
+  total_cost NUMERIC(12, 2),
+  etd TEXT,
+  eta TEXT,
+  transit_time INTEGER,
+  processing_status TEXT DEFAULT 'PROCESSED',
+  confidence_score NUMERIC(4, 3) CHECK (confidence_score IS NULL OR (confidence_score >= 0.0 AND confidence_score <= 1.0)),
+  changed_fields JSONB DEFAULT '[]'::JSONB,
+  previous_values JSONB DEFAULT '{}'::JSONB,
+  new_values JSONB DEFAULT '{}'::JSONB,
+  extraction_metadata JSONB DEFAULT '{}'::JSONB,
+  source_email_id UUID REFERENCES public.email_messages(id) ON DELETE SET NULL,
+  gmail_message_id TEXT,
+  created_by TEXT DEFAULT 'SYSTEM',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+CREATE TABLE IF NOT EXISTS public.quotation_field_extractions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
+  quotation_id UUID NOT NULL REFERENCES public.quotations(id) ON DELETE CASCADE,
+  booking_id UUID REFERENCES public.bookings(id) ON DELETE CASCADE,
+  email_message_id UUID REFERENCES public.email_messages(id) ON DELETE SET NULL,
+  version_number INTEGER DEFAULT 1,
+  field_name TEXT NOT NULL,
+  extracted_value TEXT,
+  normalized_value TEXT,
+  source_text TEXT,
+  source_position TEXT,
+  pattern_matched TEXT,
+  extraction_method TEXT DEFAULT 'DETERMINISTIC_RULES',
+  confidence TEXT DEFAULT 'HIGH' CHECK (confidence IN ('HIGH', 'MEDIUM', 'LOW', 'NONE')),
+  confidence_score NUMERIC(4, 3) CHECK (confidence_score IS NULL OR (confidence_score >= 0.0 AND confidence_score <= 1.0)),
+  validation_status TEXT DEFAULT 'VALID' CHECK (validation_status IN ('VALID', 'INVALID', 'CONFLICT', 'NEEDS_REVIEW')),
+  validation_message TEXT,
+  metadata JSONB DEFAULT '{}'::JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+-- Organization helper function
+CREATE OR REPLACE FUNCTION public.get_auth_organization_id()
+RETURNS UUID
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT COALESCE(
+    (SELECT organization_id FROM public.profiles WHERE id = auth.uid() LIMIT 1),
+    NULLIF((auth.jwt() -> 'user_metadata' ->> 'organization_id'), '')::UUID,
+    NULLIF((auth.jwt() -> 'app_metadata' ->> 'organization_id'), '')::UUID,
+    NULLIF((auth.jwt() ->> 'organization_id'), '')::UUID
+  );
+$$;
+
+-- RLS FOR QUOTATION & FORWARDER WORKFLOW
+ALTER TABLE public.forwarder_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.quotations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.quotation_versions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.quotation_field_extractions ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "forwarder_requests_org_select" ON public.forwarder_requests FOR SELECT TO authenticated
+  USING (
+    (organization_id IS NOT NULL AND organization_id = public.get_auth_organization_id())
+    OR EXISTS (SELECT 1 FROM public.bookings b WHERE b.id = forwarder_requests.booking_id AND (b.user_id = auth.uid() OR b.organization_id = public.get_auth_organization_id()))
+    OR (organization_id IS NULL AND public.get_auth_organization_id() IS NULL)
+  );
+
+CREATE POLICY "forwarder_requests_org_insert" ON public.forwarder_requests FOR INSERT TO authenticated
+  WITH CHECK (
+    organization_id = public.get_auth_organization_id()
+    OR organization_id IS NULL
+    OR EXISTS (SELECT 1 FROM public.bookings b WHERE b.id = forwarder_requests.booking_id AND (b.user_id = auth.uid() OR b.organization_id = public.get_auth_organization_id()))
+  );
+
+CREATE POLICY "forwarder_requests_org_update" ON public.forwarder_requests FOR UPDATE TO authenticated
+  USING (
+    (organization_id IS NOT NULL AND organization_id = public.get_auth_organization_id())
+    OR EXISTS (SELECT 1 FROM public.bookings b WHERE b.id = forwarder_requests.booking_id AND (b.user_id = auth.uid() OR b.organization_id = public.get_auth_organization_id()))
+    OR (organization_id IS NULL AND public.get_auth_organization_id() IS NULL)
+  );
+
+CREATE POLICY "quotations_org_select" ON public.quotations FOR SELECT TO authenticated
+  USING (
+    (organization_id IS NOT NULL AND organization_id = public.get_auth_organization_id())
+    OR EXISTS (SELECT 1 FROM public.bookings b WHERE b.id = quotations.booking_id AND (b.user_id = auth.uid() OR b.organization_id = public.get_auth_organization_id()))
+    OR (organization_id IS NULL AND public.get_auth_organization_id() IS NULL)
+  );
+
+CREATE POLICY "quotations_org_insert" ON public.quotations FOR INSERT TO authenticated
+  WITH CHECK (
+    organization_id = public.get_auth_organization_id()
+    OR organization_id IS NULL
+    OR EXISTS (SELECT 1 FROM public.bookings b WHERE b.id = quotations.booking_id AND (b.user_id = auth.uid() OR b.organization_id = public.get_auth_organization_id()))
+  );
+
+CREATE POLICY "quotations_org_update" ON public.quotations FOR UPDATE TO authenticated
+  USING (
+    (organization_id IS NOT NULL AND organization_id = public.get_auth_organization_id())
+    OR EXISTS (SELECT 1 FROM public.bookings b WHERE b.id = quotations.booking_id AND (b.user_id = auth.uid() OR b.organization_id = public.get_auth_organization_id()))
+    OR (organization_id IS NULL AND public.get_auth_organization_id() IS NULL)
+  );
+
+CREATE POLICY "quotation_versions_org_select" ON public.quotation_versions FOR SELECT TO authenticated
+  USING (
+    (organization_id IS NOT NULL AND organization_id = public.get_auth_organization_id())
+    OR EXISTS (SELECT 1 FROM public.quotations q WHERE q.id = quotation_versions.quotation_id AND (q.organization_id = public.get_auth_organization_id() OR EXISTS (SELECT 1 FROM public.bookings b WHERE b.id = q.booking_id AND b.user_id = auth.uid())))
+    OR (organization_id IS NULL AND public.get_auth_organization_id() IS NULL)
+  );
+
+CREATE POLICY "quotation_field_extractions_org_select" ON public.quotation_field_extractions FOR SELECT TO authenticated
+  USING (
+    (organization_id IS NOT NULL AND organization_id = public.get_auth_organization_id())
+    OR EXISTS (SELECT 1 FROM public.quotations q WHERE q.id = quotation_field_extractions.quotation_id AND (q.organization_id = public.get_auth_organization_id() OR EXISTS (SELECT 1 FROM public.bookings b WHERE b.id = q.booking_id AND b.user_id = auth.uid())))
+    OR (organization_id IS NULL AND public.get_auth_organization_id() IS NULL)
+  );
+

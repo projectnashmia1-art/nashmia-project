@@ -177,6 +177,8 @@ export function PillToastCard({
   );
 }
 
+const recentPillToasts = new Map<string, number>();
+
 export function showPillToast({
   title,
   description,
@@ -185,6 +187,25 @@ export function showPillToast({
   icon,
   bookingReference,
 }: PillToastOptions) {
+  // Built-in deduplication: suppress duplicate toasts within 4 seconds
+  const descString = typeof description === "string" ? description : "";
+  const dedupeKey = `${type}:${title}:${descString}:${bookingReference || ""}`.toLowerCase();
+  const now = Date.now();
+  const lastShown = recentPillToasts.get(dedupeKey);
+  if (lastShown && now - lastShown < 4000) {
+    return "";
+  }
+  recentPillToasts.set(dedupeKey, now);
+
+  // Clean old entries after 30 seconds
+  if (recentPillToasts.size > 50) {
+    for (const [k, time] of recentPillToasts.entries()) {
+      if (now - time > 30000) {
+        recentPillToasts.delete(k);
+      }
+    }
+  }
+
   return toast.custom(
     (id) => (
       <PillToastCard

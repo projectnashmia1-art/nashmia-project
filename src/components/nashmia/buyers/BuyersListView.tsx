@@ -75,7 +75,103 @@ export function BuyersListView({
 
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-2xs">
-      <div className="overflow-x-auto">
+      {/* Mobile Cards (Visible below md) */}
+      <div className="md:hidden divide-y divide-slate-100">
+        {buyers.map((buyer) => {
+          const initials = getAvatarInitials(buyer.name);
+          const flag = getCountryFlag(buyer.countryCode);
+          return (
+            <div
+              key={buyer.id}
+              onClick={() => onSelectBuyer(buyer)}
+              className="p-4 space-y-3 hover:bg-slate-50/80 active:bg-slate-100/60 transition-colors cursor-pointer"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="relative flex size-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-tr from-[#6A80A9]/20 to-[#C7D5BF]/30 font-bold text-[#0FA3B1] text-xs shadow-2xs">
+                    {initials}
+                    <span className="absolute -bottom-1 -right-1 text-xs" title={buyer.country}>
+                      {flag}
+                    </span>
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-sm font-bold text-slate-900 truncate">
+                        {buyer.name}
+                      </span>
+                      <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-bold text-slate-600">
+                        {buyer.code}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-500 truncate">{buyer.company}</p>
+                  </div>
+                </div>
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold shrink-0",
+                    buyer.status === "Active"
+                      ? "bg-emerald-50 text-emerald-700 border border-emerald-200/60"
+                      : "bg-slate-100 text-slate-600 border border-slate-200",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "size-1.5 rounded-full",
+                      buyer.status === "Active" ? "bg-emerald-500" : "bg-slate-400",
+                    )}
+                  />
+                  {buyer.status}
+                </span>
+              </div>
+
+              {/* Quick details chips */}
+              <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-600 pt-1">
+                <div className="flex items-center gap-1.5 truncate">
+                  <Globe className="size-3 text-slate-400 shrink-0" />
+                  <span className="truncate">{buyer.defaultPort || buyer.country}</span>
+                </div>
+                <div className="flex items-center gap-1.5 truncate">
+                  <Container className="size-3 text-slate-400 shrink-0" />
+                  <span>{buyer.activeShipmentsCount} active units</span>
+                </div>
+              </div>
+
+              {/* Contact actions & Quick links */}
+              <div className="flex items-center justify-between pt-2 border-t border-slate-100 gap-2">
+                <div className="flex items-center gap-2">
+                  {buyer.email && (
+                    <button
+                      type="button"
+                      onClick={(e) => copyToClipboard(buyer.email, "Email", e)}
+                      className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-600 hover:text-slate-900 bg-slate-100 px-2 py-1 rounded-md"
+                    >
+                      <Mail className="size-3" />
+                      <span className="max-w-[120px] truncate">{buyer.email}</span>
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onEditBuyer(buyer);
+                    }}
+                    className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100"
+                    title="Edit Buyer"
+                  >
+                    <Edit2 className="size-3.5" />
+                  </button>
+                  <ArrowRight className="size-4 text-slate-400" />
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Desktop Table (Visible md and up) */}
+      <div className="hidden md:block overflow-x-auto">
         <table className="w-full text-left text-xs">
           <thead>
             <tr className="border-b border-slate-200 bg-slate-50/75 text-[11px] font-bold uppercase tracking-wider text-slate-500">

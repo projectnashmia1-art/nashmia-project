@@ -13,7 +13,7 @@ import {
   UserCheck,
   Warehouse,
 } from "lucide-react";
-import { BUYERS, SUPPLIERS, type BuyerAccount, type SupplierVendor } from "@/lib/booking-data";
+import { type BuyerAccount, type SupplierVendor } from "@/lib/booking-data";
 import { cn } from "@/lib/utils";
 import {
   Dialog,
@@ -26,6 +26,7 @@ import {
 import { toast } from "sonner";
 import { BuyerAccountFull } from "@/lib/buyers-data";
 import { SupplierAccountFull } from "@/lib/suppliers-data";
+import { LifecycleDropdownSelect } from "@/components/nashmia/common/LifecycleDropdownSelect";
 
 interface BookingPartiesSectionProps {
   selectedBuyer: BuyerAccount | null;
@@ -51,8 +52,8 @@ export function BookingPartiesSection({
   onSelectBuyer,
   selectedSupplier,
   onSelectSupplier,
-  availableBuyers = BUYERS,
-  availableSuppliers = SUPPLIERS,
+  availableBuyers = [],
+  availableSuppliers = [],
   onQuickCreateBuyer,
   onQuickCreateSupplier,
   errors,
@@ -102,8 +103,8 @@ export function BookingPartiesSection({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const buyersList = availableBuyers.length > 0 ? availableBuyers : BUYERS;
-  const suppliersList = availableSuppliers.length > 0 ? availableSuppliers : SUPPLIERS;
+  const buyersList = availableBuyers;
+  const suppliersList = availableSuppliers;
 
   const filteredBuyers = buyersList.filter(
     (b) =>
@@ -633,7 +634,7 @@ export function BookingPartiesSection({
 
       {/* QUICK ADD BUYER MODAL */}
       <Dialog open={isQuickAddOpen} onOpenChange={setIsQuickAddOpen}>
-        <DialogContent className="sm:max-w-[480px] rounded-[24px] border-slate-100 bg-white/95 p-6 backdrop-blur-xl">
+        <DialogContent className="w-[95vw] max-w-[95vw] sm:max-w-[480px] max-h-[90vh] overflow-y-auto rounded-[24px] border border-slate-150 bg-white p-5 sm:p-6 shadow-2xl focus:outline-none [scrollbar-width:thin]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-lg font-bold text-black">
               <Building2 className="size-5 text-[#6A80A9]" />
@@ -671,40 +672,44 @@ export function BookingPartiesSection({
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-semibold text-slate-700">Country</label>
-                <select
-                  value={quickCountry}
-                  onChange={(e) => setQuickCountry(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs text-black focus:border-[#6A80A9] focus:outline-none bg-white"
-                >
-                  <option value="United Kingdom">United Kingdom</option>
-                  <option value="Pakistan">Pakistan</option>
-                  <option value="United Arab Emirates">United Arab Emirates</option>
-                  <option value="Germany">Germany</option>
-                  <option value="Spain">Spain</option>
-                  <option value="United States">United States</option>
-                </select>
-              </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <LifecycleDropdownSelect
+                label="Country"
+                value={quickCountry}
+                onChange={(val) => setQuickCountry(val)}
+                options={[
+                  "United Kingdom",
+                  "Pakistan",
+                  "United Arab Emirates",
+                  "Germany",
+                  "Spain",
+                  "United States",
+                ]}
+                placeholder="Country"
+                size="sm"
+                activeColor="blue"
+                triggerClassName="w-full h-9.5 text-xs mt-1"
+              />
 
-              <div>
-                <label className="text-xs font-semibold text-slate-700">Destination Port</label>
-                <select
-                  value={quickPort}
-                  onChange={(e) => setQuickPort(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs text-black focus:border-[#6A80A9] focus:outline-none bg-white"
-                >
-                  <option value="Karachi (KHI)">Karachi (KHI)</option>
-                  <option value="Dubai (DXB)">Dubai (DXB)</option>
-                  <option value="Hamburg (HAM)">Hamburg (HAM)</option>
-                  <option value="Gothenburg (GOT)">Gothenburg (GOT)</option>
-                  <option value="Barcelona (BCN)">Barcelona (BCN)</option>
-                </select>
-              </div>
+              <LifecycleDropdownSelect
+                label="Destination Port"
+                value={quickPort}
+                onChange={(val) => setQuickPort(val)}
+                options={[
+                  "Karachi (KHI)",
+                  "Dubai (DXB)",
+                  "Hamburg (HAM)",
+                  "Gothenburg (GOT)",
+                  "Barcelona (BCN)",
+                ]}
+                placeholder="Destination Port"
+                size="sm"
+                activeColor="blue"
+                triggerClassName="w-full h-9.5 text-xs mt-1"
+              />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="text-xs font-semibold text-slate-700">Contact Person</label>
                 <input
@@ -728,18 +733,18 @@ export function BookingPartiesSection({
               </div>
             </div>
 
-            <DialogFooter className="mt-4 flex items-center justify-end gap-2">
+            <DialogFooter className="mt-4 flex flex-col-reverse sm:flex-row items-center justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setIsQuickAddOpen(false)}
-                className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                className="w-full sm:w-auto rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={isSavingBuyer}
-                className="rounded-xl bg-[#6A80A9] px-5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#586C8F] disabled:opacity-50"
+                className="w-full sm:w-auto rounded-xl bg-[#6A80A9] px-5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#586C8F] disabled:opacity-50 cursor-pointer"
               >
                 {isSavingBuyer ? "Saving to Supabase..." : "Save & Select Buyer"}
               </button>
@@ -750,7 +755,7 @@ export function BookingPartiesSection({
 
       {/* QUICK ADD SUPPLIER MODAL */}
       <Dialog open={isQuickSupplierOpen} onOpenChange={setIsQuickSupplierOpen}>
-        <DialogContent className="sm:max-w-[480px] rounded-[24px] border-slate-100 bg-white/95 p-6 backdrop-blur-xl">
+        <DialogContent className="w-[95vw] max-w-[95vw] sm:max-w-[480px] max-h-[90vh] overflow-y-auto rounded-[24px] border border-slate-150 bg-white p-5 sm:p-6 shadow-2xl focus:outline-none [scrollbar-width:thin]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-lg font-bold text-black">
               <Warehouse className="size-5 text-[#6A80A9]" />
@@ -777,7 +782,7 @@ export function BookingPartiesSection({
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="text-xs font-semibold text-slate-700">City</label>
                 <input
@@ -789,21 +794,23 @@ export function BookingPartiesSection({
                 />
               </div>
 
-              <div>
-                <label className="text-xs font-semibold text-slate-700">Country</label>
-                <select
-                  value={quickSupplierCountry}
-                  onChange={(e) => setQuickSupplierCountry(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-xs text-black focus:border-[#6A80A9] focus:outline-none bg-white"
-                >
-                  <option value="United Kingdom">United Kingdom</option>
-                  <option value="Pakistan">Pakistan</option>
-                  <option value="United Arab Emirates">United Arab Emirates</option>
-                  <option value="Germany">Germany</option>
-                  <option value="Spain">Spain</option>
-                  <option value="United States">United States</option>
-                </select>
-              </div>
+              <LifecycleDropdownSelect
+                label="Country"
+                value={quickSupplierCountry}
+                onChange={(val) => setQuickSupplierCountry(val)}
+                options={[
+                  "United Kingdom",
+                  "Pakistan",
+                  "United Arab Emirates",
+                  "Germany",
+                  "Spain",
+                  "United States",
+                ]}
+                placeholder="Country"
+                size="sm"
+                activeColor="blue"
+                triggerClassName="w-full h-9.5 text-xs mt-1"
+              />
             </div>
 
             <div>
@@ -832,7 +839,7 @@ export function BookingPartiesSection({
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="text-xs font-semibold text-slate-700">Contact Person</label>
                 <input
@@ -856,18 +863,18 @@ export function BookingPartiesSection({
               </div>
             </div>
 
-            <DialogFooter className="mt-4 flex items-center justify-end gap-2">
+            <DialogFooter className="mt-4 flex flex-col-reverse sm:flex-row items-center justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setIsQuickSupplierOpen(false)}
-                className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                className="w-full sm:w-auto rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={isSavingSupplier}
-                className="rounded-xl bg-[#6A80A9] px-5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#586C8F] disabled:opacity-50"
+                className="w-full sm:w-auto rounded-xl bg-[#6A80A9] px-5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#586C8F] disabled:opacity-50 cursor-pointer"
               >
                 {isSavingSupplier ? "Saving to Supabase..." : "Save & Select Supplier"}
               </button>

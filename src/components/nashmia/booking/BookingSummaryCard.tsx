@@ -6,6 +6,7 @@ import {
   Container,
   Copy,
   Hash,
+  HelpCircle,
   Lock,
   Receipt,
   Route,
@@ -23,6 +24,7 @@ import type {
   BookingAgent,
   RateCard,
   ContainerSize,
+  FreightRateMode,
 } from "@/lib/booking-data";
 import { cn } from "@/lib/utils";
 
@@ -39,6 +41,9 @@ interface BookingSummaryCardProps {
   quantity: number;
   loadingDate: string;
   matchedRate: RateCard | null;
+  rateMode?: FreightRateMode;
+  customRate?: number | null;
+  currency?: string;
   onSubmit: () => void;
   onSaveDraft: () => void;
   isSubmitting?: boolean;
@@ -57,6 +62,9 @@ export function BookingSummaryCard({
   quantity,
   loadingDate,
   matchedRate,
+  rateMode = "AGREED_RATE",
+  customRate = null,
+  currency = "USD",
   onSubmit,
   onSaveDraft,
   isSubmitting = false,
@@ -69,7 +77,14 @@ export function BookingSummaryCard({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const totalFreight = matchedRate ? matchedRate.ratePerContainer * quantity : null;
+  const effectiveRate =
+    customRate !== null && customRate !== undefined
+      ? customRate
+      : matchedRate
+        ? matchedRate.ratePerContainer
+        : null;
+
+  const totalFreight = effectiveRate !== null ? effectiveRate * quantity : null;
 
   // Format loading date or range nicely (e.g. "10–20 Aug 2026" or "18 Aug 2026")
   const formattedDate = (() => {
@@ -138,7 +153,10 @@ export function BookingSummaryCard({
           </button>
         </div>
         <div className="mt-1 flex items-baseline justify-between">
-          <span className="text-xl font-black tracking-tight text-black sm:text-2xl font-mono">
+          <span
+            suppressHydrationWarning
+            className="text-xl font-black tracking-tight text-black sm:text-2xl font-mono"
+          >
             {reference}
           </span>
           <span className="text-[10px] font-medium text-slate-400">Automatically generated</span>
@@ -237,33 +255,77 @@ export function BookingSummaryCard({
           </span>
           <span className="font-semibold text-black">{formattedDate}</span>
         </div>
+
+        {/* Rate Mode Indicator */}
+        <div className="flex items-center justify-between py-1 border-b border-slate-100/80">
+          <span className="flex items-center gap-1.5 text-slate-500">
+            {rateMode === "ASKING_RATE" ? (
+              <HelpCircle className="size-3.5 text-[#6A80A9]" />
+            ) : (
+              <Receipt className="size-3.5 text-[#2D3C26]" />
+            )}
+            Freight Mode
+          </span>
+          <span
+            className={cn(
+              "font-semibold rounded-md px-2 py-0.5 text-[11px]",
+              rateMode === "ASKING_RATE"
+                ? "bg-[#6A80A9]/10 text-[#374b6e]"
+                : "bg-[#C7D5BF]/30 text-[#2D3C26]",
+            )}
+          >
+            {rateMode === "ASKING_RATE" ? "Asking Rate" : "Agreed Rate"}
+          </span>
+        </div>
       </div>
 
       {/* RATE SUMMARY SECTION */}
-      <div className="mt-5 rounded-[18px] border border-[#C7D5BF]/90 bg-gradient-to-br from-[#C7D5BF]/20 via-white/90 to-[#E8F1F3]/30 p-4 shadow-sm">
-        <div className="flex items-center justify-between">
-          <span className="text-[11px] font-bold uppercase tracking-wider text-[#2D3C26]">
-            Agreed Total Freight
-          </span>
-          <span className="rounded-full bg-[#2D3C26]/10 px-2 py-0.5 text-[9px] font-bold text-[#2D3C26]">
-            Monthly rate card
-          </span>
-        </div>
-
-        <div className="mt-2 flex items-baseline justify-between">
-          <div>
-            <span className="text-2xl font-black tracking-tight text-black sm:text-3xl">
-              {totalFreight ? `$${totalFreight.toLocaleString()}` : "Rate Pending"}
+      {rateMode === "ASKING_RATE" ? (
+        <div className="mt-5 rounded-[18px] border border-[#6A80A9]/30 bg-gradient-to-br from-[#6A80A9]/10 via-white/90 to-[#E8F1F3]/40 p-4 shadow-sm">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-[#374b6e]">
+              Rate Inquiry Status
             </span>
-            {matchedRate && (
-              <p className="text-[11px] text-slate-600">
-                ${matchedRate.ratePerContainer.toLocaleString()} × {quantity} container
-                {quantity > 1 ? "s" : ""}
-              </p>
-            )}
+            <span className="rounded-full bg-[#6A80A9]/15 px-2 py-0.5 text-[9px] font-bold text-[#374b6e]">
+              Asking Rate
+            </span>
+          </div>
+
+          <div className="mt-2">
+            <span className="text-xl font-black tracking-tight text-black sm:text-2xl">
+              Quotation Requested
+            </span>
+            <p className="mt-1 text-[11px] text-slate-600 leading-tight">
+              The freight forwarder will be asked to provide the freight rate.
+            </p>
           </div>
         </div>
-      </div>
+      ) : (
+        <div className="mt-5 rounded-[18px] border border-[#C7D5BF]/90 bg-gradient-to-br from-[#C7D5BF]/20 via-white/90 to-[#E8F1F3]/30 p-4 shadow-sm">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-[#2D3C26]">
+              Agreed Total Freight
+            </span>
+            <span className="rounded-full bg-[#2D3C26]/10 px-2 py-0.5 text-[9px] font-bold text-[#2D3C26]">
+              {customRate ? "Custom agreed rate" : "Monthly rate card"}
+            </span>
+          </div>
+
+          <div className="mt-2 flex items-baseline justify-between">
+            <div>
+              <span className="text-2xl font-black tracking-tight text-black sm:text-3xl">
+                {totalFreight !== null ? `$${totalFreight.toLocaleString()}` : "Rate Pending"}
+              </span>
+              {effectiveRate !== null && (
+                <p className="text-[11px] text-slate-600">
+                  ${effectiveRate.toLocaleString()} {currency} × {quantity} container
+                  {quantity > 1 ? "s" : ""}
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ACTION CTAs */}
       <div className="mt-6 space-y-2.5">

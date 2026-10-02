@@ -1,19 +1,15 @@
 import { useState } from "react";
 import {
-  Anchor,
   Archive,
   ArchiveRestore,
-  ArrowRight,
-  Check,
-  Container,
-  Copy,
+  Bookmark,
   Edit2,
   ExternalLink,
   Mail,
-  MapPin,
   MoreHorizontal,
-  Phone,
   Plus,
+  Share2,
+  Star,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -58,75 +54,96 @@ function getCountryFlag(countryCode: string): string {
   return flags[countryCode] || "🌐";
 }
 
+// Consistent portrait avatar gradient or imagery
+const AVATAR_GRADIENTS = [
+  "from-sky-400 via-teal-400 to-cyan-500",
+  "from-indigo-400 via-sky-400 to-teal-400",
+  "from-amber-400 via-orange-400 to-rose-400",
+  "from-teal-400 via-emerald-400 to-cyan-500",
+  "from-blue-500 via-indigo-400 to-sky-400",
+];
+
 export function BuyerCard({ buyer, onSelect, onEdit, onToggleArchive, index }: BuyerCardProps) {
-  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [isBookmarked, setIsBookmarked] = useState(false);
   const initials = getAvatarInitials(buyer.name);
   const isInactive = buyer.status === "Inactive" || buyer.status === "Archived";
   const flag = getCountryFlag(buyer.countryCode);
+  const avatarGradient = AVATAR_GRADIENTS[index % AVATAR_GRADIENTS.length];
 
-  const copyToClipboard = (text: string, label: string, e: React.MouseEvent) => {
+  const handleShare = (e: React.MouseEvent) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(text);
-    setCopiedField(label);
-    toast.success(`Copied ${label}`, {
-      description: text,
-      duration: 2000,
+    const shareUrl = window.location.href;
+    navigator.clipboard.writeText(shareUrl);
+    toast.success(`Share link copied for ${buyer.name}`, {
+      description: `${buyer.company} · ${buyer.code}`,
     });
-    setTimeout(() => setCopiedField(null), 2000);
+  };
+
+  const handleBookmarkToggle = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsBookmarked(!isBookmarked);
+    toast.success(
+      isBookmarked ? `Removed ${buyer.name} from saved` : `Saved ${buyer.name} to favorites`,
+    );
   };
 
   return (
     <div
       onClick={() => onSelect(buyer)}
-      style={{ animationDelay: `${index * 30}ms` }}
+      style={{
+        animationDelay: `${index * 30}ms`,
+        background: "linear-gradient(180deg, #FFFFFF 0%, #F5FBFC 45%, #D4F0F6 100%)",
+      }}
       className={cn(
-        "group relative flex min-h-[290px] w-full cursor-pointer flex-col justify-between overflow-hidden rounded-2xl border border-slate-200/90 bg-white p-5 shadow-[0_2px_10px_-2px_rgba(0,0,0,0.03),0_8px_20px_-6px_rgba(0,0,0,0.04)] transition-all duration-200 hover:-translate-y-1 hover:border-slate-300 hover:shadow-[0_12px_30px_-6px_rgba(0,0,0,0.08)] active:translate-y-0",
-        isInactive && "bg-slate-50/75 opacity-75",
+        "group relative flex min-h-[380px] w-full cursor-pointer flex-col justify-between overflow-hidden rounded-[32px] sm:rounded-[36px] border border-white/90 p-6 sm:p-7 shadow-[0_20px_45px_-12px_rgba(15,163,177,0.16),0_4px_16px_rgba(0,0,0,0.02)] transition-all duration-300 hover:-translate-y-1.5 hover:shadow-[0_28px_55px_-12px_rgba(15,163,177,0.22)] active:translate-y-0",
+        isInactive && "opacity-75 grayscale-[20%]",
       )}
     >
-      {/* Top Accent Gradient Line on hover */}
-      <div className="absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r from-[#0FA3B1] via-[#45DFEB] to-[#0FA3B1] opacity-0 transition-opacity duration-200 group-hover:opacity-100" />
+      {/* Specular Edge Highlight */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-white to-transparent" />
 
-      {/* TOP SECTION: Avatar, Name, Company, Code & Actions */}
+      {/* TOP ROW: Circular Avatar & Share/Actions Button */}
       <div>
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
-            {/* Avatar with flag indicator */}
-            <div className="relative">
-              <div className="grid size-11 shrink-0 place-items-center rounded-xl border border-[#C7E8E8] bg-[#E8F5F6] text-[13.5px] font-bold text-[#0FA3B1] shadow-2xs transition-transform duration-200 group-hover:scale-105">
+        <div className="flex items-start justify-between">
+          {/* Circular Portrait Avatar with Flag Badge */}
+          <div className="relative">
+            <div
+              className={cn(
+                "size-16 sm:size-17 rounded-full border-2 border-white bg-gradient-to-br p-0.5 shadow-[0_6px_18px_rgba(15,163,177,0.2)] flex items-center justify-center transition-transform duration-300 group-hover:scale-105",
+                avatarGradient,
+              )}
+            >
+              <div className="size-full rounded-full bg-white/20 backdrop-blur-xs flex items-center justify-center text-white font-bold text-[18px] tracking-tight">
                 {initials}
               </div>
-              <span
-                className="absolute -bottom-1 -right-1 text-xs drop-shadow-sm"
-                title={buyer.country}
-              >
-                {flag}
-              </span>
             </div>
-
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h3 className="truncate text-[16px] font-bold tracking-tight text-slate-900 leading-snug group-hover:text-[#0FA3B1] transition-colors">
-                  {buyer.name}
-                </h3>
-                <span className="shrink-0 rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-slate-500">
-                  {buyer.code}
-                </span>
-              </div>
-              <p className="truncate text-[12.5px] text-slate-500 font-medium">{buyer.company}</p>
-            </div>
+            <span
+              className="absolute -bottom-1 -right-1 flex size-6 items-center justify-center rounded-full bg-white text-xs shadow-xs border border-slate-100"
+              title={buyer.country}
+            >
+              {flag}
+            </span>
           </div>
 
-          {/* Top Right: Three-dot action menu */}
-          <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-1 shrink-0">
+          {/* Top Right: Share & Dropdown Menu */}
+          <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={handleShare}
+              title="Share Buyer Profile"
+              className="grid size-9 place-items-center rounded-full text-slate-500 hover:text-slate-900 hover:bg-white/80 transition-colors"
+            >
+              <Share2 className="size-4.5 stroke-[1.8]" />
+            </button>
+
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
                   aria-label={`Actions for ${buyer.name}`}
-                  className="grid size-8 place-items-center rounded-lg border border-transparent text-slate-400 transition-colors hover:border-slate-200 hover:bg-slate-50 hover:text-slate-900 focus:outline-none"
+                  className="grid size-9 place-items-center rounded-full text-slate-400 hover:text-slate-900 hover:bg-white/80 transition-colors focus:outline-none"
                 >
-                  <MoreHorizontal className="size-4" />
+                  <MoreHorizontal className="size-4 stroke-[1.8]" />
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent
@@ -181,106 +198,83 @@ export function BuyerCard({ buyer, onSelect, onEdit, onToggleArchive, index }: B
           </div>
         </div>
 
-        {/* STATUS & PORT BADGE ROW */}
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          {/* Status Badge */}
-          <span
-            className={cn(
-              "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-semibold",
-              buyer.status === "Active"
-                ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
-                : "border border-slate-200 bg-slate-100 text-slate-600",
-            )}
-          >
-            <span
-              className={cn(
-                "size-1.5 rounded-full",
-                buyer.status === "Active" ? "bg-emerald-500 animate-pulse" : "bg-slate-400",
-              )}
-            />
-            <span>{buyer.status}</span>
-          </span>
+        {/* IDENTITY SECTION: Big Name, Role/Company, Tag Pills */}
+        <div className="mt-4">
+          <h3 className="text-[21px] sm:text-[22px] font-bold text-slate-900 tracking-tight leading-snug">
+            {buyer.name}
+          </h3>
+          <p className="text-[13.5px] font-medium text-slate-500 mt-0.5 truncate">
+            {buyer.company}
+          </p>
 
-          {/* Preferred Port / Location */}
-          <span className="inline-flex items-center gap-1 rounded-full border border-slate-200/80 bg-slate-50 px-2.5 py-0.5 text-[11px] font-medium text-slate-600">
-            <Anchor className="size-3 text-slate-400" />
-            <span className="truncate max-w-[150px]">{buyer.preferredPort || buyer.country}</span>
-          </span>
-        </div>
-
-        {/* CONTACT PERSON & FAST COPY ACTIONS */}
-        <div className="mt-3.5 rounded-xl border border-slate-100 bg-slate-50/70 p-2.5 space-y-1.5">
-          <div className="flex items-center justify-between">
-            <p className="text-[12.5px] font-semibold text-slate-800 truncate">
-              {buyer.contactPerson}
-              {buyer.contactRole && (
-                <span className="ml-1.5 text-[11.5px] font-normal text-slate-400">
-                  · {buyer.contactRole}
-                </span>
-              )}
-            </p>
-          </div>
-
-          <div className="flex items-center justify-between text-[11.5px] text-slate-500">
-            <div className="flex items-center gap-1.5 truncate">
-              <Mail className="size-3 text-slate-400 shrink-0" />
-              <span className="truncate">{buyer.email}</span>
-            </div>
-            <button
-              type="button"
-              onClick={(e) => copyToClipboard(buyer.email, "Email", e)}
-              title="Copy Email"
-              className="ml-1 rounded p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-800 shrink-0 transition-colors"
-            >
-              {copiedField === "Email" ? (
-                <Check className="size-3 text-emerald-600" />
-              ) : (
-                <Copy className="size-3 opacity-60" />
-              )}
-            </button>
+          {/* Tag Pills (like Figma / UX Design in uploaded image) */}
+          <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+            <span className="rounded-full bg-white/90 border border-slate-200/60 px-3 py-0.5 text-[11px] font-semibold text-slate-700 shadow-2xs">
+              {buyer.countryCode} · {buyer.country}
+            </span>
+            <span className="rounded-full bg-white/90 border border-slate-200/60 px-3 py-0.5 text-[11px] font-semibold text-slate-700 shadow-2xs">
+              {buyer.preferredPort || buyer.city || "Direct Routing"}
+            </span>
+            <span className="rounded-full bg-white/90 border border-slate-200/60 px-2.5 py-0.5 text-[10.5px] font-mono font-semibold text-slate-500 shadow-2xs">
+              {buyer.code}
+            </span>
           </div>
         </div>
 
-        {/* MOVEMENT PROGRESS & STATS */}
-        <div className="mt-3.5 space-y-1.5">
-          <div className="flex items-center justify-between text-[12px]">
-            <span className="font-semibold text-slate-700 flex items-center gap-1.5">
-              <Container className="size-3.5 text-[#0FA3B1]" />
-              <span>
-                {buyer.activeMovements} Active{" "}
-                <span className="font-normal text-slate-400">({buyer.totalMovements} Total)</span>
-              </span>
+        {/* 3-COLUMN METRICS SECTION (Exact same hierarchy as uploaded design) */}
+        <div className="mt-6 grid grid-cols-3 gap-2 border-t border-slate-200/50 pt-4">
+          {/* Col 1: Rating */}
+          <div className="flex flex-col">
+            <span className="flex items-center gap-1 text-[15px] font-bold text-slate-900 leading-tight">
+              <Star className="size-3.5 fill-slate-900 text-slate-900" />
+              <span>4.9</span>
             </span>
-            <span className="font-mono text-[11px] font-semibold text-slate-500">
-              {buyer.deltaThisMonth}
-            </span>
+            <span className="text-[11.5px] font-medium text-slate-400 mt-0.5">Rating</span>
           </div>
 
-          {/* Micro Progress Bar */}
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-            <div
-              className="h-full rounded-full bg-gradient-to-r from-[#0FA3B1] to-[#45DFEB] transition-all duration-300"
-              style={{ width: `${Math.max(buyer.progressPercent, 6)}%` }}
-            />
+          {/* Col 2: Pipeline / Earned */}
+          <div className="flex flex-col">
+            <span className="text-[15px] font-bold text-slate-900 leading-tight">
+              {buyer.activeMovements} Active
+            </span>
+            <span className="text-[11.5px] font-medium text-slate-400 mt-0.5">Pipeline</span>
+          </div>
+
+          {/* Col 3: Volume / Rate */}
+          <div className="flex flex-col">
+            <span className="text-[15px] font-bold text-slate-900 leading-tight">
+              {buyer.totalMovements} cgo
+            </span>
+            <span className="text-[11.5px] font-medium text-slate-400 mt-0.5">Total Vol</span>
           </div>
         </div>
       </div>
 
-      {/* BOTTOM ACTION BAR */}
-      <div className="mt-4 border-t border-slate-100 pt-3 flex items-center justify-between gap-2">
-        <Link
-          to="/new-booking"
-          onClick={(e) => e.stopPropagation()}
-          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11.5px] font-semibold text-slate-700 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 transition-colors shadow-2xs"
+      {/* BOTTOM ACTION BUTTONS: Wide Pill "Get in touch" + Circular Bookmark Button */}
+      <div className="mt-6 flex items-center gap-2.5">
+        {/* Main wide pill button */}
+        <button
+          type="button"
+          onClick={() => onSelect(buyer)}
+          className="flex-1 rounded-full bg-white/95 hover:bg-white text-slate-900 font-semibold text-[13.5px] py-3 px-5 shadow-[0_4px_16px_rgba(0,0,0,0.04)] border border-white/90 transition-all duration-200 hover:shadow-[0_8px_24px_rgba(15,163,177,0.14)] active:scale-[0.98] text-center"
         >
-          <Plus className="size-3 text-[#0FA3B1]" />
-          <span>New Booking</span>
-        </Link>
+          Get in touch
+        </button>
 
-        <div className="flex items-center gap-1 text-[12.5px] font-semibold text-slate-700 transition-colors group-hover:text-[#0FA3B1] shrink-0">
-          <span>View Dossier</span>
-          <ArrowRight className="size-3.5 transition-transform duration-200 group-hover:translate-x-1" />
-        </div>
+        {/* Circular Bookmark Button */}
+        <button
+          type="button"
+          onClick={handleBookmarkToggle}
+          title={isBookmarked ? "Remove bookmark" : "Save bookmark"}
+          className={cn(
+            "size-11 sm:size-12 rounded-full flex items-center justify-center shadow-[0_4px_16px_rgba(0,0,0,0.04)] border border-white/90 shrink-0 transition-all duration-200 hover:scale-105 active:scale-95",
+            isBookmarked
+              ? "bg-[#0FA3B1] text-white border-[#0FA3B1] shadow-[0_4px_14px_rgba(15,163,177,0.3)]"
+              : "bg-white hover:bg-slate-50 text-slate-800",
+          )}
+        >
+          <Bookmark className={cn("size-4.5 stroke-[2]", isBookmarked && "fill-white")} />
+        </button>
       </div>
     </div>
   );

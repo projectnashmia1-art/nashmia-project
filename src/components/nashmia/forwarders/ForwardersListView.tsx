@@ -64,7 +64,111 @@ export function ForwardersListView({
 
   return (
     <div className="relative overflow-hidden rounded-[20px] border border-white/85 bg-white/80 shadow-[0_12px_36px_rgba(15,23,42,0.035)] backdrop-blur-2xl">
-      <div className="overflow-x-auto">
+      {/* Mobile Cards (Visible below md) */}
+      <div className="md:hidden divide-y divide-slate-100/90">
+        {forwarders.map((fwd) => {
+          const initials = getAvatarInitials(fwd.name);
+          const isInactive = fwd.status === "Inactive" || fwd.status === "Archived";
+
+          return (
+            <div
+              key={fwd.id}
+              onClick={() => onSelectForwarder(fwd)}
+              className={cn(
+                "p-4 space-y-3 cursor-pointer transition-colors active:bg-slate-50",
+                isInactive ? "opacity-75 bg-slate-50/50" : "hover:bg-[#E8F1F3]/25",
+              )}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="grid size-11 shrink-0 place-items-center rounded-xl border border-[#6A80A9]/20 bg-[#E8F1F3] text-[13px] font-bold text-[#6A80A9] shadow-2xs">
+                    {initials}
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-bold text-slate-900 truncate">{fwd.name}</h3>
+                    <p className="text-xs text-slate-500 truncate flex items-center gap-1">
+                      <User className="size-3 text-slate-400 shrink-0" />
+                      <span>{fwd.contactPerson}</span>
+                    </p>
+                  </div>
+                </div>
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold shrink-0",
+                    fwd.status === "Active"
+                      ? "bg-emerald-50 text-emerald-700 border border-emerald-200/60"
+                      : "bg-slate-100 text-slate-600 border border-slate-200",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "size-1.5 rounded-full",
+                      fwd.status === "Active" ? "bg-emerald-500" : "bg-slate-400",
+                    )}
+                  />
+                  {fwd.status}
+                </span>
+              </div>
+
+              {/* Shipping lines chips & Bookings count */}
+              <div className="flex items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                  <Ship className="size-3 text-slate-400 shrink-0" />
+                  {fwd.shippingLines.slice(0, 3).map((sl) => (
+                    <span
+                      key={sl}
+                      className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 truncate"
+                    >
+                      {sl}
+                    </span>
+                  ))}
+                  {fwd.shippingLines.length > 3 && (
+                    <span className="text-[10px] text-slate-400 font-medium">
+                      +{fwd.shippingLines.length - 3}
+                    </span>
+                  )}
+                </div>
+                <span className="rounded-full bg-[#E8F1F3] px-2 py-0.5 text-[11px] font-bold text-[#24828E] shrink-0">
+                  {fwd.activeBookingsCount} bookings
+                </span>
+              </div>
+
+              {/* Contact actions */}
+              <div className="flex items-center justify-between pt-2 border-t border-slate-100 gap-2">
+                <div className="flex items-center gap-2">
+                  {fwd.email && (
+                    <button
+                      type="button"
+                      onClick={(e) => copyToClipboard(e, fwd.email, `m-email-${fwd.id}`, "Email")}
+                      className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-600 hover:text-slate-900 bg-slate-100 px-2 py-1 rounded-md"
+                    >
+                      <Mail className="size-3" />
+                      <span className="max-w-[120px] truncate">{fwd.email}</span>
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onEditForwarder(fwd);
+                    }}
+                    className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100"
+                    title="Edit Forwarder"
+                  >
+                    <Edit2 className="size-3.5" />
+                  </button>
+                  <ArrowRight className="size-4 text-slate-400" />
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Desktop Table (Visible md and up) */}
+      <div className="hidden md:block overflow-x-auto">
         <table className="w-full text-left border-collapse min-w-[980px]">
           <thead>
             <tr className="border-b border-slate-100/90 bg-slate-50/40 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">

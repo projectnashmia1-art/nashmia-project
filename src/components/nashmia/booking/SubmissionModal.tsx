@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import {
   ArrowRight,
   Check,
@@ -93,7 +94,30 @@ export function SubmissionModal({
     return () => clearInterval(interval);
   }, [isOpen]);
 
+  // Lock body scroll while modal is visible
+  useEffect(() => {
+    if (!isOpen) return;
+    const originalStyle = window.getComputedStyle(document.body).overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = originalStyle;
+    };
+  }, [isOpen]);
+
+  // Keyboard shortcut: Escape to close modal when completed
+  useEffect(() => {
+    if (!isOpen || !isCompleted) return;
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [isOpen, isCompleted, onClose]);
+
   if (!isOpen) return null;
+  if (typeof document === "undefined") return null;
 
   const handleCopyRef = () => {
     navigator.clipboard.writeText(reference);
@@ -101,11 +125,33 @@ export function SubmissionModal({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const totalFreight = matchedRate ? matchedRate.ratePerContainer * quantity : 4200;
+  const totalFreight = matchedRate ? matchedRate.ratePerContainer * quantity : 0;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="glass-card-strong relative w-full max-w-lg overflow-hidden rounded-[28px] border border-white/95 p-6 sm:p-8 shadow-[0_25px_70px_rgba(15,23,42,0.18)] animate-in zoom-in-95 duration-300">
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto">
+      {/* Full-screen Dark Backdrop */}
+      <div
+        className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200 ease-out"
+        onClick={() => {
+          if (isCompleted) onClose();
+        }}
+        aria-hidden="true"
+      />
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className={cn(
+          "glass-card-strong relative z-10 w-full max-w-lg bg-white overflow-hidden shadow-[0_25px_70px_rgba(15,23,42,0.22)] transition-all will-change-[transform,opacity] outline-none",
+          // Mobile bottom sheet
+          "max-h-[90vh] rounded-t-[28px] rounded-b-none p-5 pb-8 overflow-y-auto overflow-x-hidden animate-in slide-in-from-bottom duration-240 ease-[cubic-bezier(0.16,1,0.3,1)]",
+          // Desktop & Tablet centered dialog
+          "sm:slide-in-from-bottom-0 sm:zoom-in-95 sm:fade-in-0 sm:duration-200 sm:ease-[cubic-bezier(0.16,1,0.3,1)] sm:rounded-[28px] sm:p-8 sm:border sm:border-white/95",
+        )}
+      >
+        {/* Mobile Drag Handle */}
+        <div
+          className="mx-auto -mt-1 mb-3.5 h-1.5 w-12 shrink-0 rounded-full bg-slate-300 sm:hidden"
+          aria-hidden="true"
+        />
         {/* Top ambient highlight */}
         <div className="pointer-events-none absolute -top-24 left-1/2 -translate-x-1/2 size-48 rounded-full bg-[#6A80A9]/20 blur-3xl" />
 
@@ -215,22 +261,27 @@ export function SubmissionModal({
             <div className="rounded-2xl border border-slate-100 bg-white/80 p-4 text-xs space-y-2">
               <div className="flex justify-between border-b border-slate-100 pb-1.5">
                 <span className="text-slate-500">Buyer</span>
-                <span className="font-semibold text-black">{buyer?.name ?? "New Henna"}</span>
+                <span className="font-semibold text-black">
+                  {buyer?.name || buyer?.company || "Direct Buyer"}
+                </span>
               </div>
               <div className="flex justify-between border-b border-slate-100 pb-1.5">
                 <span className="text-slate-500">Pickup Supplier</span>
-                <span className="font-semibold text-black">{supplier?.name ?? "UK Supplier"}</span>
+                <span className="font-semibold text-black">
+                  {supplier?.name || "Direct Supplier"}
+                </span>
               </div>
               <div className="flex justify-between border-b border-slate-100 pb-1.5">
                 <span className="text-slate-500">Load Point</span>
                 <span className="font-semibold text-black">
-                  {supplier?.loadPoint ?? "London Warehouse"}
+                  {supplier?.loadPoint || supplier?.city || "Supplier Hub"}
                 </span>
               </div>
               <div className="flex justify-between border-b border-slate-100 pb-1.5">
                 <span className="text-slate-500">Route & Carrier</span>
                 <span className="font-semibold text-black">
-                  {pol?.code ?? "FXT"} → {pod?.code ?? "KHI"} • {shippingLine?.name ?? "MSC"}
+                  {pol?.code || "POL"} → {pod?.code || "POD"} •{" "}
+                  {shippingLine?.name || "Ocean Carrier"}
                 </span>
               </div>
               <div className="flex justify-between border-b border-slate-100 pb-1.5">
@@ -241,7 +292,9 @@ export function SubmissionModal({
               </div>
               <div className="flex justify-between pt-0.5">
                 <span className="text-slate-500">Agreed Rate</span>
-                <span className="font-bold text-black">${totalFreight.toLocaleString()} USD</span>
+                <span className="font-bold text-black">
+                  {totalFreight > 0 ? `$${totalFreight.toLocaleString()} USD` : "Pending Quote"}
+                </span>
               </div>
             </div>
 
@@ -279,6 +332,7 @@ export function SubmissionModal({
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

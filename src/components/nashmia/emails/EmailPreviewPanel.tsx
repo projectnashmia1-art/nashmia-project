@@ -41,10 +41,12 @@ import {
   processAutomaticMovementConfirmation,
   type MovementConfirmationResult,
 } from "@/lib/movement-confirmation-engine";
+import { EmailPreviewSkeleton } from "@/components/nashmia/skeletons/EmailSkeletons";
 
 interface EmailPreviewPanelProps {
   email: EmailMessageRecord | null;
   allEmails?: EmailMessageRecord[];
+  isLoading?: boolean;
   onSelectEmail?: (email: EmailMessageRecord) => void;
   onRetry?: (email: EmailMessageRecord) => void;
   onOpenDraftModal?: (email: EmailMessageRecord) => void;
@@ -54,12 +56,13 @@ interface EmailPreviewPanelProps {
 export function EmailPreviewPanel({
   email,
   allEmails = [],
+  isLoading = false,
   onSelectEmail,
   onRetry,
   onOpenDraftModal,
   isRetrying = false,
 }: EmailPreviewPanelProps) {
-  const { profile } = useAuth();
+  const { user, profile } = useAuth();
   const queryClient = useQueryClient();
   const [isStarred, setIsStarred] = useState(false);
   const [quickReplyText, setQuickReplyText] = useState("");
@@ -135,6 +138,10 @@ export function EmailPreviewPanel({
   };
 
   if (!email) {
+    if (isLoading) {
+      return <EmailPreviewSkeleton />;
+    }
+
     return (
       <div className="hidden lg:flex flex-1 items-center justify-center bg-white rounded-2xl border border-slate-200/80 p-12 text-center shadow-xs">
         <div className="max-w-xs space-y-3">
@@ -160,9 +167,9 @@ export function EmailPreviewPanel({
     email.direction === "outbound" ? email.toEmail : email.fromEmail || "smith@gmail.com";
   const senderAvatar = getSenderAvatar(senderName, senderEmail);
 
-  const currentUserAvatar =
-    profile?.avatar_url ||
-    "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80";
+  const currentUserName =
+    profile?.full_name || profile?.name || user?.email?.split("@")[0] || "You";
+  const currentUserInitial = (currentUserName[0] || "Y").toUpperCase();
 
   const formattedTime = formatCardTimestamp(email.sentAt || email.createdAt);
 
@@ -533,12 +540,15 @@ export function EmailPreviewPanel({
       {/* 2. Sender Profile Header */}
       <div className="flex items-center justify-between px-6 pt-5 pb-3">
         <div className="flex items-center gap-3.5">
-          <img
-            src={senderAvatar}
-            alt={senderName}
-            className="size-12 rounded-full object-cover ring-1 ring-slate-100"
-            referrerPolicy="no-referrer"
-          />
+          <div className="size-11 rounded-full grid place-items-center bg-slate-100 border border-slate-200 text-slate-700 font-bold text-xs tracking-wider shadow-2xs shrink-0">
+            {senderName
+              .split(" ")
+              .map((n) => n[0])
+              .filter(Boolean)
+              .slice(0, 2)
+              .join("")
+              .toUpperCase() || "EM"}
+          </div>
           <div>
             <h3 className="text-[16px] font-bold text-slate-900 leading-tight">{senderName}</h3>
             <p className="text-xs text-slate-400 font-normal mt-0.5">&lt;{senderEmail}&gt;</p>
@@ -787,12 +797,9 @@ export function EmailPreviewPanel({
       {/* 6. Bottom Reply Input Bar (Matching Reference Design) */}
       <div className="p-4 px-6 border-t border-slate-100 bg-white">
         <div className="flex items-center gap-3 bg-slate-50 rounded-2xl border border-slate-200/80 px-4 py-2.5 focus-within:bg-white focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-500/10 transition-all">
-          <img
-            src={currentUserAvatar}
-            alt="You"
-            className="size-8 rounded-full object-cover ring-1 ring-slate-100 shrink-0"
-            referrerPolicy="no-referrer"
-          />
+          <div className="size-8 rounded-full grid place-items-center bg-[#0FA3B1] text-white font-bold text-xs tracking-wider shadow-2xs shrink-0">
+            {currentUserInitial}
+          </div>
           <input
             type="text"
             value={quickReplyText}

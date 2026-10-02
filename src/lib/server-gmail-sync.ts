@@ -11,9 +11,19 @@ import { processIncomingEmailReply } from "./incoming-reply-processor";
 import { getOrRefreshActiveGmailConnection } from "./server-gmail-token";
 
 interface MessagePartPayload {
+  filename?: string;
   mimeType?: string;
-  body?: { data?: string };
+  body?: { data?: string; attachmentId?: string; size?: number };
   parts?: MessagePartPayload[];
+}
+
+export interface ExtractedAttachmentInfo {
+  filename: string;
+  mimeType: string;
+  size: number;
+  attachmentId?: string;
+  data?: string;
+  content?: string;
 }
 
 function safeBase64UrlDecode(input: string): string {
@@ -35,15 +45,58 @@ function safeBase64UrlDecode(input: string): string {
   }
 }
 
+function extractExtensionFromMime(mimeType?: string): string {
+  if (!mimeType) return "pdf";
+  if (mimeType.includes("pdf")) return "pdf";
+  if (mimeType.includes("sheet") || mimeType.includes("excel") || mimeType.includes("csv"))
+    return "xlsx";
+  if (mimeType.includes("word") || mimeType.includes("document")) return "docx";
+  if (mimeType.includes("image") || mimeType.includes("jpeg") || mimeType.includes("png"))
+    return "jpg";
+  if (mimeType.includes("text")) return "txt";
+  return "pdf";
+}
+
 function extractBodyFromPayload(payload: MessagePartPayload | undefined): {
   text: string;
   html?: string;
+  attachments: ExtractedAttachmentInfo[];
 } {
   let text = "";
   let html = "";
+  const attachments: ExtractedAttachmentInfo[] = [];
 
   function walk(part: MessagePartPayload | undefined) {
     if (!part) return;
+
+    const hasFilename = Boolean(part.filename && part.filename.trim().length > 0);
+    const hasAttachmentId = Boolean(part.body?.attachmentId);
+    const isAttachment =
+      hasFilename ||
+      hasAttachmentId ||
+      (part.mimeType &&
+        ![
+          "text/plain",
+          "text/html",
+          "multipart/alternative",
+          "multipart/mixed",
+          "multipart/related",
+        ].includes(part.mimeType));
+
+    if (
+      isAttachment &&
+      (hasAttachmentId || (part.body?.size && part.body.size > 0) || part.body?.data)
+    ) {
+      const fallbackName = `attachment_${attachments.length + 1}.${extractExtensionFromMime(part.mimeType)}`;
+      attachments.push({
+        filename: part.filename?.trim() || fallbackName,
+        mimeType: part.mimeType || "application/octet-stream",
+        size: part.body?.size || 0,
+        attachmentId: part.body?.attachmentId,
+        // Attachment metadata only - no file binary storage
+      });
+    }
+
     if (part.mimeType === "text/plain" && part.body?.data && !text) {
       text = safeBase64UrlDecode(part.body.data);
     } else if (part.mimeType === "text/html" && part.body?.data && !html) {
@@ -57,7 +110,7 @@ function extractBodyFromPayload(payload: MessagePartPayload | undefined): {
   }
 
   walk(payload);
-  return { text, html: html || undefined };
+  return { text, html: html || undefined, attachments };
 }
 
 function parseEmailAddress(raw: string): { name: string; email: string } {
@@ -394,7 +447,7 @@ export async function executeServerGmailSync(
 
     try {
       const maxResults = options.maxResults || 25;
-      // Fetch incoming inbox messages
+      // Fetch incoming inbox messages (query recent messages to catch forwarder replies immediately)
       let listRes = await fetch(
         `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=${maxResults}&q=is:inbox`,
         {
@@ -407,8 +460,8 @@ export async function executeServerGmailSync(
           `[ServerGmailSync] Gmail access token expired (401) for ${accountEmail}. Attempting auto-refresh via refresh_token...`,
         );
         const refreshed = await getOrRefreshActiveGmailConnection(conn.user_id, true);
-        if (refreshed?.access_token) {
-          token = refreshed.access_token;
+        if (refreshed?.connection?.access_token) {
+          token = refreshed.connection.access_token;
           listRes = await fetch(
             `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=${maxResults}&q=is:inbox`,
             {
@@ -419,15 +472,21 @@ export async function executeServerGmailSync(
       }
 
       if (!listRes.ok) {
-        if (listRes.status === 403 || listRes.status === 429) {
-          quotaCooldownUntil = Date.now() + 90000;
+        if (listRes.status === 401) {
           console.warn(
-            `[ServerGmailSync] Gmail API quota/rate limit reached (HTTP ${listRes.status}) for ${accountEmail}. Initiating 90s cooldown to preserve sending quota.`,
+            `[ServerGmailSync] Gmail access token for ${accountEmail} is expired or invalid (401). Skipping synchronization until re-authenticated.`,
+          );
+          continue;
+        }
+        if (listRes.status === 403 || listRes.status === 429) {
+          quotaCooldownUntil = Date.now() + 30000;
+          console.warn(
+            `[ServerGmailSync] Gmail API quota limit reached (HTTP ${listRes.status}) for ${accountEmail}. Initiating 30s cooldown.`,
           );
           break;
         }
         console.warn(
-          `[ServerGmailSync] Gmail API list error for ${accountEmail} (${listRes.status})`,
+          `[ServerGmailSync] Gmail API list notice for ${accountEmail} (${listRes.status})`,
         );
         continue;
       }
@@ -467,19 +526,32 @@ export async function executeServerGmailSync(
       );
 
       for (const msgStub of newMessagesToFetch) {
-        // Step 2: Fetch message details from Gmail
-        const msgRes = await fetch(
+        // Step 2: Fetch message details from Gmail with auto token-refresh on 401
+        let msgRes = await fetch(
           `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgStub.id}?format=full`,
           {
             headers: { Authorization: `Bearer ${token}` },
           },
         );
 
+        if (!msgRes.ok && msgRes.status === 401 && conn.id !== "direct-token") {
+          const refreshed = await getOrRefreshActiveGmailConnection(conn.user_id, true);
+          if (refreshed?.connection?.access_token) {
+            token = refreshed.connection.access_token;
+            msgRes = await fetch(
+              `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgStub.id}?format=full`,
+              {
+                headers: { Authorization: `Bearer ${token}` },
+              },
+            );
+          }
+        }
+
         if (!msgRes.ok) {
           if (msgRes.status === 403 || msgRes.status === 429) {
-            quotaCooldownUntil = Date.now() + 90000;
+            quotaCooldownUntil = Date.now() + 30000;
             console.warn(
-              `[ServerGmailSync] Quota limit hit during message detail fetch. Initiating 90s cooldown.`,
+              `[ServerGmailSync] Quota limit hit during message detail fetch. Initiating 30s cooldown.`,
             );
             break;
           }
@@ -495,6 +567,9 @@ export async function executeServerGmailSync(
         const fromRaw = getHeader("From") || "Unknown Sender";
         const toRaw = getHeader("To") || accountEmail;
         const dateHeader = getHeader("Date") || new Date().toISOString();
+        const inReplyTo = getHeader("In-Reply-To") || getHeader("in-reply-to") || null;
+        const references = getHeader("References") || getHeader("references") || null;
+        const messageIdHeader = getHeader("Message-ID") || getHeader("Message-Id") || null;
 
         const parsedFrom = parseEmailAddress(fromRaw);
         const parsedTo = parseEmailAddress(toRaw);
@@ -520,6 +595,14 @@ export async function executeServerGmailSync(
         }
 
         const extracted = extractBodyFromPayload(fullMsg.payload);
+
+        // Detect attachments and extract ONLY metadata - do not download or store actual files
+        if (extracted.attachments && extracted.attachments.length > 0) {
+          console.log(
+            `[ServerGmailSync] 📎 Detected ${extracted.attachments.length} attachment(s) for message ${msgStub.id}. Saving metadata only (no file download/storage).`,
+          );
+        }
+
         const snippet = fullMsg.snippet || "";
         const body = extracted.text || snippet;
         const bodyHtml = extracted.html || (body ? body.replace(/\n/g, "<br/>") : null);
@@ -529,6 +612,9 @@ export async function executeServerGmailSync(
         const matchResult = await executeMovementForwarderMatch(supabase, {
           gmailThreadId: msgStub.threadId,
           gmailMessageId: msgStub.id,
+          inReplyTo,
+          references,
+          headers,
           subject,
           body,
           snippet,
@@ -574,6 +660,7 @@ export async function executeServerGmailSync(
           match_status: matchResult.matchStatus,
           match_reason: matchResult.matchReason,
           matched_by: matchResult.matchedBy,
+          attachments: extracted.attachments || [],
         };
 
         // Check if already in email_messages
@@ -593,23 +680,70 @@ export async function executeServerGmailSync(
             continue;
           }
 
-          const { data: newMsg, error: insErr } = await supabase
+          const referencesStr = Array.isArray(references)
+            ? references.join(" ")
+            : references || null;
+
+          const primaryPayload = {
+            thread_id: threadId,
+            sender_email: parsedFrom.email || "unknown@forwarder.com",
+            recipient_email: parsedTo.email || accountEmail || "operations@nashmiaindustries.com",
+            sender_name: parsedFrom.name || "Forwarder",
+            subject: subject || "(No Subject)",
+            body: body || "",
+            body_html: bodyHtml,
+            direction: "Inbound",
+            sent_at: receivedAt,
+            gmail_message_id: msgStub.id,
+            attachments: extracted.attachments || [],
+            raw_headers: {
+              ...initialRawHeaders,
+              in_reply_to: inReplyTo || null,
+              references_header: referencesStr,
+              cleaned_body: body ? body.slice(0, 4000) : null,
+              processing_status: "PROCESSING",
+              matching_status: matchResult.matchStatus,
+            },
+            created_at: nowIso,
+          };
+
+          let { data: newMsg, error: insErr } = await supabase
             .from("email_messages")
-            .insert({
+            .insert(primaryPayload)
+            .select()
+            .maybeSingle();
+
+          // Fallback: If PostgREST reports missing columns in older schema caches
+          if (
+            insErr &&
+            (insErr.code === "PGRST204" ||
+              insErr.message?.includes("column") ||
+              insErr.message?.includes("schema cache"))
+          ) {
+            console.warn(
+              `[ServerGmailSync] Column schema cache mismatch (${insErr.message}). Retrying with resilient baseline payload.`,
+            );
+            const fallbackPayload = {
               thread_id: threadId,
               sender_email: parsedFrom.email || "unknown@forwarder.com",
               recipient_email: parsedTo.email || accountEmail || "operations@nashmiaindustries.com",
-              sender_name: parsedFrom.name || "Forwarder",
               subject: subject || "(No Subject)",
               body: body || "",
-              body_html: bodyHtml,
               direction: "Inbound",
               sent_at: receivedAt,
               gmail_message_id: msgStub.id,
-              raw_headers: initialRawHeaders,
-            })
-            .select()
-            .maybeSingle();
+              raw_headers: primaryPayload.raw_headers,
+            };
+
+            const retryResult = await supabase
+              .from("email_messages")
+              .insert(fallbackPayload)
+              .select()
+              .maybeSingle();
+
+            newMsg = retryResult.data;
+            insErr = retryResult.error;
+          }
 
           if (insErr) {
             // Check if duplicate key violation (23505) - message was inserted concurrently
@@ -661,6 +795,10 @@ export async function executeServerGmailSync(
           emailMessageId: insertedMsg.id,
           gmailThreadId: msgStub.threadId,
           gmailMessageId: msgStub.id,
+          inReplyTo,
+          references,
+          headers,
+          rawHeaders: initialRawHeaders,
           subject,
           body,
           snippet,
@@ -669,6 +807,7 @@ export async function executeServerGmailSync(
           recipientEmail: parsedTo.email || accountEmail,
           direction: "Inbound",
           userId: accountUserId,
+          attachments: extracted.attachments || [],
         });
 
         const confirmationResult = replyResult.confirmationResult;
@@ -708,7 +847,7 @@ export async function executeServerGmailSync(
           let confEventTitle = "Forwarder Reply Evaluated";
           if (confirmationResult.confirmationStatus === "CONFIRMED") {
             confEventTitle =
-              step5Result?.actionTaken === "AUTO_CONFIRMED"
+              replyResult.actionTaken === "AUTO_CONFIRMED"
                 ? "Movement Auto-Confirmed"
                 : "Forwarder Confirmation Detected";
           } else if (confirmationResult.confirmationStatus === "REJECTED") {

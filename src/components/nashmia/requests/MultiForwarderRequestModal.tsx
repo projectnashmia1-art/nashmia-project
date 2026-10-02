@@ -11,6 +11,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { getPortCountryMeta } from "@/lib/port-flags";
+import { CountryFlagSvg } from "@/components/nashmia/common/CountryFlagSvg";
 import {
   Send,
   Ship,
@@ -30,9 +32,10 @@ import {
   Layers,
   FileText,
 } from "lucide-react";
-import { toast } from "sonner";
+import { showPillToast } from "@/lib/pill-toast";
+import { LifecycleDropdownSelect } from "@/components/nashmia/common/LifecycleDropdownSelect";
 import { useAuth } from "@/lib/auth-context";
-import { fetchForwardersFromSupabase } from "@/lib/supabase-services";
+import { useCachedForwarders } from "@/lib/cache";
 import {
   dispatchMultiForwarderRequests,
   generateForwarderEmailContent,
@@ -72,12 +75,8 @@ export function MultiForwarderRequestModal({
     return allBookings.find((b) => b.id === selectedBookingId) || initialBooking || null;
   }, [initialBooking, selectedBookingId, allBookings]);
 
-  // Fetch real forwarders from Supabase
-  const { data: forwarders = [], isLoading: isLoadingForwarders } = useQuery({
-    queryKey: ["forwarders-for-multi-request", userId],
-    queryFn: () => fetchForwardersFromSupabase(userId),
-    staleTime: 60_000,
-  });
+  // Fetch real forwarders from Supabase via unified client cache
+  const { data: forwarders = [], isLoading: isLoadingForwarders } = useCachedForwarders(userId);
 
   // Selected forwarder IDs
   const [selectedForwarderIds, setSelectedForwarderIds] = useState<string[]>([]);
@@ -168,11 +167,11 @@ export function MultiForwarderRequestModal({
   // Dispatch handler
   const handleDispatch = async () => {
     if (!activeBooking) {
-      toast.error("Please select a booking request first.");
+      showPillToast.error("Please select a booking request first.", "Notice");
       return;
     }
     if (selectedForwarders.length === 0) {
-      toast.error("Please select at least one forwarder.");
+      showPillToast.error("Please select at least one forwarder.", "Notice");
       return;
     }
 
@@ -203,23 +202,27 @@ export function MultiForwarderRequestModal({
           records: result.records,
         });
 
-        toast.success("Separate Request Emails Dispatched!", {
-          description: `Dispatched independent requests to ${result.totalDispatched} forwarders with distinct Gmail threads.`,
-        });
+        showPillToast.build(
+          `Dispatched independent requests to ${result.totalDispatched} forwarders with distinct Gmail threads.`,
+          "Separate Request Emails Dispatched!",
+          activeBooking.reference || activeBooking.movementNumber,
+        );
 
         if (onDispatched) {
           onDispatched(result.records);
         }
       } else {
-        toast.error("Failed to dispatch forwarder requests", {
-          description: result.errors[0]?.error || "Please check Gmail connection in Settings.",
-        });
+        showPillToast.error(
+          result.errors[0]?.error || "Please check Gmail connection in Settings.",
+          "Failed to dispatch forwarder requests",
+        );
       }
     } catch (err: unknown) {
       console.error("[MultiForwarderModal] Error dispatching:", err);
-      toast.error("Dispatch Error", {
-        description: err instanceof Error ? err.message : "Failed to dispatch requests.",
-      });
+      showPillToast.error(
+        err instanceof Error ? err.message : "Failed to dispatch requests.",
+        "Dispatch Error",
+      );
     } finally {
       setIsSending(false);
       setSendProgress(null);
@@ -230,7 +233,7 @@ export function MultiForwarderRequestModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-4xl max-h-[92vh] flex flex-col p-0 overflow-hidden bg-white">
+      <DialogContent className="w-full max-w-full sm:max-w-4xl max-h-[90vh] sm:max-h-[92vh] flex flex-col p-0 overflow-hidden bg-white">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-200/80 px-6 py-4 bg-slate-50/60">
           <div className="flex items-center gap-3">
@@ -331,19 +334,20 @@ export function MultiForwarderRequestModal({
                   </div>
 
                   {allBookings.length > 1 && (
-                    <div className="flex items-center gap-1.5 text-[12px]">
-                      <span className="text-slate-500">Switch Booking:</span>
-                      <select
+                    <div className="flex items-center gap-2 text-[12px]">
+                      <span className="text-slate-500 font-medium">Switch Booking:</span>
+                      <LifecycleDropdownSelect
                         value={selectedBookingId}
-                        onChange={(e) => setSelectedBookingId(e.target.value)}
-                        className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-800"
-                      >
-                        {allBookings.map((b) => (
-                          <option key={b.id} value={b.id}>
-                            {b.movementNumber || b.reference} — {b.buyerName}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={(val) => setSelectedBookingId(val)}
+                        options={allBookings.map((b) => ({
+                          value: b.id,
+                          label: `${b.movementNumber || b.reference} — ${b.buyerName}`,
+                        }))}
+                        placeholder="Switch Booking"
+                        size="sm"
+                        activeColor="teal"
+                        triggerClassName="h-8 min-w-[180px]"
+                      />
                     </div>
                   )}
                 </div>
@@ -355,8 +359,20 @@ export function MultiForwarderRequestModal({
                     <p className="font-semibold text-slate-800 line-clamp-1">
                       {activeBooking.supplierName}
                     </p>
-                    <p className="text-[11px] text-slate-500 font-mono">
-                      {activeBooking.polCode} ({activeBooking.polName})
+                    <p className="text-[11px] text-slate-600 flex items-center gap-1.5 font-mono">
+                      <CountryFlagSvg
+                        countryCode={
+                          getPortCountryMeta(activeBooking.polCode, activeBooking.polName)
+                            .countryCode
+                        }
+                        size="xs"
+                        title={
+                          getPortCountryMeta(activeBooking.polCode, activeBooking.polName)
+                            .countryName
+                        }
+                      />
+                      <span>{activeBooking.polCode}</span>
+                      <span className="text-slate-400 truncate">({activeBooking.polName})</span>
                     </p>
                   </div>
                   <div>
@@ -364,8 +380,20 @@ export function MultiForwarderRequestModal({
                     <p className="font-semibold text-slate-800 line-clamp-1">
                       {activeBooking.buyerName}
                     </p>
-                    <p className="text-[11px] text-slate-500 font-mono">
-                      {activeBooking.podCode} ({activeBooking.podName})
+                    <p className="text-[11px] text-slate-600 flex items-center gap-1.5 font-mono">
+                      <CountryFlagSvg
+                        countryCode={
+                          getPortCountryMeta(activeBooking.podCode, activeBooking.podName)
+                            .countryCode
+                        }
+                        size="xs"
+                        title={
+                          getPortCountryMeta(activeBooking.podCode, activeBooking.podName)
+                            .countryName
+                        }
+                      />
+                      <span>{activeBooking.podCode}</span>
+                      <span className="text-slate-400 truncate">({activeBooking.podName})</span>
                     </p>
                   </div>
                   <div>
@@ -539,20 +567,21 @@ export function MultiForwarderRequestModal({
                     </div>
 
                     <div>
-                      <Label htmlFor="deadline" className="text-xs font-medium text-slate-600">
-                        Quote Submission Deadline
-                      </Label>
-                      <select
-                        id="deadline"
+                      <LifecycleDropdownSelect
+                        label="Quote Submission Deadline"
                         value={deadline}
-                        onChange={(e) => setDeadline(e.target.value)}
-                        className="mt-1 h-8.5 w-full rounded-md border border-slate-200 bg-white px-2.5 text-xs text-slate-800"
-                      >
-                        <option value="Within 12 hours">Within 12 hours (Urgent)</option>
-                        <option value="Within 24 hours">Within 24 hours (Standard)</option>
-                        <option value="Within 48 hours">Within 48 hours</option>
-                        <option value="End of Business Today">End of Business Today</option>
-                      </select>
+                        onChange={(val) => setDeadline(val)}
+                        options={[
+                          { value: "Within 12 hours", label: "Within 12 hours (Urgent)" },
+                          { value: "Within 24 hours", label: "Within 24 hours (Standard)" },
+                          { value: "Within 48 hours", label: "Within 48 hours" },
+                          { value: "End of Business Today", label: "End of Business Today" },
+                        ]}
+                        placeholder="Select Deadline"
+                        size="sm"
+                        activeColor="teal"
+                        triggerClassName="h-9 w-full text-xs"
+                      />
                     </div>
                   </div>
 

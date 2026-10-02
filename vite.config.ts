@@ -12,7 +12,59 @@ export default defineConfig({
     // nitro/vite builds from this
     server: { entry: "server" },
   },
+  nitro: {
+    rolldownConfig: {
+      onwarn(warning, warn) {
+        if (
+          warning.code === "MODULE_LEVEL_DIRECTIVE" ||
+          (warning.message && warning.message.includes("use client"))
+        ) {
+          return;
+        }
+        if (warn) warn(warning);
+      },
+    },
+    rollupConfig: {
+      onwarn(warning, warn) {
+        if (
+          warning.code === "MODULE_LEVEL_DIRECTIVE" ||
+          (warning.message && warning.message.includes("use client"))
+        ) {
+          return;
+        }
+        if (warn) warn(warning);
+      },
+    },
+    hooks: {
+      "rollup:before": (nitro, rollupConfig) => {
+        const prevOnwarn = rollupConfig.onwarn;
+        rollupConfig.onwarn = (warning, warn) => {
+          if (
+            warning.code === "MODULE_LEVEL_DIRECTIVE" ||
+            (warning.message && warning.message.includes("use client"))
+          ) {
+            return;
+          }
+          if (prevOnwarn) prevOnwarn(warning, warn);
+          else if (warn) warn(warning);
+        };
+      },
+    },
+  },
   vite: {
+    build: {
+      rollupOptions: {
+        onwarn(warning, defaultHandler) {
+          if (
+            warning.code === "MODULE_LEVEL_DIRECTIVE" ||
+            (warning.message && warning.message.includes('"use client"'))
+          ) {
+            return;
+          }
+          defaultHandler(warning);
+        },
+      },
+    },
     plugins: [
       {
         name: "api-dev-server-middleware",
@@ -27,10 +79,7 @@ export default defineConfig({
                   if (v) headers.set(k, Array.isArray(v) ? v.join(", ") : v);
                 }
 
-                const chunks: Buffer[] = [];
-                req.on("data", (chunk: Buffer) => chunks.push(chunk));
-                req.on("end", async () => {
-                  const body = chunks.length > 0 ? Buffer.concat(chunks) : undefined;
+                const handleRequest = async (body?: Buffer) => {
                   const webRequest = new Request(url.href, {
                     method: req.method,
                     headers,
@@ -47,6 +96,17 @@ export default defineConfig({
                     console.error("[ApiDevMiddleware] Error:", fetchErr);
                     next(fetchErr);
                   }
+                };
+
+                if (req.method === "GET" || req.method === "HEAD") {
+                  await handleRequest();
+                  return;
+                }
+
+                const chunks: Buffer[] = [];
+                req.on("data", (chunk: Buffer) => chunks.push(chunk));
+                req.on("end", () => {
+                  void handleRequest(chunks.length > 0 ? Buffer.concat(chunks) : undefined);
                 });
                 return;
               } catch (err) {

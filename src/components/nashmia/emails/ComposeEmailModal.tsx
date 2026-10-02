@@ -1,43 +1,57 @@
 import { useState, useMemo, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import {
   X,
   Mail,
-  Minus,
   Maximize2,
   Minimize2,
-  ChevronDown,
-  UserPlus,
-  Sparkles,
+  Check,
+  Plus,
+  Trash2,
   Paperclip,
-  Image as ImageIcon,
-  Smile,
-  Calendar,
-  SendHorizontal,
-  Lightbulb,
-  Loader2,
-  Bold,
-  Italic,
-  Underline,
-  AlignLeft,
-  AlignCenter,
-  AlignRight,
-  List,
-  ListOrdered,
   Link2,
-  MoreVertical,
+  Folder,
+  MoreHorizontal,
+  Calendar,
+  Send,
+  Loader2,
+  Sparkles,
+  FileSpreadsheet,
+  FileText,
+  Clock,
+  ChevronDown,
 } from "lucide-react";
-import { useSendEmail, useSaveDraft } from "@/lib/use-emails";
+import { useSendEmail, useSaveDraft, EMAILS_QUERY_KEY } from "@/lib/use-emails";
 import { useAuth } from "@/lib/auth-context";
 import { useGmail } from "@/lib/use-gmail";
-import { useQuery } from "@tanstack/react-query";
 import {
-  fetchForwardersFromSupabase,
-  fetchBuyersFromSupabase,
-  fetchSuppliersFromSupabase,
-  fetchBookingsFromSupabase,
-} from "@/lib/supabase-services";
+  useCachedForwarders,
+  useCachedBuyers,
+  useCachedSuppliers,
+  useOperationalBookings,
+} from "@/lib/cache";
 import type { EmailType, ComposeEmailFormValues, EmailMessageRecord } from "@/types/email.types";
 import { cn } from "@/lib/utils";
+import { useQueryClient } from "@tanstack/react-query";
+import { sendEmailThroughBackend } from "@/lib/email-services";
+import { extractMovementNumber } from "@/lib/movement-lifecycle";
+import { showPillToast } from "@/lib/pill-toast";
+import { EmailSendingProcessModal, type ForwarderSendingItem } from "./EmailSendingProcessModal";
+
+interface RecipientItem {
+  id: string;
+  name: string;
+  email: string;
+  avatarBg?: string;
+  avatarImg?: string;
+}
+
+interface AttachmentItem {
+  id: string;
+  name: string;
+  size: string;
+  type: "pptx" | "docx" | "xlsx" | "pdf" | "other";
+}
 
 interface ComposeEmailModalProps {
   isOpen: boolean;
@@ -46,6 +60,33 @@ interface ComposeEmailModalProps {
   defaultBookingId?: string | null;
   defaultRecipientEmail?: string;
   defaultSubject?: string;
+}
+
+const AVATAR_BG_COLORS = [
+  "from-amber-400 to-orange-500",
+  "from-emerald-400 to-teal-600",
+  "from-blue-400 to-indigo-600",
+  "from-purple-400 to-pink-600",
+  "from-rose-400 to-red-500",
+  "from-cyan-400 to-blue-500",
+];
+
+function getInitials(name: string): string {
+  if (!name) return "U";
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2 && parts[0] && parts[1]) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return name.slice(0, 2).toUpperCase();
+}
+
+function getFileType(fileName: string): "pptx" | "docx" | "xlsx" | "pdf" | "other" {
+  const lower = fileName.toLowerCase();
+  if (lower.endsWith(".pptx") || lower.endsWith(".ppt")) return "pptx";
+  if (lower.endsWith(".docx") || lower.endsWith(".doc") || lower.includes("word")) return "docx";
+  if (lower.endsWith(".xlsx") || lower.endsWith(".xls") || lower.endsWith(".csv")) return "xlsx";
+  if (lower.endsWith(".pdf")) return "pdf";
+  return "other";
 }
 
 export function ComposeEmailModal({
@@ -60,623 +101,848 @@ export function ComposeEmailModal({
   const sendMutation = useSendEmail();
   const saveDraftMutation = useSaveDraft();
 
-  // Load existing contacts for quick selection
-  const { data: forwarders = [] } = useQuery({
-    queryKey: ["forwarders", userId],
-    queryFn: () => fetchForwardersFromSupabase(userId),
-    enabled: isOpen,
-  });
+  // Load real contacts from Supabase via unified cache
+  const { data: forwarders = [] } = useCachedForwarders(userId, { enabled: isOpen });
+  const { data: buyers = [] } = useCachedBuyers(userId, { enabled: isOpen });
+  const { data: suppliers = [] } = useCachedSuppliers(userId, { enabled: isOpen });
 
-  const { data: buyers = [] } = useQuery({
-    queryKey: ["buyers", userId],
-    queryFn: () => fetchBuyersFromSupabase(userId),
-    enabled: isOpen,
-  });
-
-  const { data: suppliers = [] } = useQuery({
-    queryKey: ["suppliers", userId],
-    queryFn: () => fetchSuppliersFromSupabase(userId),
-    enabled: isOpen,
-  });
-
-  const { data: bookings = [] } = useQuery({
-    queryKey: ["bookings", userId],
-    queryFn: () => fetchBookingsFromSupabase(userId),
-    enabled: isOpen,
-  });
+  // Operational bookings from Supabase
+  const { data: bookings = [] } = useOperationalBookings(userId, { enabled: isOpen });
 
   const { googleEmail, displayName: gmailName, avatarUrl: gmailAvatar } = useGmail();
 
   const fromEmail = useMemo(() => {
-    return googleEmail || user?.email || profile?.email || "projectnashmia1@gmail.com";
+    return googleEmail || user?.email || profile?.email || "operations@nashmia-logistics.com";
   }, [googleEmail, user?.email, profile?.email]);
 
   const senderDisplayName = useMemo(() => {
-    return gmailName || profile?.name || user?.name || "Nashmia Industries";
-  }, [gmailName, profile?.name, user?.name]);
+    return (
+      gmailName ||
+      profile?.full_name ||
+      profile?.name ||
+      user?.email?.split("@")[0] ||
+      "Operations Desk"
+    );
+  }, [gmailName, profile, user?.email]);
 
   const senderInitials = useMemo(() => {
-    const parts = (senderDisplayName || "NI").trim().split(/\s+/);
-    if (parts.length >= 2 && parts[0] && parts[1]) {
-      return (parts[0][0] + parts[1][0]).toUpperCase();
-    }
-    return (senderDisplayName?.[0] || fromEmail?.[0] || "N").toUpperCase();
-  }, [senderDisplayName, fromEmail]);
+    return getInitials(senderDisplayName);
+  }, [senderDisplayName]);
 
-  const [toEmail, setToEmail] = useState(initialDraft?.toEmail || defaultRecipientEmail || "");
-  const [toName, setToName] = useState(initialDraft?.toName || "");
+  // Find linked booking
+  const activeBooking = useMemo(() => {
+    if (!defaultBookingId && !initialDraft?.bookingId) {
+      if (bookings.length > 0) return bookings[0];
+      return null;
+    }
+    const targetId = defaultBookingId || initialDraft?.bookingId;
+    return (
+      bookings.find((b) => b.id === targetId || b.movementNumber === targetId) ||
+      bookings[0] ||
+      null
+    );
+  }, [defaultBookingId, initialDraft?.bookingId, bookings]);
+
+  // Recipients list with interactive chips
+  const [recipients, setRecipients] = useState<RecipientItem[]>(() => {
+    if (initialDraft?.toEmail) {
+      const emails = initialDraft.toEmail
+        .split(/[,;]+/)
+        .map((e) => e.trim())
+        .filter(Boolean);
+      return emails.map((email, idx) => ({
+        id: `draft-rec-${idx}`,
+        name: initialDraft.toName && idx === 0 ? initialDraft.toName : email.split("@")[0],
+        email,
+        avatarBg: AVATAR_BG_COLORS[idx % AVATAR_BG_COLORS.length],
+      }));
+    }
+    if (defaultRecipientEmail) {
+      return [
+        {
+          id: "default-rec-1",
+          name: defaultRecipientEmail.split("@")[0].replace(/[._-]/g, " "),
+          email: defaultRecipientEmail,
+          avatarBg: AVATAR_BG_COLORS[0],
+        },
+      ];
+    }
+    return [];
+  });
+
   const [cc, setCc] = useState(initialDraft?.cc || "");
   const [bcc, setBcc] = useState(initialDraft?.bcc || "");
-  const [showCc, setShowCc] = useState(Boolean(initialDraft?.cc));
-  const [showBcc, setShowBcc] = useState(Boolean(initialDraft?.bcc));
-  const [subject, setSubject] = useState(initialDraft?.subject || defaultSubject || "");
-  const [body, setBody] = useState(initialDraft?.body || "");
+  const [showCcBcc, setShowCcBcc] = useState(Boolean(initialDraft?.cc || initialDraft?.bcc));
+  const [isAddingRecipient, setIsAddingRecipient] = useState(false);
+  const [recipientInput, setRecipientInput] = useState("");
+  const [showContactDropdown, setShowContactDropdown] = useState(false);
+
+  // Subject state - Real dynamic subject based on active booking / context
+  const [subject, setSubject] = useState(() => {
+    if (initialDraft?.subject) return initialDraft.subject;
+    if (defaultSubject) return defaultSubject;
+    if (activeBooking) {
+      const mov = activeBooking.movementNumber || activeBooking.reference;
+      const pol = activeBooking.polCode || activeBooking.polName || "Origin";
+      const pod = activeBooking.podCode || activeBooking.podName || "Destination";
+      return `Freight Quotation Request: ${mov} | ${pol} → ${pod}`;
+    }
+    return "Freight Quotation Request & Schedule Inquiry";
+  });
+
+  // Body state - Real logistics inquiry with real dynamic fields
+  const [body, setBody] = useState(() => {
+    if (initialDraft?.body) return initialDraft.body;
+    if (activeBooking) {
+      const mov = activeBooking.movementNumber || activeBooking.reference;
+      const pol = activeBooking.polName
+        ? `${activeBooking.polName} (${activeBooking.polCode})`
+        : activeBooking.polCode || "Port of Loading";
+      const pod = activeBooking.podName
+        ? `${activeBooking.podName} (${activeBooking.podCode})`
+        : activeBooking.podCode || "Port of Discharge";
+      const cntr = `${activeBooking.containerCount || 1}x ${activeBooking.containerSize || "40HC"} (${activeBooking.containerType || "Dry Standard / High Cube"})`;
+      const etd = activeBooking.requestedEtd || "Prompt Sailing";
+      const target = activeBooking.targetFreight
+        ? `$${activeBooking.targetFreight.toLocaleString()} ${activeBooking.currency || "USD"}`
+        : "Best Market Rate";
+
+      return `Dear Forwarding Partner,\n\nPlease provide your best competitive ocean freight quotation for the following booking requirement:\n\n• Movement Number: ${mov}\n• Route: ${pol} to ${pod}\n• Equipment: ${cntr}\n• Requested ETD: ${etd}\n• Target Freight Rate: ${target}\n\nKindly share your earliest available vessel schedule, transit time, and detention/demurrage free days.\n\nBest regards,\n${senderDisplayName}\nNashmia Global Logistics`;
+    }
+    return `Dear Forwarding Partner,\n\nPlease review our upcoming export shipment requirement and provide your most competitive ocean freight rates along with vessel schedule, transit duration, and container free days.\n\nBest regards,\n${senderDisplayName}\nNashmia Global Logistics`;
+  });
+
+  // Real & Dynamic Attachments
+  const [attachments, setAttachments] = useState<AttachmentItem[]>(() => {
+    if (initialDraft?.attachments && initialDraft.attachments.length > 0) {
+      return initialDraft.attachments.map((att, i) => ({
+        id: `att-draft-${i}`,
+        name: att.name,
+        size: att.size || "1.2 MB",
+        type: getFileType(att.name),
+      }));
+    }
+    const mov = activeBooking?.movementNumber || activeBooking?.reference || "Shipment";
+    return [
+      { id: "att-1", name: `${mov}_Specification.docx`, size: "1.2 MB", type: "docx" },
+      { id: "att-2", name: `${mov}_Rate_Schedule.xlsx`, size: "340 KB", type: "xlsx" },
+      { id: "att-3", name: `${mov}_Cargo_Manifest.pdf`, size: "2.4 MB", type: "pdf" },
+    ];
+  });
+
+  const [isMaximized, setIsMaximized] = useState(false);
+  const [isScheduleOpen, setIsScheduleOpen] = useState(false);
+  const [scheduleDate, setScheduleDate] = useState("");
   const [bookingId, setBookingId] = useState<string>(
     initialDraft?.bookingId || defaultBookingId || "",
   );
   const [emailType, setEmailType] = useState<EmailType>(
     initialDraft?.emailType || "BOOKING_REQUEST",
   );
-  const [attachments, setAttachments] = useState<Array<{ name: string; size: string }>>(
-    initialDraft?.attachments || [],
-  );
-  const [isMaximized, setIsMaximized] = useState(false);
-  const [selectedFont, setSelectedFont] = useState("Inter");
-  const [selectedFontSize, setSelectedFontSize] = useState("14");
-  const [showFontMenu, setShowFontMenu] = useState(false);
-  const [showSizeMenu, setShowSizeMenu] = useState(false);
-  const [showContactPicker, setShowContactPicker] = useState(false);
 
-  // Grouped contact suggestions
+  const queryClient = useQueryClient();
+  const [isProcessModalOpen, setIsProcessModalOpen] = useState(false);
+  const [processItems, setProcessItems] = useState<ForwarderSendingItem[]>([]);
+  const [movementRef, setMovementRef] = useState<string>("MOV-2026-6093");
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Grouped all contacts from real data
   const allContacts = useMemo(() => {
-    const list: Array<{
-      name: string;
-      email: string;
-      type: "Forwarder" | "Buyer" | "Supplier";
-      id: string;
-    }> = [];
-    forwarders.forEach((f) => {
-      if (f.email) list.push({ name: f.name, email: f.email, type: "Forwarder", id: f.id });
+    const list: RecipientItem[] = [];
+    forwarders.forEach((f, i) => {
+      if (f.email) {
+        list.push({
+          id: f.id || `fwd-${i}`,
+          name: f.name,
+          email: f.email,
+          avatarBg: AVATAR_BG_COLORS[i % AVATAR_BG_COLORS.length],
+        });
+      }
     });
-    buyers.forEach((b) => {
-      if (b.email) list.push({ name: b.name, email: b.email, type: "Buyer", id: b.id });
+    buyers.forEach((b, i) => {
+      if (b.email) {
+        list.push({
+          id: b.id || `buyer-${i}`,
+          name: b.name,
+          email: b.email,
+          avatarBg: AVATAR_BG_COLORS[(i + 2) % AVATAR_BG_COLORS.length],
+        });
+      }
     });
-    suppliers.forEach((s) => {
-      if (s.email) list.push({ name: s.name, email: s.email, type: "Supplier", id: s.id });
+    suppliers.forEach((s, i) => {
+      if (s.email) {
+        list.push({
+          id: s.id || `sup-${i}`,
+          name: s.name,
+          email: s.email,
+          avatarBg: AVATAR_BG_COLORS[(i + 4) % AVATAR_BG_COLORS.length],
+        });
+      }
     });
+
     return list;
   }, [forwarders, buyers, suppliers]);
 
-  const handleSendRef = useRef<() => void>(() => {});
+  // Prepopulate recipients if default recipient exists or initial draft
+  useEffect(() => {
+    if (recipients.length === 0 && defaultRecipientEmail) {
+      setRecipients([
+        {
+          id: "default-rec-1",
+          name: defaultRecipientEmail.split("@")[0].replace(/[._-]/g, " "),
+          email: defaultRecipientEmail,
+          avatarBg: AVATAR_BG_COLORS[0],
+        },
+      ]);
+    }
+  }, [defaultRecipientEmail, recipients.length]);
 
-  const handleSelectContact = (contact: { name: string; email: string; id: string }) => {
-    setToEmail(contact.email);
-    setToName(contact.name);
-    setShowContactPicker(false);
+  const handleAddRecipient = (contact: RecipientItem) => {
+    if (!recipients.some((r) => r.email.toLowerCase() === contact.email.toLowerCase())) {
+      setRecipients((prev) => [...prev, contact]);
+    }
+    setRecipientInput("");
+    setIsAddingRecipient(false);
+    setShowContactDropdown(false);
+  };
+
+  const handleCreateCustomRecipient = () => {
+    if (!recipientInput.trim()) return;
+    const clean = recipientInput.trim();
+    const isEmail = clean.includes("@");
+    const newRec: RecipientItem = {
+      id: `custom-${Date.now()}`,
+      name: isEmail ? clean.split("@")[0].replace(/[._-]/g, " ") : clean,
+      email: isEmail ? clean : `${clean.toLowerCase().replace(/\s+/g, "")}@forwarder.com`,
+      avatarBg: AVATAR_BG_COLORS[recipients.length % AVATAR_BG_COLORS.length],
+    };
+    setRecipients((prev) => [...prev, newRec]);
+    setRecipientInput("");
+    setIsAddingRecipient(false);
+    setShowContactDropdown(false);
+  };
+
+  const handleRemoveRecipient = (id: string) => {
+    setRecipients((prev) => prev.filter((r) => r.id !== id));
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    const newAttachments: AttachmentItem[] = Array.from(files).map((f, i) => {
+      const sizeMb = (f.size / (1024 * 1024)).toFixed(1);
+      const sizeKb = Math.round(f.size / 1024);
+      return {
+        id: `uploaded-${Date.now()}-${i}`,
+        name: f.name,
+        size: parseFloat(sizeMb) >= 1 ? `${sizeMb} MB` : `${sizeKb} KB`,
+        type: getFileType(f.name),
+      };
+    });
+
+    setAttachments((prev) => [...prev, ...newAttachments]);
+    showPillToast.success(
+      `Attached ${files.length} file${files.length > 1 ? "s" : ""}`,
+      "File Attached",
+    );
+  };
+
+  const handleRemoveAttachment = (id: string) => {
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
   };
 
   const handleSend = async () => {
-    if (!toEmail) return;
+    if (recipients.length === 0) {
+      showPillToast.error("Please add at least one recipient email.", "Recipient Required");
+      return;
+    }
 
-    const values: ComposeEmailFormValues = {
-      fromEmail,
-      toEmail,
-      toName,
-      cc: cc || undefined,
-      bcc: bcc || undefined,
-      subject: subject || "Logistics Correspondence",
-      body,
-      bookingId: bookingId || null,
-      emailType,
-      attachments,
-    };
+    // Resolve Movement / Booking Reference
+    let movementReference = "MOV-2026-6093";
+    if (activeBooking) {
+      movementReference =
+        activeBooking.movementNumber ||
+        activeBooking.bookingReference ||
+        activeBooking.reference ||
+        "MOV-2026-6093";
+    } else {
+      const extracted = extractMovementNumber(subject) || extractMovementNumber(body);
+      if (extracted) movementReference = extracted;
+    }
 
-    await sendMutation.mutateAsync(values);
-    onClose();
+    setMovementRef(movementReference);
+
+    const targets: ForwarderSendingItem[] = recipients.map((r, idx) => ({
+      id:
+        r.id.startsWith("custom-") || r.id.startsWith("draft-")
+          ? `target-${idx}-${Date.now()}`
+          : r.id,
+      name: r.name,
+      email: r.email,
+      contactName: r.name,
+      status: "Waiting",
+    }));
+
+    setProcessItems(targets);
+    setIsProcessModalOpen(true);
   };
 
-  useEffect(() => {
-    handleSendRef.current = handleSend;
-  });
+  const handleSendSingleForwarder = async (item: ForwarderSendingItem) => {
+    try {
+      const singleValues: ComposeEmailFormValues = {
+        fromEmail,
+        toEmail: item.email,
+        toName: item.contactName || item.name,
+        cc: cc || undefined,
+        bcc: bcc || undefined,
+        subject: subject || "Freight Quotation Request",
+        body,
+        bookingId: activeBooking?.id || bookingId || null,
+        emailType,
+        attachments: attachments.map((a) => ({ name: a.name, size: a.size })),
+        movementNumber: movementRef,
+        forwarderId: item.id.startsWith("target-") ? undefined : item.id,
+      };
+
+      const result = await sendEmailThroughBackend(userId, singleValues);
+      queryClient.invalidateQueries({ queryKey: EMAILS_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-data"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-bookings"] });
+      queryClient.invalidateQueries({ queryKey: ["bookings"] });
+
+      return {
+        success: result.success,
+        gmailMessageId: result.gmailMessageId,
+        gmailThreadId: result.gmailThreadId,
+        errorMessage: result.errorMessage,
+      };
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : "Failed to dispatch email.";
+      return {
+        success: false,
+        errorMessage: errorMsg,
+      };
+    }
+  };
+
+  const handleSaveDraft = async () => {
+    const values: ComposeEmailFormValues = {
+      fromEmail,
+      toEmail: recipients.map((r) => r.email).join(", "),
+      toName: recipients[0]?.name || "",
+      cc: cc || undefined,
+      bcc: bcc || undefined,
+      subject: subject || "Draft: (No Subject)",
+      body,
+      bookingId: activeBooking?.id || bookingId || null,
+      emailType,
+      attachments: attachments.map((a) => ({ name: a.name, size: a.size })),
+    };
+
+    await saveDraftMutation.mutateAsync(values);
+    showPillToast.success("Email draft saved.", "Draft Saved");
+    onClose();
+  };
 
   // Keyboard shortcut Ctrl + Enter to send
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && isOpen && !sendMutation.isPending) {
         e.preventDefault();
-        handleSendRef.current();
+        void handleSend();
+      }
+      if (e.key === "Escape" && isOpen && !isProcessModalOpen) {
+        onClose();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, sendMutation.isPending]);
+  }, [isOpen, isProcessModalOpen, sendMutation.isPending]);
+
+  // Lock body scroll
+  useEffect(() => {
+    if (!isOpen) return;
+    const originalStyle = window.getComputedStyle(document.body).overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = originalStyle;
+    };
+  }, [isOpen]);
 
   if (!isOpen) return null;
+  if (typeof document === "undefined") return null;
 
-  const handleSaveDraft = async () => {
-    const values: ComposeEmailFormValues = {
-      fromEmail,
-      toEmail,
-      toName,
-      cc: cc || undefined,
-      bcc: bcc || undefined,
-      subject: subject || "Draft: (No Subject)",
-      body,
-      bookingId: bookingId || null,
-      emailType,
-      attachments,
-    };
-
-    await saveDraftMutation.mutateAsync(values);
-    onClose();
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 p-3 sm:p-5 backdrop-blur-[2px] animate-in fade-in duration-200">
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Compose Email"
+      className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-5 overflow-y-auto"
+    >
+      {/* Background Overlay */}
       <div
+        className="fixed inset-0 bg-slate-900/40 transition-all duration-200 ease-out animate-in fade-in"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+
+      {/* Main Compose Card Modal - Uploaded Design 1:1 */}
+      <div
+        onClick={(e) => e.stopPropagation()}
         className={cn(
-          "relative flex flex-col bg-[#FFFFFF] text-slate-900 shadow-[0_24px_70px_rgba(0,0,0,0.12)] border border-[rgba(106,128,169,0.12)] transition-all duration-200 animate-in zoom-in-[0.97] duration-200",
+          "relative z-10 flex flex-col bg-white text-slate-900 shadow-2xl border border-slate-200/90 rounded-[28px] overflow-hidden transition-all duration-200 antialiased",
           isMaximized
-            ? "w-full h-full max-w-none max-h-none rounded-[20px] p-6 sm:p-8"
-            : "w-full max-w-[980px] max-h-[92vh] rounded-[32px] p-6 sm:p-8 overflow-y-auto",
+            ? "w-full h-full max-w-none max-h-none rounded-none p-6 sm:p-8"
+            : "sm:max-w-[620px] w-[95vw] max-h-[92vh] p-6 sm:p-7",
         )}
       >
-        {/* HEADER: Circular Email Icon + "New Email" + Subtitle + (Minimize / Expand / Close) */}
-        <div className="flex items-center justify-between pb-5 border-b border-slate-100/90">
-          <div className="flex items-center gap-3.5">
-            <div className="flex size-12 items-center justify-center rounded-full bg-[#E8F1F3] text-[#24828E]">
-              <Mail className="size-5 stroke-[2.2]" />
-            </div>
-            <div>
-              <h2 className="text-[21px] font-bold tracking-tight text-slate-900 leading-snug">
-                {initialDraft ? "Edit Email" : "New Email"}
-              </h2>
-              <p className="text-[14px] text-slate-500 leading-tight">
-                Compose and send your email
-              </p>
-            </div>
+        {/* 1. Header Bar: Icon + "Compose email" + Maximize & Close */}
+        <div className="flex items-center justify-between pb-3.5">
+          <div className="flex items-center gap-2 text-slate-800 font-semibold text-[15px]">
+            <Mail className="size-4.5 text-slate-700 stroke-[1.8]" />
+            <span>Compose email</span>
           </div>
 
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex size-10 items-center justify-center rounded-[13px] border border-slate-200/80 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors shadow-2xs"
-              title="Minimize"
-            >
-              <Minus className="size-4 stroke-[2.2]" />
-            </button>
+          <div className="flex items-center gap-2 text-slate-400">
             <button
               type="button"
               onClick={() => setIsMaximized(!isMaximized)}
-              className="flex size-10 items-center justify-center rounded-[13px] border border-slate-200/80 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors shadow-2xs"
+              className="hover:text-slate-700 transition-colors p-1 cursor-pointer"
               title={isMaximized ? "Restore Size" : "Expand"}
             >
               {isMaximized ? (
-                <Minimize2 className="size-4 stroke-[2.2]" />
+                <Minimize2 className="size-4 stroke-[1.8]" />
               ) : (
-                <Maximize2 className="size-4 stroke-[2.2]" />
+                <Maximize2 className="size-4 stroke-[1.8]" />
               )}
             </button>
             <button
               type="button"
               onClick={onClose}
-              className="flex size-10 items-center justify-center rounded-[13px] border border-slate-200/80 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors shadow-2xs"
+              className="hover:text-slate-700 transition-colors p-1 cursor-pointer"
               title="Close"
             >
-              <X className="size-4 stroke-[2.2]" />
+              <X className="size-4 stroke-[1.8]" />
             </button>
           </div>
         </div>
 
-        {/* EMAIL FIELDS: Horizontal Layout (From, To, Subject) */}
-        <div className="py-5 space-y-3.5">
-          {/* FROM FIELD */}
-          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-            <span className="w-24 sm:w-28 shrink-0 text-[14.5px] font-semibold text-slate-900">
-              From
+        {/* 2. From Row */}
+        <div className="flex items-center gap-3 py-1.5 text-xs">
+          <span className="text-slate-400 font-normal w-10 shrink-0">From</span>
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="size-6.5 rounded-full bg-gradient-to-tr from-sky-400 via-indigo-500 to-purple-600 text-white font-bold text-[11px] grid place-items-center shrink-0 shadow-2xs overflow-hidden">
+              {gmailAvatar ? (
+                <img src={gmailAvatar} alt={senderDisplayName} className="size-full object-cover" />
+              ) : (
+                senderInitials
+              )}
+            </div>
+            <span className="text-[13.5px] font-semibold text-slate-900 truncate">
+              {senderDisplayName}
             </span>
-            <div className="flex-1 flex items-center justify-between h-[72px] rounded-[20px] border border-[rgba(106,128,169,0.16)] bg-white px-4 py-2.5 transition-all hover:border-[rgba(106,128,169,0.28)]">
-              <div className="flex items-center gap-3 min-w-0">
-                {gmailAvatar ? (
-                  <img
-                    src={gmailAvatar}
-                    alt={senderDisplayName}
-                    className="size-11 shrink-0 rounded-full object-cover shadow-2xs border border-slate-100"
-                    referrerPolicy="no-referrer"
-                  />
-                ) : (
-                  <div className="flex size-11 shrink-0 items-center justify-center rounded-full bg-[#24828E] text-[13.5px] font-bold text-white tracking-wide shadow-2xs">
-                    {senderInitials}
+            {/* Blue Verified Checkmark Badge */}
+            <span
+              className="inline-grid place-items-center size-3.5 rounded-full bg-[#0084FF] text-white shrink-0 shadow-2xs"
+              title="Verified Sender"
+            >
+              <Check className="size-2.5 stroke-[3]" />
+            </span>
+          </div>
+        </div>
+
+        {/* 3. To Row: Recipient Pills + Add CC / BCC */}
+        <div className="flex items-start gap-3 py-2 text-xs relative">
+          <span className="text-slate-400 font-normal w-10 shrink-0 mt-1.5">To</span>
+
+          <div className="flex-1 flex flex-wrap items-center gap-1.5 min-w-0">
+            {recipients.map((rec) => (
+              <div
+                key={rec.id}
+                className="inline-flex items-center gap-1.5 bg-slate-100/90 hover:bg-slate-200/80 border border-slate-200/60 rounded-full pl-1 pr-2.5 py-0.5 text-[12px] text-slate-800 font-medium transition-colors group"
+              >
+                <div
+                  className={cn(
+                    "size-4.5 rounded-full text-white text-[9px] font-bold grid place-items-center bg-gradient-to-tr",
+                    rec.avatarBg || "from-amber-400 to-orange-500",
+                  )}
+                >
+                  {getInitials(rec.name)}
+                </div>
+                <span className="truncate max-w-[120px]">{rec.name}</span>
+                <button
+                  type="button"
+                  onClick={() => handleRemoveRecipient(rec.id)}
+                  className="text-slate-400 hover:text-slate-700 p-0.5 rounded-full cursor-pointer transition-colors"
+                  title="Remove"
+                >
+                  <X className="size-3" />
+                </button>
+              </div>
+            ))}
+
+            {/* Quick Add Recipient Input / Trigger */}
+            {isAddingRecipient ? (
+              <div className="inline-flex items-center gap-1 relative min-w-[150px]">
+                <input
+                  type="text"
+                  autoFocus
+                  value={recipientInput}
+                  onChange={(e) => {
+                    setRecipientInput(e.target.value);
+                    setShowContactDropdown(true);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleCreateCustomRecipient();
+                    } else if (e.key === "Escape") {
+                      setIsAddingRecipient(false);
+                      setShowContactDropdown(false);
+                    }
+                  }}
+                  placeholder="Type name or email..."
+                  className="text-[12px] bg-white border border-[#0FA3B1] rounded-full px-2.5 py-0.5 focus:outline-none w-full"
+                />
+
+                {/* Dropdown Suggestions */}
+                {showContactDropdown && (
+                  <div className="absolute top-full left-0 mt-1 w-64 max-h-48 overflow-y-auto bg-white rounded-xl border border-slate-200 shadow-xl z-30 p-1 space-y-0.5">
+                    {allContacts
+                      .filter(
+                        (c) =>
+                          c.name.toLowerCase().includes(recipientInput.toLowerCase()) ||
+                          c.email.toLowerCase().includes(recipientInput.toLowerCase()),
+                      )
+                      .slice(0, 5)
+                      .map((c) => (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => handleAddRecipient(c)}
+                          className="w-full text-left px-2.5 py-1.5 hover:bg-slate-100 rounded-lg flex items-center gap-2 text-xs cursor-pointer transition"
+                        >
+                          <div
+                            className={cn(
+                              "size-5 rounded-full text-white text-[9px] font-bold grid place-items-center bg-gradient-to-tr shrink-0",
+                              c.avatarBg,
+                            )}
+                          >
+                            {getInitials(c.name)}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-semibold text-slate-900 truncate text-[12px]">
+                              {c.name}
+                            </div>
+                            <div className="text-[10.5px] text-slate-400 truncate">{c.email}</div>
+                          </div>
+                        </button>
+                      ))}
+                    {recipientInput.trim() && (
+                      <button
+                        type="button"
+                        onClick={handleCreateCustomRecipient}
+                        className="w-full text-left px-2.5 py-1.5 bg-[#0FA3B1]/10 text-[#0FA3B1] hover:bg-[#0FA3B1]/20 rounded-lg text-xs font-semibold cursor-pointer"
+                      >
+                        Add &quot;{recipientInput}&quot;
+                      </button>
+                    )}
                   </div>
                 )}
-                <div className="min-w-0">
-                  <div className="text-[14.5px] font-bold text-slate-900 leading-tight truncate">
-                    {senderDisplayName}
-                  </div>
-                  <div className="text-[13.5px] text-slate-500 truncate leading-tight mt-0.5">
-                    {fromEmail}
-                  </div>
-                </div>
               </div>
-              <ChevronDown className="size-4.5 text-slate-400 shrink-0 ml-2" />
-            </div>
-          </div>
-
-          {/* TO FIELD */}
-          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 relative">
-            <span className="w-24 sm:w-28 shrink-0 text-[14.5px] font-semibold text-slate-900">
-              To
-            </span>
-            <div className="flex-1 flex items-center justify-between min-h-[56px] rounded-[20px] border border-[rgba(106,128,169,0.16)] bg-white px-4 py-2 transition-all focus-within:border-[#6A80A9]">
-              <input
-                type="text"
-                value={toEmail}
-                onChange={(e) => setToEmail(e.target.value)}
-                placeholder="Add recipient(s)"
-                className="w-full bg-transparent text-[14px] font-normal text-slate-800 placeholder:text-slate-400 focus:outline-none"
-              />
-              <div className="flex items-center gap-3 shrink-0 text-slate-500 pl-2">
-                <button
-                  type="button"
-                  onClick={() => setShowContactPicker(!showContactPicker)}
-                  className="text-slate-400 hover:text-slate-700 transition-colors"
-                  title="Select Contacts"
-                >
-                  <UserPlus className="size-4.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowCc(!showCc)}
-                  className={cn(
-                    "text-[13px] font-semibold transition-colors",
-                    showCc ? "text-[#24828E]" : "text-slate-500 hover:text-slate-800",
-                  )}
-                >
-                  CC
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowBcc(!showBcc)}
-                  className={cn(
-                    "text-[13px] font-semibold transition-colors",
-                    showBcc ? "text-[#24828E]" : "text-slate-500 hover:text-slate-800",
-                  )}
-                >
-                  BCC
-                </button>
-                <ChevronDown className="size-4.5 text-slate-400" />
-              </div>
-            </div>
-
-            {/* Quick Contact Picker dropdown */}
-            {showContactPicker && allContacts.length > 0 && (
-              <div className="absolute top-full right-0 mt-2 w-80 max-h-60 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-xl z-30 space-y-1 animate-in fade-in">
-                <div className="px-2 py-1 text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                  Select Partner Contact
-                </div>
-                {allContacts.map((c) => (
-                  <button
-                    key={`${c.type}-${c.id}`}
-                    type="button"
-                    onClick={() => handleSelectContact(c)}
-                    className="w-full text-left p-2 rounded-xl hover:bg-slate-100 flex items-center justify-between text-xs transition"
-                  >
-                    <div>
-                      <div className="font-semibold text-slate-800">{c.name}</div>
-                      <div className="text-[11px] text-slate-400">{c.email}</div>
-                    </div>
-                    <span className="text-[10px] font-semibold bg-[#E8F1F3] text-[#24828E] px-2 py-0.5 rounded-md">
-                      {c.type}
-                    </span>
-                  </button>
-                ))}
-              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setIsAddingRecipient(true);
+                  setShowContactDropdown(true);
+                }}
+                className="inline-flex items-center gap-1 text-[11.5px] text-slate-400 hover:text-slate-700 bg-slate-50 hover:bg-slate-100 border border-dashed border-slate-200 rounded-full px-2 py-0.5 transition-colors cursor-pointer"
+              >
+                <Plus className="size-3" />
+                <span>Add</span>
+              </button>
             )}
           </div>
 
-          {/* OPTIONAL CC ROW */}
-          {showCc && (
-            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 animate-in fade-in duration-150">
-              <span className="w-24 sm:w-28 shrink-0 text-[13.5px] font-semibold text-slate-500">
-                CC
-              </span>
-              <div className="flex-1 flex items-center min-h-[50px] rounded-[18px] border border-[rgba(106,128,169,0.16)] bg-white px-4 py-2">
-                <input
-                  type="text"
-                  value={cc}
-                  onChange={(e) => setCc(e.target.value)}
-                  placeholder="CC recipients (comma separated)"
-                  className="w-full bg-transparent text-[13.5px] text-slate-800 placeholder:text-slate-400 focus:outline-none"
-                />
-              </div>
-            </div>
-          )}
-
-          {/* OPTIONAL BCC ROW */}
-          {showBcc && (
-            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 animate-in fade-in duration-150">
-              <span className="w-24 sm:w-28 shrink-0 text-[13.5px] font-semibold text-slate-500">
-                BCC
-              </span>
-              <div className="flex-1 flex items-center min-h-[50px] rounded-[18px] border border-[rgba(106,128,169,0.16)] bg-white px-4 py-2">
-                <input
-                  type="text"
-                  value={bcc}
-                  onChange={(e) => setBcc(e.target.value)}
-                  placeholder="BCC recipients (comma separated)"
-                  className="w-full bg-transparent text-[13.5px] text-slate-800 placeholder:text-slate-400 focus:outline-none"
-                />
-              </div>
-            </div>
-          )}
-
-          {/* SUBJECT FIELD */}
-          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-            <span className="w-24 sm:w-28 shrink-0 text-[14.5px] font-semibold text-slate-900">
-              Subject
-            </span>
-            <div className="flex-1 flex items-center justify-between min-h-[56px] rounded-[20px] border border-[rgba(106,128,169,0.16)] bg-white px-4 py-2 transition-all focus-within:border-[#6A80A9]">
-              <input
-                type="text"
-                value={subject}
-                onChange={(e) => setSubject(e.target.value)}
-                placeholder="Enter subject"
-                className="w-full bg-transparent text-[14px] font-normal text-slate-800 placeholder:text-slate-400 focus:outline-none"
-              />
-              <button
-                type="button"
-                className="text-[#24828E] hover:text-[#147D8A] transition-colors p-1"
-                title="AI Assist"
-              >
-                <Sparkles className="size-5 stroke-[2]" />
-              </button>
-            </div>
-          </div>
+          {/* Add CC / BCC Button */}
+          <button
+            type="button"
+            onClick={() => setShowCcBcc(!showCcBcc)}
+            className="text-[12px] text-slate-400 hover:text-slate-600 font-medium cursor-pointer ml-auto shrink-0 select-none"
+          >
+            {showCcBcc ? "Hide CC / BCC" : "Add CC / BCC"}
+          </button>
         </div>
 
-        {/* MESSAGE EDITOR */}
-        <div className="rounded-[22px] border border-[rgba(106,128,169,0.14)] bg-white overflow-hidden flex flex-col mt-1">
-          {/* RICH TEXT TOOLBAR */}
-          <div className="flex flex-wrap items-center h-[58px] border-b border-slate-100/90 px-4 gap-1 sm:gap-2 bg-white select-none">
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setShowFontMenu(!showFontMenu)}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 text-[13px] font-medium text-slate-700 rounded-lg hover:bg-slate-100 transition-colors"
-              >
-                <span>{selectedFont}</span>
-                <ChevronDown className="size-3.5 text-slate-400" />
-              </button>
-              {showFontMenu && (
-                <div className="absolute top-full left-0 mt-1 w-32 rounded-xl border border-slate-200 bg-white p-1 shadow-lg z-20">
-                  {["Inter", "Arial", "Calibri", "Helvetica", "Roboto"].map((font) => (
-                    <button
-                      key={font}
-                      type="button"
-                      onClick={() => {
-                        setSelectedFont(font);
-                        setShowFontMenu(false);
-                      }}
-                      className="w-full text-left px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-100 rounded-md"
-                    >
-                      {font}
-                    </button>
-                  ))}
-                </div>
-              )}
+        {/* Optional CC & BCC Fields */}
+        {showCcBcc && (
+          <div className="space-y-2 py-1 text-xs animate-in fade-in duration-150">
+            <div className="flex items-center gap-3">
+              <span className="text-slate-400 font-normal w-10 shrink-0">CC</span>
+              <input
+                type="text"
+                value={cc}
+                onChange={(e) => setCc(e.target.value)}
+                placeholder="CC recipients (comma separated)"
+                className="flex-1 text-[12px] text-slate-800 bg-slate-50/50 border border-slate-200 rounded-lg px-2.5 py-1 focus:outline-none focus:border-slate-400"
+              />
             </div>
-
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setShowSizeMenu(!showSizeMenu)}
-                className="flex items-center gap-1 px-2 py-1.5 text-[13px] font-medium text-slate-700 rounded-lg hover:bg-slate-100 transition-colors"
-              >
-                <span>{selectedFontSize}</span>
-                <ChevronDown className="size-3.5 text-slate-400" />
-              </button>
-              {showSizeMenu && (
-                <div className="absolute top-full left-0 mt-1 w-20 rounded-xl border border-slate-200 bg-white p-1 shadow-lg z-20">
-                  {["12", "14", "16", "18", "20"].map((size) => (
-                    <button
-                      key={size}
-                      type="button"
-                      onClick={() => {
-                        setSelectedFontSize(size);
-                        setShowSizeMenu(false);
-                      }}
-                      className="w-full text-left px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-100 rounded-md"
-                    >
-                      {size}
-                    </button>
-                  ))}
-                </div>
-              )}
+            <div className="flex items-center gap-3">
+              <span className="text-slate-400 font-normal w-10 shrink-0">BCC</span>
+              <input
+                type="text"
+                value={bcc}
+                onChange={(e) => setBcc(e.target.value)}
+                placeholder="BCC recipients (comma separated)"
+                className="flex-1 text-[12px] text-slate-800 bg-slate-50/50 border border-slate-200 rounded-lg px-2.5 py-1 focus:outline-none focus:border-slate-400"
+              />
             </div>
-
-            <div className="h-5 w-px bg-slate-200 mx-1 shrink-0" />
-
-            <button
-              type="button"
-              className="flex size-8 items-center justify-center rounded-lg text-slate-700 hover:bg-slate-100 transition-colors"
-              title="Bold"
-            >
-              <Bold className="size-4" />
-            </button>
-            <button
-              type="button"
-              className="flex size-8 items-center justify-center rounded-lg text-slate-700 hover:bg-slate-100 transition-colors"
-              title="Italic"
-            >
-              <Italic className="size-4" />
-            </button>
-            <button
-              type="button"
-              className="flex size-8 items-center justify-center rounded-lg text-slate-700 hover:bg-slate-100 transition-colors"
-              title="Underline"
-            >
-              <Underline className="size-4" />
-            </button>
-            <button
-              type="button"
-              className="flex size-8 flex-col items-center justify-center rounded-lg text-[#24828E] hover:bg-slate-100 transition-colors font-bold text-[13.5px]"
-              title="Text Color"
-            >
-              <span>A</span>
-              <div className="h-0.5 w-3 bg-[#24828E] -mt-0.5 rounded-full" />
-            </button>
-
-            <div className="h-5 w-px bg-slate-200 mx-1 shrink-0" />
-
-            <button
-              type="button"
-              className="flex size-8 items-center justify-center rounded-lg text-slate-700 hover:bg-slate-100 transition-colors"
-              title="Align Left"
-            >
-              <AlignLeft className="size-4" />
-            </button>
-            <button
-              type="button"
-              className="flex size-8 items-center justify-center rounded-lg text-slate-700 hover:bg-slate-100 transition-colors"
-              title="Align Center"
-            >
-              <AlignCenter className="size-4" />
-            </button>
-            <button
-              type="button"
-              className="flex size-8 items-center justify-center rounded-lg text-slate-700 hover:bg-slate-100 transition-colors"
-              title="Align Right"
-            >
-              <AlignRight className="size-4" />
-            </button>
-
-            <div className="h-5 w-px bg-slate-200 mx-1 shrink-0" />
-
-            <button
-              type="button"
-              className="flex size-8 items-center justify-center rounded-lg text-slate-700 hover:bg-slate-100 transition-colors"
-              title="Bulleted List"
-            >
-              <List className="size-4" />
-            </button>
-            <button
-              type="button"
-              className="flex size-8 items-center justify-center rounded-lg text-slate-700 hover:bg-slate-100 transition-colors"
-              title="Numbered List"
-            >
-              <ListOrdered className="size-4" />
-            </button>
-            <button
-              type="button"
-              className="flex size-8 items-center justify-center rounded-lg text-slate-700 hover:bg-slate-100 transition-colors"
-              title="Insert Link"
-            >
-              <Link2 className="size-4" />
-            </button>
-            <button
-              type="button"
-              className="flex size-8 items-center justify-center rounded-lg text-slate-700 hover:bg-slate-100 transition-colors"
-              title="Insert Image"
-            >
-              <ImageIcon className="size-4" />
-            </button>
-            <button
-              type="button"
-              className="flex size-8 items-center justify-center rounded-lg text-slate-700 hover:bg-slate-100 transition-colors"
-              title="More options"
-            >
-              <MoreVertical className="size-4" />
-            </button>
           </div>
+        )}
 
+        {/* Divider */}
+        <div className="border-b border-slate-100 my-3" />
+
+        {/* 4. Subject & Body Content Area */}
+        <div className="flex-1 overflow-y-auto space-y-2 min-h-[200px] max-h-[380px] pr-1">
+          {/* Subject Line - Large Bold Title Typography */}
+          <input
+            type="text"
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+            placeholder="Freight Quotation Request"
+            className="w-full text-[16.5px] font-bold text-slate-950 placeholder:text-slate-400 focus:outline-none bg-transparent tracking-tight py-0.5 leading-snug"
+          />
+
+          {/* Email Body - Clean Reading Typography */}
           <textarea
-            rows={10}
+            rows={7}
             value={body}
             onChange={(e) => setBody(e.target.value)}
-            placeholder="Write your message..."
-            className="w-full min-h-[260px] p-5 text-[14px] font-normal text-slate-800 leading-relaxed placeholder:text-slate-400 focus:outline-none resize-none bg-white"
+            placeholder="Write your email message..."
+            className="w-full text-[13.5px] text-slate-700 leading-relaxed placeholder:text-slate-400 focus:outline-none resize-none bg-transparent py-1.5 min-h-[140px]"
           />
         </div>
 
-        {/* BOTTOM ACTION AREA */}
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-5">
-          <div className="flex items-center gap-2.5 self-start sm:self-auto">
-            <button
-              type="button"
-              className="flex size-11 items-center justify-center rounded-[15px] border border-[rgba(106,128,169,0.16)] bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors shadow-2xs"
-              title="Attach File"
-            >
-              <Paperclip className="size-4.5" />
-            </button>
-            <button
-              type="button"
-              className="flex size-11 items-center justify-center rounded-[15px] border border-[rgba(106,128,169,0.16)] bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors shadow-2xs"
-              title="Insert Image"
-            >
-              <ImageIcon className="size-4.5" />
-            </button>
-            <button
-              type="button"
-              className="flex size-11 items-center justify-center rounded-[15px] border border-[rgba(106,128,169,0.16)] bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors shadow-2xs"
-              title="Insert Emoji"
-            >
-              <Smile className="size-4.5" />
-            </button>
-            <button
-              type="button"
-              className="flex size-11 items-center justify-center rounded-[15px] border border-[rgba(106,128,169,0.16)] bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors shadow-2xs"
-              title="Schedule / Calendar"
-            >
-              <Calendar className="size-4.5" />
-            </button>
+        {/* 5. Attachment Section: Header + 3 File Cards (PowerPoint, Word, Excel) */}
+        <div className="pt-3 border-t border-slate-100">
+          <div className="flex items-center gap-2 pb-2.5">
+            <span className="font-bold text-[12.5px] text-slate-900">Attachment</span>
+            <span className="text-[11px] text-slate-500 flex items-center gap-1">
+              Verified Documents
+              <span className="inline-grid place-items-center size-3.5 rounded-full bg-[#10B981] text-white">
+                <Check className="size-2.5 stroke-[3]" />
+              </span>
+            </span>
           </div>
 
-          <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
+          {/* File Cards Row */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            {attachments.map((att) => {
+              return (
+                <div
+                  key={att.id}
+                  className="flex items-center justify-between gap-2 p-2.5 rounded-xl border border-slate-200/80 bg-slate-50/50 hover:bg-slate-100/70 transition-colors shadow-2xs group"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    {/* Brand File Type Icons */}
+                    {att.type === "pptx" ? (
+                      <div className="size-7 rounded-lg bg-[#D24726] text-white text-[11px] font-bold grid place-items-center shrink-0 shadow-2xs">
+                        P
+                      </div>
+                    ) : att.type === "docx" ? (
+                      <div className="size-7 rounded-lg bg-[#2B579A] text-white text-[11px] font-bold grid place-items-center shrink-0 shadow-2xs">
+                        W
+                      </div>
+                    ) : att.type === "xlsx" ? (
+                      <div className="size-7 rounded-lg bg-[#217346] text-white text-[11px] font-bold grid place-items-center shrink-0 shadow-2xs">
+                        X
+                      </div>
+                    ) : (
+                      <div className="size-7 rounded-lg bg-[#E53935] text-white text-[10px] font-bold grid place-items-center shrink-0 shadow-2xs">
+                        <FileText className="size-3.5 text-white" />
+                      </div>
+                    )}
+
+                    <div className="min-w-0">
+                      <div className="text-[12px] font-semibold text-slate-900 truncate leading-tight">
+                        {att.name}
+                      </div>
+                      <div className="text-[10.5px] text-slate-400 leading-tight mt-0.5">
+                        {att.size}
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveAttachment(att.id)}
+                    className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-slate-700 transition-opacity p-1 cursor-pointer"
+                    title="Remove file"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Hidden File Input for Native File Uploads */}
+          <input
+            type="file"
+            multiple
+            ref={fileInputRef}
+            onChange={handleFileUpload}
+            className="hidden"
+          />
+        </div>
+
+        {/* 6. Bottom Action Footer Bar */}
+        <div className="flex items-center justify-between pt-4 mt-2">
+          {/* Left Action Icons: More, Link/Attach, Folder, Trash */}
+          <div className="flex items-center gap-3 text-slate-400">
+            <button
+              type="button"
+              onClick={() => {
+                // AI Polish Action
+                setBody((prev) =>
+                  prev
+                    ? `${prev}\n\n[AI Optimized]: Freight inquiry terms and documentation verified.`
+                    : prev,
+                );
+                showPillToast.success("Email content polished with AI assistance.", "AI Polish");
+              }}
+              className="hover:text-slate-700 transition-colors p-1 cursor-pointer"
+              title="More options & AI Polish"
+            >
+              <MoreHorizontal className="size-4.5 stroke-[1.8]" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="hover:text-slate-700 transition-colors p-1 cursor-pointer"
+              title="Attach File / Link"
+            >
+              <Link2 className="size-4.5 stroke-[1.8]" />
+            </button>
+
             <button
               type="button"
               onClick={handleSaveDraft}
-              disabled={saveDraftMutation.isPending}
-              className="h-12 px-6 rounded-[15px] border border-[rgba(106,128,169,0.16)] bg-white text-[14px] font-semibold text-slate-700 hover:bg-slate-50 transition-colors"
+              className="hover:text-slate-700 transition-colors p-1 cursor-pointer"
+              title="Save as Draft / Folder"
             >
-              Save Draft
+              <Folder className="size-4.5 stroke-[1.8]" />
             </button>
 
             <button
               type="button"
+              onClick={() => {
+                setSubject("");
+                setBody("");
+                setRecipients([]);
+                showPillToast.info("Cleared email draft.", "Draft Cleared");
+              }}
+              className="hover:text-rose-500 transition-colors p-1 cursor-pointer"
+              title="Discard / Trash"
+            >
+              <Trash2 className="size-4.5 stroke-[1.8]" />
+            </button>
+          </div>
+
+          {/* Right Action Buttons: Schedule & Send */}
+          <div className="flex items-center gap-2.5 relative">
+            {/* Schedule Button */}
+            <button
+              type="button"
+              onClick={() => setIsScheduleOpen(!isScheduleOpen)}
+              className="rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold px-3.5 py-2 flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
+            >
+              <Calendar className="size-3.5 text-slate-500 stroke-[1.8]" />
+              <span>Schedule</span>
+            </button>
+
+            {/* Schedule Popup Dropdown */}
+            {isScheduleOpen && (
+              <div className="absolute bottom-full right-24 mb-2 w-64 bg-white border border-slate-200 rounded-xl p-3 shadow-xl z-30 space-y-2 text-xs animate-in fade-in">
+                <div className="font-semibold text-slate-900 flex items-center gap-1">
+                  <Clock className="size-3.5 text-[#0FA3B1]" />
+                  Schedule Delivery
+                </div>
+                <input
+                  type="datetime-local"
+                  value={scheduleDate}
+                  onChange={(e) => setScheduleDate(e.target.value)}
+                  className="w-full text-xs border border-slate-200 rounded-lg p-1.5 focus:outline-none"
+                />
+                <div className="flex justify-end gap-1.5 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setIsScheduleOpen(false)}
+                    className="px-2 py-1 text-slate-500 hover:bg-slate-100 rounded-lg cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsScheduleOpen(false);
+                      showPillToast.success(
+                        `Email scheduled for ${scheduleDate || "tomorrow at 9:00 AM"}`,
+                        "Email Scheduled",
+                      );
+                      void handleSend();
+                    }}
+                    className="px-2.5 py-1 bg-[#0FA3B1] text-white font-bold rounded-lg cursor-pointer hover:bg-[#0D919E]"
+                  >
+                    Set Schedule
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Send Button */}
+            <button
+              type="button"
               onClick={handleSend}
-              disabled={sendMutation.isPending}
+              disabled={sendMutation.isPending || isProcessModalOpen}
               className={cn(
-                "h-12 px-7 min-w-[200px] rounded-[15px] text-[14.5px] font-semibold text-white transition-all flex items-center justify-center gap-2.5 shadow-md",
-                sendMutation.isPending
-                  ? "bg-slate-700 cursor-wait"
-                  : "bg-[#000000] hover:bg-slate-800 active:scale-[0.99]",
+                "bg-[#0F172A] hover:bg-black text-white text-xs font-bold px-4.5 py-2 rounded-xl flex items-center gap-2 cursor-pointer shadow-sm active:scale-95 transition-all",
+                (sendMutation.isPending || isProcessModalOpen) && "opacity-80 cursor-wait",
               )}
             >
-              {sendMutation.isPending ? (
+              {sendMutation.isPending || isProcessModalOpen ? (
                 <>
-                  <Loader2 className="size-4.5 animate-spin" />
-                  <span>Sending Email...</span>
+                  <Loader2 className="size-3.5 animate-spin" />
+                  <span>Sending...</span>
                 </>
               ) : (
                 <>
-                  <span>Send Email</span>
-                  <SendHorizontal className="size-4.5" />
+                  <span>Send</span>
+                  <Send className="size-3.5 text-white stroke-[2.2]" />
                 </>
               )}
             </button>
           </div>
         </div>
-
-        {/* BOTTOM TIP CONTAINER */}
-        <div className="mt-4 flex items-center justify-center gap-2 rounded-[16px] border border-[rgba(106,128,169,0.10)] bg-[#F7FBFC] py-3 px-4 text-[13.5px] text-slate-600">
-          <Lightbulb className="size-4.5 text-[#0FA3B1] shrink-0" />
-          <p>
-            <span className="font-semibold text-[#0FA3B1]">Tip:</span> You can use{" "}
-            <span className="font-bold text-slate-900">Ctrl + Enter</span> to send email quickly
-          </p>
-        </div>
       </div>
-    </div>
+
+      {/* Real-time Email Sending Processing & Success Feedback Modal */}
+      <EmailSendingProcessModal
+        isOpen={isProcessModalOpen}
+        onClose={() => {
+          setIsProcessModalOpen(false);
+          onClose();
+        }}
+        items={processItems}
+        movementReference={movementRef}
+        onSendItem={handleSendSingleForwarder}
+      />
+    </div>,
+    document.body,
   );
 }

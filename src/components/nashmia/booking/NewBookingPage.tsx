@@ -13,6 +13,7 @@ import {
   type ShippingLine,
   type BookingAgent,
   type ContainerSize,
+  type FreightRateMode,
 } from "@/lib/booking-data";
 import { BookingHeader } from "./BookingHeader";
 import { BookingProgress } from "./BookingProgress";
@@ -25,16 +26,24 @@ import { BookingSummaryCard } from "./BookingSummaryCard";
 import { BookingEmailPreviewModal } from "./BookingEmailPreviewModal";
 import { ArrowRight, BookmarkCheck, Check } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   createBookingInSupabase,
-  fetchBuyersFromSupabase,
-  fetchSuppliersFromSupabase,
-  fetchForwardersFromSupabase,
   insertBuyerToSupabase,
   insertSupplierToSupabase,
 } from "@/lib/supabase-services";
+import {
+  useCachedBuyers,
+  useCachedSuppliers,
+  useCachedForwarders,
+  invalidateCachedBuyers,
+  invalidateCachedSuppliers,
+  invalidateCachedForwarders,
+  entityCacheKeys,
+} from "@/lib/cache";
 import { useSupabaseRealtime } from "@/hooks/use-supabase-realtime";
 import { BuyerAccountFull } from "@/lib/buyers-data";
+import { useRealRateCards } from "@/services/data-fetching.service";
 import { SupplierAccountFull } from "@/lib/suppliers-data";
 import { ForwarderAccount } from "@/lib/forwarders-data";
 import { generateMovementNumber } from "@/lib/movement-lifecycle";
@@ -50,121 +59,126 @@ export function NewBookingPage({
   const { userId, isConfigured } = useAuth();
 
   // Dynamic party options from Supabase
-  const [dynamicBuyers, setDynamicBuyers] = useState<BuyerAccount[]>(BUYERS);
-  const [dynamicSuppliers, setDynamicSuppliers] = useState<SupplierVendor[]>(SUPPLIERS);
-  const [dynamicAgents, setDynamicAgents] = useState<BookingAgent[]>(BOOKING_AGENTS);
+  const [dynamicBuyers, setDynamicBuyers] = useState<BuyerAccount[]>([]);
+  const [dynamicSuppliers, setDynamicSuppliers] = useState<SupplierVendor[]>([]);
+  const [dynamicAgents, setDynamicAgents] = useState<BookingAgent[]>([]);
 
-  // Form State initialized with realistic Nashmia defaults
-  const [reference, setReference] = useState<string>(() => generateMovementNumber());
-  const [buyer, setBuyer] = useState<BuyerAccount | null>(BUYERS[0]); // New Henna
-  const [supplier, setSupplier] = useState<SupplierVendor | null>(SUPPLIERS[0]); // UK Supplier -> London Warehouse
-  const [pol, setPol] = useState<Port | null>(PORTS_OF_LOADING[0]); // Felixstowe (FXT)
-  const [pod, setPod] = useState<Port | null>(PORTS_OF_DISCHARGE[0]); // Karachi (KHI)
-  const [shippingLine, setShippingLine] = useState<ShippingLine | null>(SHIPPING_LINES[0]); // MSC
-  const [bookingAgent, setBookingAgent] = useState<BookingAgent | null>(BOOKING_AGENTS[0]); // ABC Forwarding
-  const [selectedBookingAgents, setSelectedBookingAgents] = useState<BookingAgent[]>([
-    BOOKING_AGENTS[0],
-  ]);
+  // Form State initialized with stable default for SSR hydration consistency
+  const [reference, setReference] = useState<string>("MOV-2026-00001");
+
+  useEffect(() => {
+    // Generate unique movement number after initial client mount to eliminate hydration mismatch
+    setReference(generateMovementNumber());
+  }, []);
+  const [buyer, setBuyer] = useState<BuyerAccount | null>(null);
+  const [supplier, setSupplier] = useState<SupplierVendor | null>(null);
+  const [pol, setPol] = useState<Port | null>(PORTS_OF_LOADING[0] || null); // Felixstowe (FXT)
+  const [pod, setPod] = useState<Port | null>(PORTS_OF_DISCHARGE[0] || null); // Karachi (KHI)
+  const [shippingLine, setShippingLine] = useState<ShippingLine | null>(SHIPPING_LINES[0] || null); // MSC
+  const [bookingAgent, setBookingAgent] = useState<BookingAgent | null>(null);
+  const [selectedBookingAgents, setSelectedBookingAgents] = useState<BookingAgent[]>([]);
   const [containerSize, setContainerSize] = useState<ContainerSize>("40HC");
-  const [quantity, setQuantity] = useState<number>(2);
-  const [productDescription, setProductDescription] = useState<string>("Used clothing & textiles");
-  const [loadingDate, setLoadingDate] = useState<string>("2026-08-18");
-  const [instructions, setInstructions] = useState<string>(
-    "Please confirm availability before vessel cut-off.",
+  const [quantity, setQuantity] = useState<number>(1);
+  const [productDescription, setProductDescription] = useState<string>("");
+  const [loadingDate, setLoadingDate] = useState<string>(() =>
+    new Date().toISOString().slice(0, 10),
   );
+  const [instructions, setInstructions] = useState<string>("");
 
-  // Load parties from Supabase
-  const loadParties = useCallback(async () => {
-    if (!isConfigured) return;
-    try {
-      const [bList, sList, fList] = await Promise.all([
-        fetchBuyersFromSupabase(userId),
-        fetchSuppliersFromSupabase(userId),
-        fetchForwardersFromSupabase(userId),
-      ]);
+  // Freight Rate Mode & Custom Rate state
+  const [rateMode, setRateMode] = useState<FreightRateMode>("AGREED_RATE");
+  const [customRate, setCustomRate] = useState<number | null>(null);
+  const [currency, setCurrency] = useState<string>("USD");
 
-      if (bList.length > 0) {
-        const mappedB: BuyerAccount[] = bList.map((b) => ({
-          id: b.id,
-          name: b.name,
-          country: b.country,
-          consignee: b.company || b.name,
-          code: b.code || `${b.name.slice(0, 3).toUpperCase()}`,
-          badge: b.company ? "Consignee" : "Direct Buyer",
-          status: b.status,
-          destinationPort: b.preferredPort || b.destinationPort,
-          activeMovements: b.activeMovements,
-          creditTerm: "30 Days NET",
-        }));
-        setDynamicBuyers(mappedB);
-      } else {
-        setDynamicBuyers([]);
-      }
+  const queryClient = useQueryClient();
 
-      if (sList.length > 0) {
-        const mappedS: SupplierVendor[] = sList.map((s) => ({
-          id: s.id,
-          name: s.name,
-          country: s.country,
-          city: s.city || "London",
-          address: s.address || "Warehouse Bay",
-          loadPoint: s.loadPoint || `${s.city || "London"} Warehouse`,
-          contact: s.contactPerson,
-          email: s.email,
-          status: s.status,
-        }));
-        setDynamicSuppliers(mappedS);
-      } else {
-        setDynamicSuppliers([]);
-      }
+  // Cached parties with automatic deduplication, page navigation reuse & background revalidation
+  const { data: bList = [] } = useCachedBuyers(userId, { enabled: isConfigured });
+  const { data: sList = [] } = useCachedSuppliers(userId, { enabled: isConfigured });
+  const { data: fList = [] } = useCachedForwarders(userId, { enabled: isConfigured });
 
-      if (fList.length > 0) {
-        const mappedF: BookingAgent[] = fList.map((f) => ({
-          id: f.id,
-          name: f.name,
-          code: f.code || `${f.name.slice(0, 3).toUpperCase()}-FWD`,
-          contact: f.contactPerson,
-          email: f.email,
-          phone: f.whatsapp,
-          contractTier: f.badge || "Tier 1 Priority",
-          activeRates: f.rateCards ? f.rateCards.length : 0,
-          slaHours: 4,
-          supportedLines: f.shippingLines || ["MSC", "Maersk"],
-        }));
-        setDynamicAgents(mappedF);
-      } else {
-        setDynamicAgents(BOOKING_AGENTS);
-      }
-    } catch (err) {
-      console.warn("[NewBookingPage] Could not load dynamic parties:", err);
+  // Map cached buyers to booking party format
+  useEffect(() => {
+    if (bList.length > 0) {
+      const mappedB: BuyerAccount[] = bList.map((b) => ({
+        id: b.id,
+        name: b.name,
+        country: b.country,
+        consignee: b.company || b.name,
+        code: b.code || `${b.name.slice(0, 3).toUpperCase()}`,
+        badge: b.company ? "Consignee" : "Direct Buyer",
+        status: b.status,
+        destinationPort: b.preferredPort || b.destinationPort,
+        activeMovements: b.activeMovements,
+        creditTerm: "30 Days NET",
+      }));
+      setDynamicBuyers(mappedB);
     }
-  }, [userId, isConfigured]);
+  }, [bList]);
+
+  // Map cached suppliers to booking party format
+  useEffect(() => {
+    if (sList.length > 0) {
+      const mappedS: SupplierVendor[] = sList.map((s) => ({
+        id: s.id,
+        name: s.name,
+        country: s.country,
+        city: s.city || "London",
+        address: s.address || "Warehouse Bay",
+        loadPoint: s.loadPoint || `${s.city || "London"} Warehouse`,
+        contact: s.contactPerson,
+        email: s.email,
+        status: s.status,
+      }));
+      setDynamicSuppliers(mappedS);
+    }
+  }, [sList]);
+
+  // Map cached forwarders to booking agent format
+  useEffect(() => {
+    if (fList.length > 0) {
+      const mappedF: BookingAgent[] = fList.map((f) => ({
+        id: f.id,
+        name: f.name,
+        code: f.code || `${f.name.slice(0, 3).toUpperCase()}-FWD`,
+        contact: f.contactPerson,
+        email: f.email,
+        phone: f.whatsapp,
+        contractTier: f.badge || "Tier 1 Priority",
+        activeRates: f.rateCards ? f.rateCards.length : 0,
+        slaHours: 4,
+        supportedLines: f.shippingLines || ["MSC", "Maersk"],
+      }));
+      setDynamicAgents(mappedF);
+    } else {
+      setDynamicAgents([]);
+    }
+  }, [fList]);
 
   useEffect(() => {
     setReference(`NASH-BK-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`);
-    void loadParties();
-  }, [loadParties]);
+  }, []);
 
-  // Realtime Supabase Sync for Buyers, Suppliers, Forwarders
+  // Realtime Supabase Sync for Buyers, Suppliers, Forwarders: invalidates query cache for background refresh
   useSupabaseRealtime(
     "buyers",
     useCallback(() => {
-      void loadParties();
-    }, [loadParties]),
+      void invalidateCachedBuyers(queryClient, userId);
+    }, [queryClient, userId]),
     isConfigured,
   );
   useSupabaseRealtime(
     "suppliers",
     useCallback(() => {
-      void loadParties();
-    }, [loadParties]),
+      void invalidateCachedSuppliers(queryClient, userId);
+    }, [queryClient, userId]),
     isConfigured,
   );
   useSupabaseRealtime(
     "forwarders",
     useCallback(() => {
-      void loadParties();
-    }, [loadParties]),
+      void invalidateCachedForwarders(queryClient, userId);
+    }, [queryClient, userId]),
     isConfigured,
   );
 
@@ -400,13 +414,17 @@ export function NewBookingPage({
     return createdSup;
   };
 
-  // Auto-populate supplier / buyer if passed in URL query
+  // Query real rate cards from Supabase
+  const { data: realRateCards = [] } = useRealRateCards(userId);
+
+  // Auto-populate supplier / buyer / rate if passed in URL query
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
       const supId = params.get("supplierId");
       const bId = params.get("buyerId");
-      const agentId = params.get("bookingAgentId");
+      const agentId = params.get("bookingAgentId") || params.get("fwd");
+      const urlSize = params.get("size");
 
       if (supId) {
         const foundSup = dynamicSuppliers.find((s) => s.id === supId);
@@ -426,7 +444,12 @@ export function NewBookingPage({
         const foundAgent = dynamicAgents.find((a) => a.id === agentId);
         if (foundAgent) {
           setBookingAgent(foundAgent);
+          setSelectedBookingAgents([foundAgent]);
         }
+      }
+
+      if (urlSize && (urlSize === "20FT" || urlSize === "40FT" || urlSize === "40HC")) {
+        setContainerSize(urlSize as ContainerSize);
       }
     } catch {
       // safe fallback
@@ -444,11 +467,59 @@ export function NewBookingPage({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
 
-  // Matched rate card calculation
+  // Matched rate card calculation from real Supabase records
   const matchedRate = useMemo(() => {
-    if (!bookingAgent || !pol || !pod || !containerSize) return null;
-    return findAgreedRate(bookingAgent.id, pol.code, pod.code, containerSize);
-  }, [bookingAgent, pol, pod, containerSize]);
+    const activeAgentId = selectedBookingAgents[0]?.id || bookingAgent?.id;
+    if (!activeAgentId) return null;
+
+    // 1. Check real Supabase rate cards for this forwarder
+    const dbMatch =
+      realRateCards.find((rc) => {
+        if (rc.status === "Inactive") return false;
+        const isAgentMatch = rc.forwarder_id === activeAgentId;
+        if (!isAgentMatch) return false;
+
+        const pickupLocation = supplier?.loadPoint || supplier?.city || "";
+        const pickupMatch =
+          !pickupLocation && !pol
+            ? true
+            : (pickupLocation &&
+                rc.load_point &&
+                rc.load_point.toLowerCase().includes(pickupLocation.toLowerCase())) ||
+              (pickupLocation &&
+                rc.origin &&
+                rc.origin.toLowerCase().includes(pickupLocation.toLowerCase())) ||
+              (pol && rc.pol_code && rc.pol_code.toLowerCase() === pol.code.toLowerCase()) ||
+              (pol && rc.origin && rc.origin.toLowerCase().includes(pol.name.toLowerCase()));
+
+        return isAgentMatch && pickupMatch;
+      }) ||
+      realRateCards.find((rc) => rc.status !== "Inactive" && rc.forwarder_id === activeAgentId);
+
+    if (dbMatch) {
+      return {
+        agentId: dbMatch.forwarder_id,
+        agentName:
+          dbMatch.forwarders?.company_name ||
+          dbMatch.forwarders?.contact_person ||
+          bookingAgent?.name ||
+          "Forwarder",
+        polCode: dbMatch.pol_code || pol?.code || dbMatch.origin || "Pickup Point",
+        podCode: dbMatch.pod_code || pod?.code || dbMatch.destination || "Destination",
+        size: (dbMatch.container_size as ContainerSize) || containerSize,
+        ratePerContainer: dbMatch.base_rate || dbMatch.rate || 0,
+        currency: dbMatch.currency || "USD",
+        validUntil: dbMatch.valid_until,
+        cardName: dbMatch.card_name || `${dbMatch.origin} (${dbMatch.load_point || "Pickup"})`,
+      };
+    }
+
+    // 2. Fallback
+    if (bookingAgent && pol && pod && containerSize) {
+      return findAgreedRate(bookingAgent.id, pol.code, pod.code, containerSize);
+    }
+    return null;
+  }, [realRateCards, selectedBookingAgents, bookingAgent, pol, pod, containerSize, supplier]);
 
   // Handle Step selection / smooth scroll
   const handleSelectStep = (index: number) => {
@@ -472,28 +543,25 @@ export function NewBookingPage({
     if (!supplier) errs.supplier = "Pickup supplier is required";
     if (!pol) errs.pol = "Port of loading is required";
     if (!pod) errs.pod = "Port of discharge is required";
-    if (!shippingLine) errs.shippingLine = "Shipping line is required";
     if (selectedBookingAgents.length === 0 && !bookingAgent) {
       errs.bookingAgent = "At least one booking agent / forwarder is required";
     }
-    if (!productDescription.trim()) errs.productDescription = "Cargo description is required";
+    const cleanDesc = productDescription.trim() || "Commercial Freight Cargo";
+    if (!productDescription.trim()) {
+      setProductDescription(cleanDesc);
+    }
     if (!loadingDate) errs.loadingDate = "Loading date is required";
 
     setErrors(errs);
-    return Object.keys(errs).length === 0;
-  };
 
-  // Create Booking Action -> Opens the Apple Liquid Glass Email Preview Modal
-  const handleCreateBooking = () => {
-    if (!validateForm()) {
-      // scroll to first error
-      const firstErrorKey = Object.keys(errors)[0];
+    const errorKeys = Object.keys(errs);
+    if (errorKeys.length > 0) {
+      const firstErrorKey = errorKeys[0];
       const sectionMap: Record<string, string> = {
         buyer: "section-parties",
         supplier: "section-parties",
         pol: "section-route",
         pod: "section-route",
-        shippingLine: "section-shipping",
         bookingAgent: "section-shipping",
         productDescription: "section-cargo",
         loadingDate: "section-cargo",
@@ -503,16 +571,121 @@ export function NewBookingPage({
           .getElementById(sectionMap[firstErrorKey])
           ?.scrollIntoView({ behavior: "smooth", block: "center" });
       }
+      toast.error("Please fill required field", {
+        description: errs[firstErrorKey],
+      });
+      return false;
+    }
+
+    return true;
+  };
+
+  // Create Booking Action -> Opens the Apple Liquid Glass Email Preview Modal
+  const handleCreateBooking = () => {
+    if (!validateForm()) {
       return;
     }
 
-    // DO NOT immediately create or send the booking.
-    // Instead open the Apple Liquid Glass email-preview modal.
     setModalOpen(true);
   };
 
   // Save as Draft Action
-  const handleSaveDraft = () => {
+  const handleSaveDraft = async () => {
+    try {
+      const effectiveRate =
+        customRate !== null && customRate !== undefined
+          ? customRate
+          : matchedRate
+            ? matchedRate.ratePerContainer
+            : null;
+
+      const draftBooking = await createBookingInSupabase(userId, {
+        reference,
+        bookingReference: reference,
+        movementNumber: reference,
+        buyerId: buyer?.id,
+        buyerName: buyer?.name,
+        buyerCountry: buyer?.country,
+        supplierId: supplier?.id,
+        supplierName: supplier?.name,
+        supplierCity: supplier?.city,
+        forwarderId:
+          rateMode === "AGREED_RATE" && selectedBookingAgents.length === 1
+            ? selectedBookingAgents[0]?.id || bookingAgent?.id
+            : undefined,
+        forwarderName:
+          rateMode === "AGREED_RATE" && selectedBookingAgents.length === 1
+            ? selectedBookingAgents[0]?.name || bookingAgent?.name
+            : "Pending Award",
+        shippingLineId: shippingLine?.id,
+        shippingLineName: shippingLine?.name,
+        origin: pol?.name || "Felixstowe (FXT)",
+        destination: pod?.name || "Karachi (KHI)",
+        containerSize,
+        containerCount: quantity,
+        loadingDate,
+        productDescription,
+        specialInstructions: instructions,
+        rateMode,
+        freightRateMode: rateMode,
+        customRate: rateMode === "ASKING_RATE" ? null : effectiveRate,
+        totalFreight:
+          rateMode === "ASKING_RATE"
+            ? null
+            : effectiveRate !== null
+              ? effectiveRate * quantity
+              : null,
+        currency: currency || "USD",
+        status: "Draft",
+      });
+
+      queryClient.invalidateQueries({ queryKey: ["dashboard-bookings"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-data"] });
+      queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
+      queryClient.invalidateQueries({ queryKey: ["movements"] });
+
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("nashmia_booking_created", {
+            detail: {
+              booking: draftBooking,
+              id: draftBooking.id,
+              movementNumber: draftBooking.movement_number,
+              bookingReference: draftBooking.booking_reference,
+              reference: draftBooking.booking_reference,
+              status: "Draft",
+              rateMode,
+            },
+          }),
+        );
+        window.dispatchEvent(
+          new CustomEvent("nashmia_movement_created", {
+            detail: {
+              booking: draftBooking,
+              id: draftBooking.id,
+              movementNumber: draftBooking.movement_number,
+              bookingReference: draftBooking.booking_reference,
+              reference: draftBooking.booking_reference,
+              status: "Draft",
+              rateMode,
+            },
+          }),
+        );
+        window.dispatchEvent(
+          new CustomEvent("nashmia_bookings_updated", {
+            detail: {
+              updated: true,
+              id: draftBooking.id,
+              movementNumber: draftBooking.movement_number,
+              bookingReference: draftBooking.booking_reference,
+            },
+          }),
+        );
+      }
+    } catch (e) {
+      console.warn("Draft persistence notice:", e);
+    }
+
     setDraftSavedToast(true);
     toast.success("Draft Saved", {
       description: `Movement reference ${reference} draft has been preserved.`,
@@ -520,175 +693,212 @@ export function NewBookingPage({
     setTimeout(() => setDraftSavedToast(false), 3500);
   };
 
-  const handleBookingSuccess = () => {
-    // Generate new fresh Movement Number for the next booking
-    setReference(generateMovementNumber());
+  const handleBookingSuccess = (result?: { movementNumber?: string; reference?: string }) => {
+    queryClient.invalidateQueries({ queryKey: ["dashboard-bookings"] });
+    queryClient.invalidateQueries({ queryKey: ["dashboard-data"] });
+    queryClient.invalidateQueries({ queryKey: ["bookings"] });
+    queryClient.invalidateQueries({ queryKey: ["movements"] });
+    queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
+
+    const movRef = result?.movementNumber || result?.reference || reference;
+    toast.success("Booking Created Successfully!", {
+      description: `Movement ${movRef} has been recorded into the live database.`,
+      duration: 5000,
+    });
+    setModalOpen(false);
+    onBackToDashboard?.();
   };
 
   return (
-    <div className="relative min-h-screen bg-white pb-24 text-black">
-      {/* Subtle atmospheric background gradient */}
-      <div className="env-light" aria-hidden />
+    <div className="w-full min-w-0 max-w-full pb-16 text-black space-y-6">
+      {/* TOP HEADER */}
+      <BookingHeader
+        onBack={onBackToDashboard}
+        onOpenMobileMenu={onOpenMobileMenu}
+        isSaved={!isSubmitting}
+      />
 
-      {/* Main Content Area */}
-      <div className="mx-auto max-w-[1520px] px-4 pt-6 sm:px-6 lg:px-8">
-        {/* TOP HEADER */}
-        <BookingHeader
-          onBack={onBackToDashboard}
-          onOpenMobileMenu={onOpenMobileMenu}
-          isSaved={!isSubmitting}
-        />
+      {/* ELEGANT PROGRESS INDICATOR */}
+      <div className="mt-4 sm:mt-6">
+        <BookingProgress currentStep={currentStep} onSelectStep={handleSelectStep} />
+      </div>
 
-        {/* ELEGANT PROGRESS INDICATOR */}
-        <div className="mt-6">
-          <BookingProgress currentStep={currentStep} onSelectStep={handleSelectStep} />
-        </div>
+      {/* 70% FORM + 30% STICKY SUMMARY LAYOUT */}
+      <div className="mt-6 sm:mt-8 grid grid-cols-1 gap-8 lg:grid-cols-12">
+        {/* LEFT 70% — BOOKING FORM (col-span-8) */}
+        <div className="space-y-8 lg:col-span-8">
+          {/* SECTION 1: BOOKING PARTIES */}
+          <BookingPartiesSection
+            selectedBuyer={buyer}
+            onSelectBuyer={(b) => {
+              setBuyer(b);
+              setErrors((prev) => ({ ...prev, buyer: "" }));
+            }}
+            selectedSupplier={supplier}
+            onSelectSupplier={(s) => {
+              setSupplier(s);
+              setErrors((prev) => ({ ...prev, supplier: "" }));
+            }}
+            availableBuyers={dynamicBuyers}
+            availableSuppliers={dynamicSuppliers}
+            onQuickCreateBuyer={handleQuickCreateBuyer}
+            onQuickCreateSupplier={handleQuickCreateSupplier}
+            errors={errors}
+          />
 
-        {/* 70% FORM + 30% STICKY SUMMARY LAYOUT */}
-        <div className="mt-8 grid grid-cols-1 gap-8 lg:grid-cols-12">
-          {/* LEFT 70% — BOOKING FORM (col-span-8) */}
-          <div className="space-y-8 lg:col-span-8">
-            {/* SECTION 1: BOOKING PARTIES */}
-            <BookingPartiesSection
-              selectedBuyer={buyer}
-              onSelectBuyer={(b) => {
-                setBuyer(b);
-                setErrors((prev) => ({ ...prev, buyer: "" }));
-              }}
-              selectedSupplier={supplier}
-              onSelectSupplier={(s) => {
-                setSupplier(s);
-                setErrors((prev) => ({ ...prev, supplier: "" }));
-              }}
-              availableBuyers={dynamicBuyers}
-              availableSuppliers={dynamicSuppliers}
-              onQuickCreateBuyer={handleQuickCreateBuyer}
-              onQuickCreateSupplier={handleQuickCreateSupplier}
-              errors={errors}
-            />
+          {/* SECTION 2: ROUTE */}
+          <RouteSection
+            pol={pol}
+            onSelectPol={(p) => {
+              setPol(p);
+              setErrors((prev) => ({ ...prev, pol: "" }));
+            }}
+            pod={pod}
+            onSelectPod={(p) => {
+              setPod(p);
+              setErrors((prev) => ({ ...prev, pod: "" }));
+            }}
+            errors={errors}
+          />
 
-            {/* SECTION 2: ROUTE */}
-            <RouteSection
-              pol={pol}
-              onSelectPol={(p) => {
-                setPol(p);
-                setErrors((prev) => ({ ...prev, pol: "" }));
-              }}
-              pod={pod}
-              onSelectPod={(p) => {
-                setPod(p);
-                setErrors((prev) => ({ ...prev, pod: "" }));
-              }}
-              errors={errors}
-            />
-
-            {/* SECTION 3: SHIPPING & AGREED RATE */}
-            <ShippingSection
-              shippingLine={shippingLine}
-              onSelectShippingLine={(sl) => {
-                setShippingLine(sl);
-                setErrors((prev) => ({ ...prev, shippingLine: "" }));
-              }}
-              bookingAgent={bookingAgent}
-              onSelectBookingAgent={(ba) => {
-                setBookingAgent(ba);
+          {/* SECTION 3: SHIPPING & AGREED RATE */}
+          <ShippingSection
+            shippingLine={shippingLine}
+            onSelectShippingLine={(sl) => {
+              setShippingLine(sl);
+              setErrors((prev) => ({ ...prev, shippingLine: "" }));
+            }}
+            bookingAgent={bookingAgent}
+            onSelectBookingAgent={(ba) => {
+              setBookingAgent(ba);
+              setErrors((prev) => ({ ...prev, bookingAgent: "" }));
+            }}
+            selectedBookingAgents={selectedBookingAgents}
+            onSelectBookingAgents={(agents) => {
+              setSelectedBookingAgents(agents);
+              if (agents.length > 0) {
+                setBookingAgent(agents[0]);
                 setErrors((prev) => ({ ...prev, bookingAgent: "" }));
-              }}
-              selectedBookingAgents={selectedBookingAgents}
-              onSelectBookingAgents={(agents) => {
-                setSelectedBookingAgents(agents);
-                if (agents.length > 0) {
-                  setBookingAgent(agents[0]);
-                  setErrors((prev) => ({ ...prev, bookingAgent: "" }));
-                } else {
-                  setBookingAgent(null);
-                }
-              }}
-              pol={pol}
-              pod={pod}
-              containerSize={containerSize}
-              matchedRate={matchedRate}
-              availableBookingAgents={dynamicAgents}
-              errors={errors}
-            />
+              } else {
+                setBookingAgent(null);
+              }
+            }}
+            pol={pol}
+            pod={pod}
+            containerSize={containerSize}
+            quantity={quantity}
+            matchedRate={matchedRate}
+            rateMode={rateMode}
+            onChangeRateMode={setRateMode}
+            customRate={customRate}
+            onChangeCustomRate={setCustomRate}
+            currency={currency}
+            onChangeCurrency={setCurrency}
+            availableBookingAgents={dynamicAgents}
+            availableRateCards={realRateCards}
+            errors={errors}
+          />
 
-            {/* SECTION 4: CONTAINER & CARGO */}
-            <ContainerCargoSection
-              containerSize={containerSize}
-              onSelectSize={setContainerSize}
-              onSelectContainerSize={setContainerSize}
-              quantity={quantity}
-              onChangeQuantity={setQuantity}
-              productDescription={productDescription}
-              onChangeProductDescription={(val) => {
-                setProductDescription(val);
-                setErrors((prev) => ({ ...prev, productDescription: "" }));
-              }}
-              loadingDate={loadingDate}
-              onChangeLoadingDate={(val) => {
-                setLoadingDate(val);
-                setErrors((prev) => ({ ...prev, loadingDate: "" }));
-              }}
-              errors={errors}
-            />
+          {/* SECTION 4: CONTAINER & CARGO */}
+          <ContainerCargoSection
+            containerSize={containerSize}
+            onSelectSize={setContainerSize}
+            onSelectContainerSize={setContainerSize}
+            quantity={quantity}
+            onChangeQuantity={setQuantity}
+            productDescription={productDescription}
+            onChangeProductDescription={(val) => {
+              setProductDescription(val);
+              setErrors((prev) => ({ ...prev, productDescription: "" }));
+            }}
+            loadingDate={loadingDate}
+            onChangeLoadingDate={(val) => {
+              setLoadingDate(val);
+              setErrors((prev) => ({ ...prev, loadingDate: "" }));
+            }}
+            errors={errors}
+          />
 
-            {/* SECTION 5: SPECIAL INSTRUCTIONS */}
-            <SpecialInstructionsSection
-              instructions={instructions}
-              onChangeInstructions={setInstructions}
-            />
+          {/* SECTION 5: SPECIAL INSTRUCTIONS */}
+          <SpecialInstructionsSection
+            instructions={instructions}
+            onChangeInstructions={setInstructions}
+          />
 
-            {/* BOTTOM ACTIONS BAR FOR MOBILE / TABLET */}
-            <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white/90 p-4 backdrop-blur-sm sm:flex-row sm:items-center sm:justify-between lg:hidden">
-              <div>
-                <span className="text-xs text-slate-500">Estimated Total</span>
-                <p className="text-lg font-black text-black">
-                  ${matchedRate ? (matchedRate.ratePerContainer * quantity).toLocaleString() : "—"}{" "}
-                  <span className="text-xs font-normal text-slate-500">USD</span>
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleSaveDraft}
-                  className="flex h-11 flex-1 items-center justify-center gap-1.5 rounded-xl border border-slate-200 px-4 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                >
-                  <BookmarkCheck className="size-4" />
-                  <span>Draft</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={handleCreateBooking}
-                  className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-black px-6 text-xs font-semibold text-white shadow-md hover:bg-slate-800"
-                >
-                  <span>Submit</span>
-                  <ArrowRight className="size-4" />
-                </button>
-              </div>
+          {/* BOTTOM ACTIONS BAR FOR MOBILE / TABLET */}
+          <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white/90 p-4 backdrop-blur-sm sm:flex-row sm:items-center sm:justify-between lg:hidden">
+            <div>
+              <span className="text-xs text-slate-500">
+                {rateMode === "ASKING_RATE" ? "Rate Status" : "Estimated Total"}
+              </span>
+              <p className="text-lg font-black text-black">
+                {rateMode === "ASKING_RATE" ? (
+                  <span className="text-sm font-semibold text-[#6A80A9]">Quotation Requested</span>
+                ) : (
+                  <>
+                    $
+                    {(customRate !== null && customRate !== undefined
+                      ? customRate
+                      : matchedRate
+                        ? matchedRate.ratePerContainer
+                        : 0) *
+                      quantity >
+                    0
+                      ? (
+                          (customRate !== null && customRate !== undefined
+                            ? customRate
+                            : matchedRate?.ratePerContainer || 0) * quantity
+                        ).toLocaleString()
+                      : "—"}{" "}
+                    <span className="text-xs font-normal text-slate-500">{currency}</span>
+                  </>
+                )}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleSaveDraft}
+                className="flex h-11 flex-1 items-center justify-center gap-1.5 rounded-xl border border-slate-200 px-4 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                <BookmarkCheck className="size-4" />
+                <span>Draft</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateBooking}
+                className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-black px-6 text-xs font-semibold text-white shadow-md hover:bg-slate-800"
+              >
+                <span>Submit</span>
+                <ArrowRight className="size-4" />
+              </button>
             </div>
           </div>
+        </div>
 
-          {/* RIGHT 30% — STICKY SUMMARY CARD (col-span-4) */}
-          <div className="lg:col-span-4">
-            <div className="sticky top-6">
-              <BookingSummaryCard
-                reference={reference}
-                buyer={buyer}
-                supplier={supplier}
-                pol={pol}
-                pod={pod}
-                shippingLine={shippingLine}
-                bookingAgent={bookingAgent}
-                selectedBookingAgents={selectedBookingAgents}
-                containerSize={containerSize}
-                quantity={quantity}
-                loadingDate={loadingDate}
-                matchedRate={matchedRate}
-                onSubmit={handleCreateBooking}
-                onSaveDraft={handleSaveDraft}
-                isSubmitting={isSubmitting}
-              />
-            </div>
+        {/* RIGHT 30% — STICKY SUMMARY CARD (col-span-4) */}
+        <div className="lg:col-span-4">
+          <div className="sticky top-6">
+            <BookingSummaryCard
+              reference={reference}
+              buyer={buyer}
+              supplier={supplier}
+              pol={pol}
+              pod={pod}
+              shippingLine={shippingLine}
+              bookingAgent={bookingAgent}
+              selectedBookingAgents={selectedBookingAgents}
+              containerSize={containerSize}
+              quantity={quantity}
+              loadingDate={loadingDate}
+              matchedRate={matchedRate}
+              rateMode={rateMode}
+              customRate={customRate}
+              currency={currency}
+              onSubmit={handleCreateBooking}
+              onSaveDraft={handleSaveDraft}
+              isSubmitting={isSubmitting}
+            />
           </div>
         </div>
       </div>
@@ -719,6 +929,9 @@ export function NewBookingPage({
         productDescription={productDescription}
         instructions={instructions}
         matchedRate={matchedRate}
+        rateMode={rateMode}
+        customRate={customRate}
+        currency={currency}
         onSuccess={handleBookingSuccess}
         onSaveDraft={handleSaveDraft}
         onViewMovement={() => {

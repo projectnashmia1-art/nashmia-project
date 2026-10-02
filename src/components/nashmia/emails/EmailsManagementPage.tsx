@@ -17,6 +17,7 @@ import { EmailListPanel } from "./EmailListPanel";
 import { EmailPreviewPanel } from "./EmailPreviewPanel";
 import { ComposeEmailModal } from "./ComposeEmailModal";
 import { GmailConnectionBanner } from "./GmailConnectionBanner";
+import { LifecycleDropdownSelect } from "@/components/nashmia/common/LifecycleDropdownSelect";
 import type { EmailFolderId, EmailMessageRecord } from "@/types/email.types";
 import { cn } from "@/lib/utils";
 
@@ -204,22 +205,27 @@ export function EmailsManagementPage({ onOpenMobileMenu }: EmailsManagementPageP
           </div>
 
           {/* Mobile Folder Selector Dropdown */}
-          <div className="lg:hidden w-full flex items-center justify-between p-3 rounded-xl border border-slate-200 bg-white">
-            <span className="text-xs font-semibold text-slate-700">Mailbox:</span>
-            <select
+          <div className="lg:hidden w-full flex items-center justify-between p-3 rounded-2xl border border-slate-200 bg-white gap-3">
+            <span className="text-xs font-bold text-slate-700">Mailbox:</span>
+            <LifecycleDropdownSelect
               value={selectedFolder}
-              onChange={(e) => setSelectedFolder(e.target.value as EmailFolderId)}
-              className="px-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-white text-slate-800 font-semibold"
-            >
-              <option value="all">All Emails ({folderCounts.all})</option>
-              <option value="inbox">Inbox ({folderCounts.inbox})</option>
-              <option value="sent">Sent ({folderCounts.sent})</option>
-              <option value="drafts">Drafts ({folderCounts.drafts})</option>
-              <option value="pending">Pending ({folderCounts.pending})</option>
-              <option value="failed">Failed ({folderCounts.failed})</option>
-              <option value="booking">Booking Emails ({folderCounts.booking})</option>
-              <option value="system">System Emails ({folderCounts.system})</option>
-            </select>
+              onChange={(val) => setSelectedFolder(val as EmailFolderId)}
+              options={[
+                { value: "all", label: `All Emails (${folderCounts.all})` },
+                { value: "inbox", label: `Inbox (${folderCounts.inbox})` },
+                { value: "sent", label: `Sent (${folderCounts.sent})` },
+                { value: "drafts", label: `Drafts (${folderCounts.drafts})` },
+                { value: "pending", label: `Pending (${folderCounts.pending})` },
+                { value: "failed", label: `Failed (${folderCounts.failed})` },
+                { value: "booking", label: `Booking Emails (${folderCounts.booking})` },
+                { value: "system", label: `System Emails (${folderCounts.system})` },
+              ]}
+              placeholder="Select Mailbox"
+              size="sm"
+              activeColor="teal"
+              className="flex-1 max-w-xs"
+              triggerClassName="w-full"
+            />
           </div>
 
           {/* Center Email List Panel */}
@@ -239,6 +245,7 @@ export function EmailsManagementPage({ onOpenMobileMenu }: EmailsManagementPageP
             <EmailPreviewPanel
               email={selectedEmail}
               allEmails={allEmails}
+              isLoading={isLoading}
               onSelectEmail={setSelectedEmail}
               onRetry={handleRetryEmail}
               onOpenDraftModal={handleOpenDraft}

@@ -2,8 +2,12 @@ import { useState, useRef, useEffect, useMemo } from "react";
 import {
   AlertCircle,
   Check,
+  CheckCircle2,
   ChevronDown,
   FileSpreadsheet,
+  HelpCircle,
+  Info,
+  MessageSquareQuote,
   Receipt,
   Route as RouteIcon,
   Search,
@@ -21,12 +25,15 @@ import {
   type RateCard,
   type Port,
   type ContainerSize,
+  type FreightRateMode,
 } from "@/lib/booking-data";
+import type { FullRateCardRecord } from "@/types/rate-card.types";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 interface ShippingSectionProps {
-  shippingLine: ShippingLine | null;
-  onSelectShippingLine: (line: ShippingLine) => void;
+  shippingLine?: ShippingLine | null;
+  onSelectShippingLine?: (line: ShippingLine) => void;
   bookingAgent: BookingAgent | null;
   onSelectBookingAgent: (agent: BookingAgent) => void;
   selectedBookingAgents?: BookingAgent[];
@@ -35,17 +42,25 @@ interface ShippingSectionProps {
   pod: Port | null;
   containerSize: ContainerSize;
   matchedRate: RateCard | null;
+  rateMode?: FreightRateMode;
+  onChangeRateMode?: (mode: FreightRateMode) => void;
+  onSelectRateMode?: (mode: FreightRateMode) => void;
+  customRate?: number | null;
+  onChangeCustomRate?: (rate: number | null) => void;
+  currency?: string;
+  onChangeCurrency?: (curr: string) => void;
+  quantity?: number;
   availableShippingLines?: ShippingLine[];
   availableBookingAgents?: BookingAgent[];
+  availableRateCards?: FullRateCardRecord[];
   errors?: {
     shippingLine?: string;
     bookingAgent?: string;
+    rate?: string;
   };
 }
 
 export function ShippingSection({
-  shippingLine,
-  onSelectShippingLine,
   bookingAgent,
   onSelectBookingAgent,
   selectedBookingAgents,
@@ -54,24 +69,53 @@ export function ShippingSection({
   pod,
   containerSize,
   matchedRate,
-  availableShippingLines = SHIPPING_LINES,
-  availableBookingAgents = BOOKING_AGENTS,
+  rateMode = "AGREED_RATE",
+  onChangeRateMode,
+  onSelectRateMode,
+  customRate = null,
+  onChangeCustomRate,
+  currency = "USD",
+  onChangeCurrency,
+  quantity = 1,
+  availableBookingAgents = [],
+  availableRateCards = [],
   errors,
 }: ShippingSectionProps) {
-  const [lineOpen, setLineOpen] = useState(false);
-  const [lineSearch, setLineSearch] = useState("");
   const [agentOpen, setAgentOpen] = useState(false);
   const [agentSearch, setAgentSearch] = useState("");
   const [rateDirectoryOpen, setRateDirectoryOpen] = useState(false);
+  const [isEditingCustomRate, setIsEditingCustomRate] = useState(false);
+  const [customRateInput, setCustomRateInput] = useState<string>(
+    customRate ? String(customRate) : "",
+  );
 
-  const lineRef = useRef<HTMLDivElement>(null);
+  const effectiveRate =
+    customRate !== null && customRate !== undefined
+      ? customRate
+      : matchedRate?.ratePerContainer || 0;
+
+  const totalCalculatedFreight = effectiveRate * quantity;
+
   const agentRef = useRef<HTMLDivElement>(null);
+
+  const handleRateModeToggle = (mode: FreightRateMode) => {
+    onChangeRateMode?.(mode);
+    onSelectRateMode?.(mode);
+  };
+
+  const handleApplyCustomRate = () => {
+    const parsed = parseFloat(customRateInput);
+    if (!isNaN(parsed) && parsed >= 0) {
+      onChangeCustomRate?.(parsed);
+      setIsEditingCustomRate(false);
+    } else if (customRateInput.trim() === "") {
+      onChangeCustomRate?.(null);
+      setIsEditingCustomRate(false);
+    }
+  };
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (lineRef.current && !lineRef.current.contains(event.target as Node)) {
-        setLineOpen(false);
-      }
       if (agentRef.current && !agentRef.current.contains(event.target as Node)) {
         setAgentOpen(false);
       }
@@ -80,8 +124,7 @@ export function ShippingSection({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const linesList = availableShippingLines.length > 0 ? availableShippingLines : SHIPPING_LINES;
-  const agentsList = availableBookingAgents.length > 0 ? availableBookingAgents : BOOKING_AGENTS;
+  const agentsList = availableBookingAgents;
 
   // Resolved list of selected agents
   const selectedAgents: BookingAgent[] = useMemo(() => {
@@ -90,12 +133,6 @@ export function ShippingSection({
     }
     return bookingAgent ? [bookingAgent] : [];
   }, [selectedBookingAgents, bookingAgent]);
-
-  const filteredLines = linesList.filter(
-    (l) =>
-      l.name.toLowerCase().includes(lineSearch.toLowerCase()) ||
-      l.code.toLowerCase().includes(lineSearch.toLowerCase()),
-  );
 
   const filteredAgents = agentsList.filter(
     (a) =>
@@ -164,7 +201,7 @@ export function ShippingSection({
             </h2>
           </div>
           <p className="text-xs text-slate-500 sm:text-sm">
-            Select the carrier and booking partner for freight procurement.
+            Select the booking partner and forwarders for freight procurement.
           </p>
         </div>
         <span className="hidden rounded-full border border-slate-200/80 bg-white/60 px-3 py-1 text-[11px] font-medium text-slate-500 sm:inline-block">
@@ -172,107 +209,8 @@ export function ShippingSection({
         </span>
       </div>
 
-      {/* Grid of Shipping Line and Forwarder */}
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-        {/* SHIPPING LINE */}
-        <div className="space-y-2" ref={lineRef}>
-          <div className="flex items-center justify-between">
-            <label className="text-xs font-semibold uppercase tracking-wider text-slate-700">
-              Shipping Line <span className="text-rose-500">*</span>
-            </label>
-            {shippingLine && (
-              <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-700">
-                {shippingLine.code}
-              </span>
-            )}
-          </div>
-
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => {
-                setLineOpen((prev) => !prev);
-                setAgentOpen(false);
-              }}
-              className={cn(
-                "flex w-full items-center justify-between rounded-[16px] border bg-white/80 px-4 py-3.5 text-left text-sm transition-all focus:outline-none focus:ring-2 focus:ring-[#6A80A9]/30",
-                lineOpen ? "border-[#6A80A9] ring-2 ring-[#6A80A9]/20" : "border-slate-200/90",
-                errors?.shippingLine && !shippingLine && "border-rose-400 bg-rose-50/30",
-              )}
-            >
-              <div className="flex items-center gap-3">
-                <div className="flex size-9 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
-                  <Ship className="size-4 text-[#6A80A9]" />
-                </div>
-                <div>
-                  {shippingLine ? (
-                    <div>
-                      <p className="font-semibold text-black">{shippingLine.name}</p>
-                      <p className="text-[11px] text-slate-500">
-                        {shippingLine.vesselsActive} Vessels operating globally
-                      </p>
-                    </div>
-                  ) : (
-                    <span className="text-slate-400">Select shipping line...</span>
-                  )}
-                </div>
-              </div>
-              <ChevronDown
-                className={cn(
-                  "size-4 text-slate-400 transition-transform duration-200",
-                  lineOpen && "rotate-180 text-black",
-                )}
-              />
-            </button>
-
-            {errors?.shippingLine && !shippingLine && (
-              <p className="mt-1 text-[11px] font-medium text-rose-500">{errors.shippingLine}</p>
-            )}
-
-            {lineOpen && (
-              <div className="glass-card-strong absolute z-30 mt-2 max-h-64 w-full overflow-hidden rounded-[18px] border border-white/90 p-2 shadow-[0_16px_40px_rgba(15,23,42,0.12)] animate-in fade-in zoom-in-95">
-                <div className="relative mb-2 px-1">
-                  <Search className="absolute left-3.5 top-2.5 size-3.5 text-slate-400" />
-                  <input
-                    type="text"
-                    value={lineSearch}
-                    onChange={(e) => setLineSearch(e.target.value)}
-                    placeholder="Search carrier..."
-                    className="w-full rounded-xl border border-slate-200/80 bg-white/95 py-2 pl-9 pr-3 text-xs text-black placeholder:text-slate-400 focus:border-[#6A80A9] focus:outline-none"
-                    autoFocus
-                  />
-                </div>
-                <div className="max-h-44 overflow-y-auto space-y-1 pr-1 scrollbar-thin">
-                  {filteredLines.map((line) => (
-                    <button
-                      key={line.id}
-                      type="button"
-                      onClick={() => {
-                        onSelectShippingLine(line);
-                        setLineOpen(false);
-                        setLineSearch("");
-                      }}
-                      className={cn(
-                        "flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-xs transition-colors hover:bg-[#E8F1F3]/80",
-                        shippingLine?.id === line.id &&
-                          "bg-[#6A80A9]/10 font-semibold text-[#6A80A9]",
-                      )}
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold text-black">{line.name}</span>
-                        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">
-                          {line.code}
-                        </span>
-                      </div>
-                      {shippingLine?.id === line.id && <Check className="size-4 text-[#6A80A9]" />}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
+      {/* Forwarder / Booking Agent */}
+      <div className="space-y-6">
         {/* BOOKING AGENT / FORWARDER */}
         <div className="space-y-2" ref={agentRef}>
           <div className="flex items-center justify-between">
@@ -293,7 +231,6 @@ export function ShippingSection({
               type="button"
               onClick={() => {
                 setAgentOpen((prev) => !prev);
-                setLineOpen(false);
               }}
               className={cn(
                 "flex w-full items-center justify-between rounded-[16px] border bg-white/80 px-4 py-3.5 text-left text-sm transition-all focus:outline-none focus:ring-2 focus:ring-[#6A80A9]/30",
@@ -478,94 +415,327 @@ export function ShippingSection({
         </div>
       </div>
 
-      {/* DEDICATED ELEGANT GLASS RATE PANEL — PREMIUM FEATURE */}
-      <div className="mt-6">
-        {matchedRate ? (
-          <div className="relative overflow-hidden rounded-[22px] border border-white/90 bg-gradient-to-br from-white/95 via-white/85 to-[#E8F1F3]/40 p-5 shadow-[0_12px_35px_rgba(15,23,42,0.04),inset_0_1px_2px_rgba(255,255,255,1)] backdrop-blur-xl transition-all duration-300">
-            {/* Top Bar with Status Tag */}
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
-              <div className="flex items-center gap-2">
-                <div className="flex size-7 items-center justify-center rounded-lg bg-[#C7D5BF]/40 text-[#2D3C26]">
-                  <Receipt className="size-4" />
-                </div>
-                <div>
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800">
-                    Agreed Freight Rate
-                  </h3>
-                  <p className="text-[11px] text-slate-400">Commercial Rate Card Agreement</p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-[#C7D5BF] bg-[#C7D5BF]/30 px-3 py-1 text-xs font-semibold text-[#2D3C26]">
-                  <span className="size-1.5 rounded-full bg-[#2D3C26]" />
-                  Rate matched
-                </span>
-                <span className="text-xs text-slate-400">Valid to {matchedRate.validUntil}</span>
-              </div>
-            </div>
-
-            {/* Rate Value & Details */}
-            <div className="mt-4 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
-              <div>
-                <div className="flex items-baseline gap-2">
-                  <span className="text-3xl font-extrabold tracking-tight text-black sm:text-4xl">
-                    ${matchedRate.ratePerContainer.toLocaleString()}
-                  </span>
-                  <span className="text-xs font-medium uppercase text-slate-500">
-                    USD / container
-                  </span>
-                </div>
-                <p className="mt-1 text-xs font-medium text-slate-600">
-                  {matchedRate.agentName} • {pol?.name ?? matchedRate.polCode} →{" "}
-                  {pod?.name ?? matchedRate.podCode} • {containerSize}
-                </p>
-                <p className="text-[11px] text-slate-400">Card: {matchedRate.cardName}</p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setRateDirectoryOpen(true)}
-                className="inline-flex items-center gap-1.5 self-start rounded-xl border border-slate-200/80 bg-white/90 px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-50 sm:self-end"
+      {/* FREIGHT RATE PROCUREMENT SECTION & MODE SWITCH */}
+      <div className="mt-8 border-t border-slate-100/90 pt-6">
+        <div className="mb-4 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-800">
+                Freight Rate Mode
+              </span>
+              <span
+                className={cn(
+                  "inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-bold transition-all",
+                  rateMode === "ASKING_RATE"
+                    ? "bg-[#6A80A9]/15 text-[#374b6e]"
+                    : "bg-[#C7D5BF]/40 text-[#2D3C26]",
+                )}
               >
-                <FileSpreadsheet className="size-3.5 text-[#6A80A9]" />
-                <span>View Rate Schedule</span>
-              </button>
+                {rateMode === "ASKING_RATE" ? "Asking Rate Mode" : "Agreed Commercial Rate"}
+              </span>
             </div>
+            <p className="mt-0.5 text-xs text-slate-500">
+              {rateMode === "ASKING_RATE"
+                ? "Solicit live freight rate quotations directly from the selected forwarder(s)."
+                : "Apply negotiated contractual rate card or specify agreed container freight."}
+            </p>
           </div>
-        ) : (
-          <div className="rounded-[20px] border border-dashed border-slate-300/80 bg-[#E8F1F3]/25 p-5 transition-all">
-            <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
-              <div className="flex items-center gap-3">
-                <div className="flex size-9 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
-                  <AlertCircle className="size-4.5" />
+
+          {/* Clean, Premium Segmented Toggle */}
+          <div className="relative z-10 inline-flex items-center rounded-[14px] border border-slate-200/90 bg-slate-100/90 p-1 shadow-inner self-start sm:self-auto">
+            <button
+              type="button"
+              onClick={() => handleRateModeToggle("ASKING_RATE")}
+              className={cn(
+                "flex items-center gap-1.5 rounded-[10px] px-3.5 py-1.5 text-xs font-semibold transition-all duration-200 cursor-pointer select-none",
+                rateMode === "ASKING_RATE"
+                  ? "bg-white text-black shadow-xs font-bold ring-1 ring-slate-200/50"
+                  : "text-slate-600 hover:text-black",
+              )}
+            >
+              <HelpCircle className="size-3.5 text-[#6A80A9]" />
+              <span>Asking Rate</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleRateModeToggle("AGREED_RATE")}
+              className={cn(
+                "flex items-center gap-1.5 rounded-[10px] px-3.5 py-1.5 text-xs font-semibold transition-all duration-200 cursor-pointer select-none",
+                rateMode === "AGREED_RATE"
+                  ? "bg-white text-black shadow-xs font-bold ring-1 ring-slate-200/50"
+                  : "text-slate-600 hover:text-black",
+              )}
+            >
+              <Receipt className="size-3.5 text-[#2D3C26]" />
+              <span>Agreed Freight Rate</span>
+            </button>
+          </div>
+        </div>
+
+        {/* ASKING RATE MODE VIEW */}
+        {rateMode === "ASKING_RATE" && (
+          <div className="relative overflow-hidden rounded-[22px] border border-[#6A80A9]/30 bg-gradient-to-br from-white/95 via-white/85 to-[#E8F1F3]/40 p-5 shadow-[0_12px_35px_rgba(15,23,42,0.03),inset_0_1px_2px_rgba(255,255,255,1)] backdrop-blur-xl animate-in fade-in duration-200">
+            {/* Top Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100/90 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="flex size-8 items-center justify-center rounded-xl bg-[#6A80A9]/15 text-[#6A80A9]">
+                  <MessageSquareQuote className="size-4.5" />
                 </div>
                 <div>
-                  <p className="text-xs font-bold text-slate-800">No active rate card found</p>
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900">
+                    Forwarder Quotation Request
+                  </h3>
                   <p className="text-[11px] text-slate-500">
-                    {bookingAgent && pol && pod
-                      ? `No negotiated monthly rate for ${bookingAgent.name} on ${pol.code} → ${pod.code} (${containerSize})`
-                      : "Select booking agent, origin, destination, and container size to match rate."}
+                    Direct Rate Inquiry & Space Verification
                   </p>
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setRateDirectoryOpen(true)}
-                className="rounded-xl border border-slate-200/90 bg-white px-3.5 py-2 text-xs font-semibold text-slate-800 shadow-sm transition-all hover:bg-slate-50"
-              >
-                Review Rate Cards
-              </button>
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-[#6A80A9]/30 bg-[#6A80A9]/10 px-3 py-1 text-xs font-semibold text-[#6A80A9]">
+                <span className="size-1.5 rounded-full bg-[#6A80A9] animate-pulse" />
+                Asking Rate Mode
+              </span>
             </div>
+
+            {/* Small required message banner */}
+            <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-sky-200/80 bg-sky-50/70 p-3.5 text-xs text-sky-900">
+              <Info className="size-4 shrink-0 text-sky-600 mt-0.5" />
+              <div>
+                <p className="font-semibold text-sky-950">
+                  The freight forwarder will be asked to provide the freight rate.
+                </p>
+                <p className="mt-0.5 text-[11.5px] text-sky-800 leading-relaxed">
+                  Agreed freight rate input fields are hidden. When this booking request is sent, an
+                  email will automatically be generated asking the forwarder for their best freight
+                  quotation along with schedule and space confirmation.
+                </p>
+              </div>
+            </div>
+
+            {/* Relevant booking inquiry details summary */}
+            <div className="mt-4 rounded-xl border border-slate-200/70 bg-white/80 p-4">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-700 mb-2.5">
+                Quotation Requirements Requested in Forwarder Email:
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 text-xs">
+                <div className="flex items-center gap-2 rounded-lg border border-slate-100 bg-slate-50/80 p-2.5">
+                  <CheckCircle2 className="size-4 text-[#6A80A9] shrink-0" />
+                  <div>
+                    <span className="font-semibold text-slate-900">Freight Rate</span>
+                    <p className="text-[10.5px] text-slate-500">Per-container ocean freight</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 rounded-lg border border-slate-100 bg-slate-50/80 p-2.5">
+                  <CheckCircle2 className="size-4 text-[#6A80A9] shrink-0" />
+                  <div>
+                    <span className="font-semibold text-slate-900">Currency</span>
+                    <p className="text-[10.5px] text-slate-500">USD, EUR, GBP quotation</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 rounded-lg border border-slate-100 bg-slate-50/80 p-2.5">
+                  <CheckCircle2 className="size-4 text-[#6A80A9] shrink-0" />
+                  <div>
+                    <span className="font-semibold text-slate-900">Space Availability</span>
+                    <p className="text-[10.5px] text-slate-500">Carrier slot allocation</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 rounded-lg border border-slate-100 bg-slate-50/80 p-2.5">
+                  <CheckCircle2 className="size-4 text-[#6A80A9] shrink-0" />
+                  <div>
+                    <span className="font-semibold text-slate-900">ETD & ETA Schedule</span>
+                    <p className="text-[10.5px] text-slate-500">Departure & arrival dates</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 rounded-lg border border-slate-100 bg-slate-50/80 p-2.5">
+                  <CheckCircle2 className="size-4 text-[#6A80A9] shrink-0" />
+                  <div>
+                    <span className="font-semibold text-slate-900">Transit Time</span>
+                    <p className="text-[10.5px] text-slate-500">Estimated transit duration</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 rounded-lg border border-slate-100 bg-slate-50/80 p-2.5">
+                  <CheckCircle2 className="size-4 text-[#6A80A9] shrink-0" />
+                  <div>
+                    <span className="font-semibold text-slate-900">
+                      Additional Charges & Validity
+                    </span>
+                    <p className="text-[10.5px] text-slate-500">THC, surcharges & validity</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* AGREED FREIGHT RATE MODE VIEW */}
+        {rateMode === "AGREED_RATE" && (
+          <div className="space-y-4 animate-in fade-in duration-200">
+            {matchedRate ? (
+              <div className="relative overflow-hidden rounded-[22px] border border-white/90 bg-gradient-to-br from-white/95 via-white/85 to-[#E8F1F3]/40 p-5 shadow-[0_12px_35px_rgba(15,23,42,0.04),inset_0_1px_2px_rgba(255,255,255,1)] backdrop-blur-xl transition-all duration-300">
+                {/* Top Bar with Status Tag */}
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                  <div className="flex items-center gap-2">
+                    <div className="flex size-7 items-center justify-center rounded-lg bg-[#C7D5BF]/40 text-[#2D3C26]">
+                      <Receipt className="size-4" />
+                    </div>
+                    <div>
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800">
+                        Agreed Freight Rate
+                      </h3>
+                      <p className="text-[11px] text-slate-400">Commercial Rate Card Agreement</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-[#C7D5BF] bg-[#C7D5BF]/30 px-3 py-1 text-xs font-semibold text-[#2D3C26]">
+                      <span className="size-1.5 rounded-full bg-[#2D3C26]" />
+                      Rate matched
+                    </span>
+                    <span className="text-xs text-slate-400">
+                      Valid to {matchedRate.validUntil}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Rate Value & Details */}
+                <div className="mt-4 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
+                  <div>
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-3xl font-extrabold tracking-tight text-black sm:text-4xl">
+                        ${(customRate ?? matchedRate.ratePerContainer).toLocaleString()}
+                      </span>
+                      <span className="text-xs font-medium uppercase text-slate-500">
+                        {currency} / container
+                      </span>
+                      {quantity > 1 && (
+                        <span className="text-xs font-semibold text-slate-700">
+                          (Total: ${totalCalculatedFreight.toLocaleString()} {currency})
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-1 text-xs font-medium text-slate-600">
+                      {matchedRate.agentName} • {pol?.name ?? matchedRate.polCode} →{" "}
+                      {pod?.name ?? matchedRate.podCode} • {containerSize}
+                    </p>
+                    <p className="text-[11px] text-slate-400">Card: {matchedRate.cardName}</p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 self-start sm:self-end">
+                    {/* Currency selection */}
+                    <div className="flex items-center rounded-xl border border-slate-200/80 bg-white/90 p-1 shadow-xs">
+                      {["USD", "EUR", "GBP"].map((curr) => (
+                        <button
+                          key={curr}
+                          type="button"
+                          onClick={() => onChangeCurrency?.(curr)}
+                          className={cn(
+                            "rounded-lg px-2.5 py-1 text-[11px] font-bold transition-colors",
+                            currency === curr
+                              ? "bg-black text-white"
+                              : "text-slate-600 hover:text-black",
+                          )}
+                        >
+                          {curr}
+                        </button>
+                      ))}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setRateDirectoryOpen(true)}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200/80 bg-white/90 px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-50"
+                    >
+                      <FileSpreadsheet className="size-3.5 text-[#6A80A9]" />
+                      <span>View Rate Schedule</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-[20px] border border-dashed border-slate-300/80 bg-[#E8F1F3]/25 p-5 transition-all">
+                <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
+                  <div className="flex items-center gap-3">
+                    <div className="flex size-9 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
+                      <AlertCircle className="size-4.5" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-slate-800">
+                        {customRate
+                          ? `Agreed Rate: $${customRate} ${currency}/container`
+                          : "No active rate card found"}
+                      </p>
+                      <p className="text-[11px] text-slate-500">
+                        {customRate
+                          ? `Custom agreed freight rate applied for ${containerSize} container.`
+                          : bookingAgent && pol && pod
+                            ? `No negotiated monthly rate for ${bookingAgent.name} on ${pol.code} → ${pod.code} (${containerSize}). You can specify a custom agreed rate or review cards.`
+                            : "Select booking agent, origin, destination, and container size to match rate."}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* Enter Custom Agreed Rate */}
+                    {isEditingCustomRate ? (
+                      <div className="flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white p-1 shadow-xs">
+                        <span className="pl-2 text-xs font-bold text-slate-500">$</span>
+                        <input
+                          type="number"
+                          placeholder="Rate"
+                          value={customRateInput}
+                          onChange={(e) => setCustomRateInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              handleApplyCustomRate();
+                            }
+                          }}
+                          className="w-20 rounded-lg px-2 py-1 text-xs font-semibold text-black focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleApplyCustomRate}
+                          className="rounded-lg bg-black px-2.5 py-1 text-[11px] font-bold text-white hover:bg-slate-800"
+                        >
+                          Set
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setIsEditingCustomRate(false)}
+                          className="rounded-lg px-2 py-1 text-[11px] font-medium text-slate-500 hover:text-black"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingCustomRate(true)}
+                        className="rounded-xl border border-slate-200/90 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-50"
+                      >
+                        {customRate ? "Edit Rate" : "Enter Agreed Rate"}
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => setRateDirectoryOpen(true)}
+                      className="rounded-xl border border-slate-200/90 bg-white px-3.5 py-2 text-xs font-semibold text-slate-800 shadow-sm transition-all hover:bg-slate-50"
+                    >
+                      Review Rate Cards
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
 
       {/* RATE CARDS MODAL / DIRECTORY VIEWER */}
       {rateDirectoryOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 p-4 backdrop-blur-md animate-in fade-in">
-          <div className="glass-card-strong w-full max-w-2xl rounded-[24px] border border-white/95 p-6 shadow-2xl animate-in zoom-in-95">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="glass-card-strong w-full max-w-2xl rounded-[24px] border border-white/95 p-6 shadow-2xl animate-in zoom-in-95 outline-none">
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
               <div className="flex items-center gap-2.5">
                 <div className="flex size-8 items-center justify-center rounded-lg bg-[#6A80A9]/10 text-[#6A80A9]">
@@ -588,38 +758,94 @@ export function ShippingSection({
             </div>
 
             <div className="mt-4 max-h-80 overflow-y-auto space-y-2 pr-1 scrollbar-thin">
-              {RATE_CARDS.map((card, idx) => (
-                <div
-                  key={idx}
-                  className={cn(
-                    "flex items-center justify-between rounded-xl border p-3 text-xs transition-colors",
-                    matchedRate?.cardName === card.cardName &&
-                      matchedRate.agentId === card.agentId &&
-                      matchedRate.size === card.size
-                      ? "border-[#C7D5BF] bg-[#C7D5BF]/20 font-semibold"
-                      : "border-slate-200/80 bg-white/70 hover:bg-slate-50",
-                  )}
-                >
-                  <div className="space-y-0.5">
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-black">{card.agentName}</span>
-                      <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600 font-medium">
-                        {card.size}
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-slate-500">
-                      {card.polCode} → {card.podCode} • Card: {card.cardName}
-                    </p>
-                  </div>
-
-                  <div className="text-right">
-                    <span className="text-sm font-bold text-black">
-                      ${card.ratePerContainer.toLocaleString()}
-                    </span>
-                    <p className="text-[10px] text-slate-400">Valid to {card.validUntil}</p>
-                  </div>
+              {(availableRateCards.length > 0
+                ? availableRateCards.filter((r) => r.status !== "Inactive")
+                : RATE_CARDS
+              ).length === 0 ? (
+                <div className="rounded-xl border border-dashed border-slate-200 p-8 text-center">
+                  <Receipt className="mx-auto size-8 text-slate-300 mb-2" />
+                  <p className="text-xs font-semibold text-slate-700">No Rate Cards Configured</p>
+                  <p className="text-[11px] text-slate-400 mt-1 max-w-sm mx-auto">
+                    Live rates will be quoted directly by selected forwarders upon booking
+                    submission.
+                  </p>
                 </div>
-              ))}
+              ) : (
+                (availableRateCards.length > 0
+                  ? availableRateCards.filter((r) => r.status !== "Inactive")
+                  : RATE_CARDS
+                ).map((card, idx) => {
+                  const isFull = "base_rate" in card || "load_point" in card;
+                  const fwdName = isFull
+                    ? (card as FullRateCardRecord).forwarders?.company_name ||
+                      (card as FullRateCardRecord).forwarders?.contact_person ||
+                      "Forwarder"
+                    : (card as RateCard).agentName;
+                  const pickupLoc = isFull
+                    ? (card as FullRateCardRecord).load_point || (card as FullRateCardRecord).origin
+                    : `${(card as RateCard).polCode} → ${(card as RateCard).podCode}`;
+                  const rateVal = isFull
+                    ? (card as FullRateCardRecord).base_rate ||
+                      (card as FullRateCardRecord).rate ||
+                      0
+                    : (card as RateCard).ratePerContainer;
+                  const cardCurr = isFull
+                    ? (card as FullRateCardRecord).currency || "USD"
+                    : (card as RateCard).currency || "USD";
+                  const validDate = isFull
+                    ? (card as FullRateCardRecord).valid_until
+                    : (card as RateCard).validUntil;
+                  const cSize = isFull
+                    ? (card as FullRateCardRecord).container_size || "40HC"
+                    : (card as RateCard).size;
+
+                  const isMatched =
+                    matchedRate &&
+                    (matchedRate.ratePerContainer === rateVal || matchedRate.agentName === fwdName);
+
+                  return (
+                    <div
+                      key={idx}
+                      onClick={() => {
+                        onChangeCustomRate?.(rateVal);
+                        onChangeCurrency?.(cardCurr);
+                        setRateDirectoryOpen(false);
+                        toast.success(
+                          `Applied Rate Card: $${rateVal.toLocaleString()} (${fwdName})`,
+                        );
+                      }}
+                      className={cn(
+                        "flex items-center justify-between rounded-xl border p-3 text-xs transition-colors cursor-pointer",
+                        isMatched
+                          ? "border-[#6A80A9] bg-[#6A80A9]/10 font-semibold"
+                          : "border-slate-200/80 bg-white/70 hover:bg-slate-50 hover:border-slate-300",
+                      )}
+                    >
+                      <div className="space-y-0.5">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-black">{fwdName}</span>
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600 font-medium">
+                            {cSize}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-500">
+                          Pickup: <strong className="text-slate-700">{pickupLoc}</strong>
+                        </p>
+                      </div>
+
+                      <div className="text-right">
+                        <span className="text-sm font-bold text-black font-mono">
+                          {cardCurr === "USD" ? "$" : `${cardCurr} `}
+                          {rateVal.toLocaleString()}
+                        </span>
+                        {validDate && (
+                          <p className="text-[10px] text-slate-400">Valid to {validDate}</p>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
 
             <div className="mt-6 flex justify-end">

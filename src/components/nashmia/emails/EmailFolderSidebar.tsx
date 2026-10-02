@@ -86,18 +86,9 @@ export function EmailFolderSidebar({
         {/* 1. User Profile Header */}
         <div className="flex items-center gap-3.5 px-2">
           <div className="relative size-12 shrink-0">
-            {avatarUrl ? (
-              <img
-                src={avatarUrl}
-                alt={displayName}
-                className="size-12 rounded-full object-cover ring-2 ring-slate-100 shadow-xs"
-                referrerPolicy="no-referrer"
-              />
-            ) : (
-              <div className="grid size-12 place-items-center rounded-full bg-gradient-to-tr from-[#0FA3B1] to-[#078A99] font-bold text-white text-[16px] ring-2 ring-slate-100 shadow-xs">
-                {avatarLetter}
-              </div>
-            )}
+            <div className="grid size-12 place-items-center rounded-full bg-gradient-to-tr from-[#0FA3B1] to-[#078A99] font-bold text-white text-[16px] ring-2 ring-slate-100 shadow-xs">
+              {avatarLetter}
+            </div>
             <span className="absolute bottom-0 right-0 size-3 rounded-full bg-emerald-500 ring-2 ring-white" />
           </div>
           <div className="min-w-0 flex-1">

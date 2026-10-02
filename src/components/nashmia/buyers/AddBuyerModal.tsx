@@ -1,12 +1,11 @@
 import { useEffect, useState } from "react";
 import {
-  Check,
-  CheckCircle2,
-  Globe,
+  Building2,
+  ChevronDown,
+  Globe2,
   Mail,
   Phone,
   Plus,
-  Sparkles,
   User,
   X,
   AlertCircle,
@@ -15,12 +14,13 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
 import { BuyerAccountFull, COUNTRY_FILTER_OPTIONS } from "@/lib/buyers-data";
-import { toast } from "sonner";
+import { ResultSuccessView } from "@/components/nashmia/common/ResultSuccessView";
+import { LifecycleDropdownSelect } from "@/components/nashmia/common/LifecycleDropdownSelect";
+import { cn } from "@/lib/utils";
 
 interface AddBuyerModalProps {
   open: boolean;
@@ -38,7 +38,7 @@ export function AddBuyerModal({ open, onOpenChange, onSaveBuyer, editBuyer }: Ad
   const [phone, setPhone] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [showSuccessScreen, setShowSuccessScreen] = useState(false);
-  const [createdBuyerName, setCreatedBuyerName] = useState("");
+  const [savedEntity, setSavedEntity] = useState<{ name: string; code: string } | null>(null);
 
   // Sync edit buyer into form state
   useEffect(() => {
@@ -51,6 +51,7 @@ export function AddBuyerModal({ open, onOpenChange, onSaveBuyer, editBuyer }: Ad
       setPhone(editBuyer.phone);
       setErrors({});
       setShowSuccessScreen(false);
+      setSavedEntity(null);
     } else {
       setName("");
       setCompany("");
@@ -60,18 +61,19 @@ export function AddBuyerModal({ open, onOpenChange, onSaveBuyer, editBuyer }: Ad
       setPhone("");
       setErrors({});
       setShowSuccessScreen(false);
+      setSavedEntity(null);
     }
   }, [editBuyer, open]);
 
   const validate = () => {
     const newErrors: Record<string, string> = {};
-    if (!name.trim()) newErrors.name = "Buyer account name is required";
+    if (!name.trim()) newErrors.name = "Buyer name is required";
     if (!company.trim()) newErrors.company = "Company entity is required";
-    if (!contactPerson.trim()) newErrors.contactPerson = "Primary contact person is required";
+    if (!contactPerson.trim()) newErrors.contactPerson = "Contact person is required";
     if (!email.trim()) {
       newErrors.email = "Email address is required";
     } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      newErrors.email = "Please enter a valid email address";
+      newErrors.email = "Please enter a valid email";
     }
     if (!phone.trim()) newErrors.phone = "Phone number is required";
 
@@ -100,7 +102,7 @@ export function AddBuyerModal({ open, onOpenChange, onSaveBuyer, editBuyer }: Ad
                     ? "SE"
                     : "US";
 
-    const code = editBuyer?.code || `${name.slice(0, 2).toUpperCase()}-${countryCode}`;
+    const code = editBuyer?.code || `BUY-${countryCode}-${Math.floor(1000 + Math.random() * 9000)}`;
 
     const buyerData: Omit<BuyerAccountFull, "id" | "createdAt"> = {
       name: name.trim(),
@@ -126,166 +128,215 @@ export function AddBuyerModal({ open, onOpenChange, onSaveBuyer, editBuyer }: Ad
     };
 
     onSaveBuyer(buyerData, editBuyer?.id);
-    setCreatedBuyerName(name.trim());
+    setSavedEntity({ name: name.trim(), code });
     setShowSuccessScreen(true);
+  };
 
+  const handleDismiss = () => {
+    onOpenChange(false);
     setTimeout(() => {
-      onOpenChange(false);
       setShowSuccessScreen(false);
-    }, 1400);
+      setSavedEntity(null);
+    }, 200);
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[560px] rounded-2xl border border-slate-200/90 bg-white p-7 shadow-2xl">
+      <DialogContent
+        className={cn(
+          "w-[95vw] max-w-[95vw] sm:max-w-[560px] max-h-[90vh] flex flex-col p-0 overflow-hidden rounded-[24px] sm:rounded-[28px] border border-slate-100 bg-white shadow-2xl focus:outline-none",
+          showSuccessScreen && "sm:max-w-[420px]",
+        )}
+      >
         {showSuccessScreen ? (
-          <div className="flex flex-col items-center justify-center py-10 text-center animate-in fade-in-50 zoom-in-95 duration-200">
-            <div className="grid size-16 place-items-center rounded-2xl border border-emerald-200 bg-emerald-50 text-emerald-600 shadow-xs">
-              <CheckCircle2 className="size-9" />
-            </div>
-            <h3 className="mt-4 text-[22px] font-bold text-slate-900 tracking-tight">
-              {editBuyer ? "Buyer Profile Updated" : "✓ Buyer Registered"}
-            </h3>
-            <p className="mt-1.5 max-w-xs text-sm text-slate-500">
-              <strong className="text-slate-900">{createdBuyerName}</strong> has been{" "}
-              {editBuyer ? "successfully updated" : "added to the live directory"}.
-            </p>
+          <div className="p-4 sm:p-6 overflow-y-auto max-h-[88vh]">
+            <ResultSuccessView
+              type="success"
+              title="Success!"
+              message={`Thank you for waiting. Your buyer data has been ${
+                editBuyer ? "updated" : "approved"
+              }.`}
+              entityName={savedEntity?.name}
+              entitySubtitle={savedEntity?.code}
+              actionText="OKAY"
+              onAction={handleDismiss}
+              onClose={handleDismiss}
+            />
           </div>
         ) : (
-          <form onSubmit={handleSubmit}>
-            <DialogHeader className="space-y-1.5 text-left">
-              <div className="flex items-center gap-2">
-                <span className="inline-flex items-center gap-1 rounded-md border border-[#C7E8E8] bg-[#E8F5F6] px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wider text-[#0FA3B1]">
-                  {editBuyer ? "Edit Consignee Profile" : "+ New Buyer Account"}
-                </span>
+          <form
+            onSubmit={handleSubmit}
+            className="flex flex-col h-full max-h-[90vh] overflow-hidden"
+          >
+            {/* Minimal Circular Close Button */}
+            <button
+              type="button"
+              onClick={() => onOpenChange(false)}
+              aria-label="Close"
+              className="absolute top-4 right-4 z-20 flex size-8 items-center justify-center rounded-full bg-slate-100 text-slate-400 transition-all hover:bg-slate-200 hover:text-slate-700 active:scale-95 cursor-pointer shadow-2xs"
+            >
+              <X className="size-4 stroke-[2.5]" />
+            </button>
+
+            {/* Clean Minimal Header (Non-shrinking) */}
+            <DialogHeader className="p-5 sm:p-6 pb-3 sm:pb-4 border-b border-slate-100 shrink-0 bg-white space-y-1.5 text-left pr-10">
+              <div className="inline-flex items-center gap-1.5 rounded-full bg-[#E8F5F6] px-3 py-1 text-[11px] font-bold text-[#0FA3B1] w-fit">
+                <span className="size-1.5 rounded-full bg-[#0FA3B1]" />
+                {editBuyer ? "Edit Buyer Profile" : "New Consignee"}
               </div>
-              <DialogTitle className="text-[22px] font-bold tracking-tight text-slate-900">
-                {editBuyer ? "Update Buyer Profile" : "Register New Buyer"}
+              <DialogTitle className="text-xl sm:text-[22px] font-extrabold tracking-tight text-[#0D1F3C]">
+                {editBuyer ? "Update Buyer Account" : "Add Buyer Account"}
               </DialogTitle>
-              <DialogDescription className="text-[13.5px] text-slate-500">
+              <DialogDescription className="text-xs sm:text-[13px] font-medium text-slate-500">
                 {editBuyer
-                  ? "Modify buyer enterprise details and contact credentials."
-                  : "Fill in account details to establish a new consignee in your network."}
+                  ? "Modify consignee contact details and delivery settings."
+                  : "Fill in the details below to add a buyer to your active logistics network."}
               </DialogDescription>
             </DialogHeader>
 
-            {/* FORM FIELDS */}
-            <div className="mt-6 space-y-4">
-              {/* Buyer Name & Company */}
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <label className="text-[12.5px] font-semibold text-slate-700">
+            {/* SCROLLABLE FORM INPUTS */}
+            <div className="flex-1 overflow-y-auto px-5 sm:px-6 py-4 space-y-4 [scrollbar-width:thin]">
+              {/* Row 1: Buyer Name & Company */}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <label className="text-[12px] font-semibold text-slate-600">
                     Buyer Name <span className="text-rose-500">*</span>
                   </label>
-                  <input
-                    type="text"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="e.g. New Henna Ltd"
-                    className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3.5 text-[13.5px] font-medium text-slate-900 placeholder:text-slate-400 transition-all duration-150 focus:border-[#0FA3B1] focus:ring-2 focus:ring-[#0FA3B1]/20 focus:outline-none"
-                  />
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={name}
+                      onChange={(e) => {
+                        setName(e.target.value);
+                        if (errors.name) setErrors((prev) => ({ ...prev, name: "" }));
+                      }}
+                      placeholder="e.g. New Henna Ltd"
+                      className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50/60 px-3.5 text-sm sm:text-[13px] font-medium text-slate-900 placeholder:text-slate-400 transition-all duration-150 hover:bg-white focus:bg-white focus:border-[#009EE2] focus:ring-4 focus:ring-[#009EE2]/10 focus:outline-none"
+                    />
+                  </div>
                   {errors.name && (
-                    <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500">
-                      <AlertCircle className="size-3" />
+                    <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 pt-0.5">
+                      <AlertCircle className="size-3 shrink-0" />
                       <span>{errors.name}</span>
                     </p>
                   )}
                 </div>
 
-                <div className="space-y-1.5">
-                  <label className="text-[12.5px] font-semibold text-slate-700">
+                <div className="space-y-1">
+                  <label className="text-[12px] font-semibold text-slate-600">
                     Legal Company <span className="text-rose-500">*</span>
                   </label>
-                  <input
-                    type="text"
-                    value={company}
-                    onChange={(e) => setCompany(e.target.value)}
-                    placeholder="e.g. Haji Trading Global LLC"
-                    className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3.5 text-[13.5px] font-medium text-slate-900 placeholder:text-slate-400 transition-all duration-150 focus:border-[#0FA3B1] focus:ring-2 focus:ring-[#0FA3B1]/20 focus:outline-none"
-                  />
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={company}
+                      onChange={(e) => {
+                        setCompany(e.target.value);
+                        if (errors.company) setErrors((prev) => ({ ...prev, company: "" }));
+                      }}
+                      placeholder="e.g. Global Trading LLC"
+                      className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50/60 px-3.5 text-sm sm:text-[13px] font-medium text-slate-900 placeholder:text-slate-400 transition-all duration-150 hover:bg-white focus:bg-white focus:border-[#009EE2] focus:ring-4 focus:ring-[#009EE2]/10 focus:outline-none"
+                    />
+                  </div>
                   {errors.company && (
-                    <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500">
-                      <AlertCircle className="size-3" />
+                    <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 pt-0.5">
+                      <AlertCircle className="size-3 shrink-0" />
                       <span>{errors.company}</span>
                     </p>
                   )}
                 </div>
               </div>
 
-              {/* Country & Contact Person */}
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <label className="text-[12.5px] font-semibold text-slate-700">
-                    Destination Country <span className="text-rose-500">*</span>
-                  </label>
-                  <select
+              {/* Row 2: Country & Contact Person */}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <LifecycleDropdownSelect
+                    label="Destination Country *"
                     value={country}
-                    onChange={(e) => setCountry(e.target.value)}
-                    className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3.5 text-[13.5px] font-medium text-slate-900 transition-all duration-150 focus:border-[#0FA3B1] focus:ring-2 focus:ring-[#0FA3B1]/20 focus:outline-none"
-                  >
-                    {COUNTRY_FILTER_OPTIONS.filter((c) => c !== "All Countries").map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(val) => setCountry(val)}
+                    options={COUNTRY_FILTER_OPTIONS.filter((c) => c !== "All Countries").map(
+                      (c) => ({
+                        value: c,
+                        label: c,
+                      }),
+                    )}
+                    placeholder="Select Country"
+                    activeColor="teal"
+                    triggerClassName="h-11 w-full text-sm sm:text-[13px] bg-slate-50/60"
+                  />
                 </div>
 
-                <div className="space-y-1.5">
-                  <label className="text-[12.5px] font-semibold text-slate-700">
-                    Primary Contact Person <span className="text-rose-500">*</span>
+                <div className="space-y-1">
+                  <label className="text-[12px] font-semibold text-slate-600">
+                    Contact Person <span className="text-rose-500">*</span>
                   </label>
-                  <input
-                    type="text"
-                    value={contactPerson}
-                    onChange={(e) => setContactPerson(e.target.value)}
-                    placeholder="e.g. John Smith"
-                    className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3.5 text-[13.5px] font-medium text-slate-900 placeholder:text-slate-400 transition-all duration-150 focus:border-[#0FA3B1] focus:ring-2 focus:ring-[#0FA3B1]/20 focus:outline-none"
-                  />
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={contactPerson}
+                      onChange={(e) => {
+                        setContactPerson(e.target.value);
+                        if (errors.contactPerson)
+                          setErrors((prev) => ({ ...prev, contactPerson: "" }));
+                      }}
+                      placeholder="e.g. John Smith"
+                      className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50/60 px-3.5 text-sm sm:text-[13px] font-medium text-slate-900 placeholder:text-slate-400 transition-all duration-150 hover:bg-white focus:bg-white focus:border-[#009EE2] focus:ring-4 focus:ring-[#009EE2]/10 focus:outline-none"
+                    />
+                  </div>
                   {errors.contactPerson && (
-                    <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500">
-                      <AlertCircle className="size-3" />
+                    <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 pt-0.5">
+                      <AlertCircle className="size-3 shrink-0" />
                       <span>{errors.contactPerson}</span>
                     </p>
                   )}
                 </div>
               </div>
 
-              {/* Email Address & Phone Number */}
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <label className="text-[12.5px] font-semibold text-slate-700">
-                    Direct Email <span className="text-rose-500">*</span>
+              {/* Row 3: Email & Phone */}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <label className="text-[12px] font-semibold text-slate-600">
+                    Work Email <span className="text-rose-500">*</span>
                   </label>
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="consignee@company.com"
-                    className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3.5 text-[13.5px] font-medium text-slate-900 placeholder:text-slate-400 transition-all duration-150 focus:border-[#0FA3B1] focus:ring-2 focus:ring-[#0FA3B1]/20 focus:outline-none"
-                  />
+                  <div className="relative">
+                    <input
+                      type="email"
+                      value={email}
+                      onChange={(e) => {
+                        setEmail(e.target.value);
+                        if (errors.email) setErrors((prev) => ({ ...prev, email: "" }));
+                      }}
+                      placeholder="buyer@enterprise.com"
+                      className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50/60 px-3.5 text-sm sm:text-[13px] font-medium text-slate-900 placeholder:text-slate-400 transition-all duration-150 hover:bg-white focus:bg-white focus:border-[#009EE2] focus:ring-4 focus:ring-[#009EE2]/10 focus:outline-none"
+                    />
+                  </div>
                   {errors.email && (
-                    <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500">
-                      <AlertCircle className="size-3" />
+                    <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 pt-0.5">
+                      <AlertCircle className="size-3 shrink-0" />
                       <span>{errors.email}</span>
                     </p>
                   )}
                 </div>
 
-                <div className="space-y-1.5">
-                  <label className="text-[12.5px] font-semibold text-slate-700">
+                <div className="space-y-1">
+                  <label className="text-[12px] font-semibold text-slate-600">
                     Phone / WhatsApp <span className="text-rose-500">*</span>
                   </label>
-                  <input
-                    type="tel"
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    placeholder="+44 20 7946 0000"
-                    className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3.5 font-mono text-[13.5px] font-medium text-slate-900 placeholder:text-slate-400 transition-all duration-150 focus:border-[#0FA3B1] focus:ring-2 focus:ring-[#0FA3B1]/20 focus:outline-none"
-                  />
+                  <div className="relative">
+                    <input
+                      type="tel"
+                      value={phone}
+                      onChange={(e) => {
+                        setPhone(e.target.value);
+                        if (errors.phone) setErrors((prev) => ({ ...prev, phone: "" }));
+                      }}
+                      placeholder="+44 20 7946 0000"
+                      className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50/60 px-3.5 text-sm sm:text-[13px] font-medium text-slate-900 placeholder:text-slate-400 transition-all duration-150 hover:bg-white focus:bg-white focus:border-[#009EE2] focus:ring-4 focus:ring-[#009EE2]/10 focus:outline-none"
+                    />
+                  </div>
                   {errors.phone && (
-                    <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500">
-                      <AlertCircle className="size-3" />
+                    <p className="flex items-center gap-1 text-[11px] font-medium text-rose-500 pt-0.5">
+                      <AlertCircle className="size-3 shrink-0" />
                       <span>{errors.phone}</span>
                     </p>
                   )}
@@ -293,24 +344,23 @@ export function AddBuyerModal({ open, onOpenChange, onSaveBuyer, editBuyer }: Ad
               </div>
             </div>
 
-            {/* MODAL FOOTER */}
-            <DialogFooter className="mt-8 flex items-center justify-between gap-3 border-t border-slate-100 pt-5 sm:justify-between">
+            {/* STICKY ACTION FOOTER */}
+            <div className="p-4 sm:p-5 sm:py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-2.5 shrink-0">
               <button
                 type="button"
                 onClick={() => onOpenChange(false)}
-                className="h-11 rounded-xl border border-slate-200 bg-white px-5 text-[13.5px] font-semibold text-slate-700 shadow-2xs transition-colors hover:bg-slate-50"
+                className="h-10 px-4 rounded-full text-[13px] font-semibold text-slate-500 hover:bg-slate-200/60 hover:text-slate-800 transition-colors cursor-pointer"
               >
                 Cancel
               </button>
-
               <button
                 type="submit"
-                className="flex h-11 items-center gap-2 rounded-xl bg-[#0FA3B1] hover:bg-[#078A99] px-6 text-[13.5px] font-semibold text-white shadow-[0_2px_10px_rgba(15,163,177,0.25)] transition-all hover:-translate-y-0.5 active:translate-y-0"
+                className="inline-flex h-10 items-center justify-center gap-1.5 rounded-full bg-[#009EE2] hover:bg-[#0089c7] px-5 sm:px-6 text-[13px] font-bold text-white shadow-md shadow-[#009EE2]/20 transition-all active:scale-[0.98] cursor-pointer"
               >
-                <Plus className="size-4" />
-                <span>{editBuyer ? "Save Changes" : "Register Buyer"}</span>
+                <Plus className="size-3.5 stroke-[2.5]" />
+                <span>{editBuyer ? "Save Changes" : "Add Buyer"}</span>
               </button>
-            </DialogFooter>
+            </div>
           </form>
         )}
       </DialogContent>

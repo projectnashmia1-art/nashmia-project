@@ -9,6 +9,7 @@ import {
 } from "react";
 import type { User, Session } from "@supabase/supabase-js";
 import { supabase, isSupabaseConfigured } from "./supabase";
+import { clearAllAuthTracking } from "./auth-navigation";
 import type { Database } from "@/types/database.types";
 
 type Profile = Database["public"]["Tables"]["profiles"]["Row"];
@@ -20,6 +21,7 @@ interface AuthContextType {
   loading: boolean;
   isConfigured: boolean;
   userId: string | null;
+  organizationId: string | null;
   signIn: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   signUp: (
     email: string,
@@ -226,6 +228,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
+    clearAllAuthTracking();
     if (isSupabaseConfigured) {
       try {
         await supabase.auth.signOut();
@@ -244,6 +247,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [user?.id, user?.email, fetchProfile]);
 
+  const organizationId = useMemo(() => {
+    const rawProfile = profile as Record<string, unknown> | null;
+    return (
+      (rawProfile?.organization_id as string) ||
+      (user?.user_metadata?.organization_id as string) ||
+      (user?.app_metadata?.organization_id as string) ||
+      null
+    );
+  }, [profile, user]);
+
   const contextValue = useMemo<AuthContextType>(
     () => ({
       user,
@@ -252,13 +265,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loading,
       isConfigured: isSupabaseConfigured,
       userId: user?.id ?? null,
+      organizationId,
       signIn,
       signUp,
       resetPassword,
       signOut,
       refreshProfile,
     }),
-    [user, session, profile, loading, signIn, signUp, resetPassword, signOut, refreshProfile],
+    [
+      user,
+      session,
+      profile,
+      loading,
+      organizationId,
+      signIn,
+      signUp,
+      resetPassword,
+      signOut,
+      refreshProfile,
+    ],
   );
 
   return <AuthContext.Provider value={contextValue}>{children}</AuthContext.Provider>;

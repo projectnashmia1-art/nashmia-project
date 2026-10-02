@@ -10,11 +10,16 @@ import {
 import { useEffect, type ReactNode } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { AuthProvider } from "@/lib/auth-context";
+import { AuthGuard } from "@/components/auth/AuthGuard";
 import { GmailProvider } from "@/lib/use-gmail";
 import { NotificationsProvider } from "@/lib/notifications-context";
+import { ErrorBoundary } from "@/components/common/ErrorBoundary";
+import { logger } from "@/lib/error-logging-service";
+import { PageTransitionProvider } from "@/components/common/PageTransition";
+import { GlobalRealtimeProvider } from "@/components/providers/GlobalRealtimeProvider";
+import "@/lib/cache/purge-legacy-cache";
 
 import appCss from "../styles.css?url";
-import { reportLovableError } from "../lib/lovable-error-reporting";
 
 function NotFoundComponent() {
   return (
@@ -39,10 +44,12 @@ function NotFoundComponent() {
 }
 
 function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
-  console.error(error);
   const router = useRouter();
+
   useEffect(() => {
-    reportLovableError(error, { boundary: "tanstack_root_error_component" });
+    logger.error("Root router route error", error, {
+      boundary: "tanstack_root_error_component",
+    });
   }, [error]);
 
   return (
@@ -80,7 +87,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
   head: () => ({
     meta: [
       { charSet: "utf-8" },
-      { name: "viewport", content: "width=device-width, initial-scale=1" },
+      { name: "viewport", content: "width=device-width, initial-scale=1, viewport-fit=cover" },
       { title: "Nashmia Operations Hub" },
       {
         name: "description",
@@ -108,7 +115,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         rel: "stylesheet",
         href: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap",
       },
-      { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
+      { rel: "icon", href: "data:," },
     ],
     scripts: [
       {
@@ -126,7 +133,9 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 function RootComponent() {
   return (
     <RootDocument>
-      <Outlet />
+      <PageTransitionProvider>
+        <Outlet />
+      </PageTransitionProvider>
     </RootDocument>
   );
 }
@@ -135,19 +144,30 @@ function RootDocument({ children }: { children: ReactNode }) {
   const { queryClient } = Route.useRouteContext();
 
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className="m-0 p-0 w-full min-w-full max-w-full h-full min-h-full min-h-[100dvh] overflow-x-hidden bg-white"
+    >
       <head>
         <HeadContent />
       </head>
-      <body suppressHydrationWarning>
+      <body
+        suppressHydrationWarning
+        className="m-0 p-0 w-full min-w-full max-w-full min-h-full min-h-[100dvh] overflow-x-hidden bg-white text-black antialiased selection:bg-[#6A80A9]/20 overscroll-none"
+      >
         <QueryClientProvider client={queryClient}>
           <AuthProvider>
-            <GmailProvider>
-              <NotificationsProvider>
-                {children}
-                <Toaster position="top-right" richColors />
-              </NotificationsProvider>
-            </GmailProvider>
+            <AuthGuard>
+              <GmailProvider>
+                <NotificationsProvider>
+                  <GlobalRealtimeProvider>
+                    <ErrorBoundary moduleName="Application View">{children}</ErrorBoundary>
+                    <Toaster position="top-right" />
+                  </GlobalRealtimeProvider>
+                </NotificationsProvider>
+              </GmailProvider>
+            </AuthGuard>
           </AuthProvider>
         </QueryClientProvider>
         <Scripts />

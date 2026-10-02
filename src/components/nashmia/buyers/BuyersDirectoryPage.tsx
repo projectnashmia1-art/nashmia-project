@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { BuyerAccountFull, BUYER_MOVEMENTS, INITIAL_BUYERS } from "@/lib/buyers-data";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { BuyerAccountFull, BuyerMovementRecord } from "@/lib/buyers-data";
 import { AddBuyerModal } from "./AddBuyerModal";
 import { BuyerCardGrid } from "./BuyerCardGrid";
 import { BuyerDetailDrawer } from "./BuyerDetailDrawer";
@@ -12,10 +13,17 @@ import { toast } from "sonner";
 import { useAuth } from "@/lib/auth-context";
 import {
   fetchBuyersFromSupabase,
+  fetchBookingsFromSupabase,
   insertBuyerToSupabase,
   updateBuyerInSupabase,
 } from "@/lib/supabase-services";
+import { useCachedBuyers, invalidateCachedBuyers, entityCacheKeys } from "@/lib/cache";
 import { useSupabaseRealtime } from "@/hooks/use-supabase-realtime";
+import {
+  DirectorySummaryStripSkeleton,
+  DirectoryCardGridSkeleton,
+  DirectoryTableSkeleton,
+} from "@/components/nashmia/skeletons/DirectorySkeletons";
 
 interface BuyersDirectoryPageProps {
   onOpenMobileMenu?: () => void;
@@ -23,9 +31,23 @@ interface BuyersDirectoryPageProps {
 
 export function BuyersDirectoryPage({ onOpenMobileMenu }: BuyersDirectoryPageProps) {
   const { userId, isConfigured } = useAuth();
+  const queryClient = useQueryClient();
+
+  // Cached buyers query with query deduplication, navigation cache reuse & background revalidation
+  const {
+    data: cachedBuyers = [],
+    isLoading: isQueryLoading,
+    refetch: refetchBuyers,
+  } = useCachedBuyers(userId, { enabled: isConfigured });
+
+  const { data: allBookings = [] } = useQuery({
+    queryKey: ["dashboard-bookings", userId],
+    queryFn: () => fetchBookingsFromSupabase(userId),
+    enabled: true,
+  });
+
   // Directory state
   const [buyers, setBuyers] = useState<BuyerAccountFull[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCountry, setSelectedCountry] = useState("all");
   const [selectedStatus, setSelectedStatus] = useState("all");
@@ -38,34 +60,19 @@ export function BuyersDirectoryPage({ onOpenMobileMenu }: BuyersDirectoryPagePro
   const [selectedBuyer, setSelectedBuyer] = useState<BuyerAccountFull | null>(null);
   const [isDetailDrawerOpen, setIsDetailDrawerOpen] = useState(false);
 
-  // Load buyers from Supabase
-  const loadBuyers = useCallback(async () => {
-    try {
-      if (!isConfigured) {
-        setBuyers([]);
-        setIsLoading(false);
-        return;
-      }
-      const data = await fetchBuyersFromSupabase(userId);
-      setBuyers(data || []);
-    } catch (err) {
-      console.warn("[BuyersDirectoryPage] Error loading buyers from Supabase:", err);
-      setBuyers([]);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [userId, isConfigured]);
-
+  // Synchronize local state with cache whenever cached data arrives or updates in background
   useEffect(() => {
-    void loadBuyers();
-  }, [loadBuyers]);
+    setBuyers(cachedBuyers || []);
+  }, [cachedBuyers]);
 
-  // Realtime subscription
+  const isLoading = isQueryLoading && buyers.length === 0;
+
+  // Realtime subscription: invalidates query cache to trigger silent background revalidation
   useSupabaseRealtime(
     "buyers",
     useCallback(() => {
-      void loadBuyers();
-    }, [loadBuyers]),
+      void invalidateCachedBuyers(queryClient, userId);
+    }, [queryClient, userId]),
     isConfigured,
   );
 
@@ -155,13 +162,14 @@ export function BuyersDirectoryPage({ onOpenMobileMenu }: BuyersDirectoryPagePro
         if (isConfigured) {
           const updated = await updateBuyerInSupabase(editId, data);
           setBuyers((prev) => prev.map((b) => (b.id === editId ? updated : b)));
+          await invalidateCachedBuyers(queryClient, userId);
         }
         toast.success("Buyer updated successfully");
       } catch (err: unknown) {
         toast.error("Failed to update buyer", {
           description: err instanceof Error ? err.message : "Database error",
         });
-        void loadBuyers();
+        void refetchBuyers();
       }
     } else {
       const tempId = `buyer-${Date.now()}`;
@@ -176,6 +184,7 @@ export function BuyersDirectoryPage({ onOpenMobileMenu }: BuyersDirectoryPagePro
         if (isConfigured) {
           const created = await insertBuyerToSupabase(userId || null, data);
           setBuyers((prev) => prev.map((b) => (b.id === tempId ? created : b)));
+          await invalidateCachedBuyers(queryClient, userId);
           try {
             window.dispatchEvent(new CustomEvent("nashmia-buyer-created", { detail: created }));
           } catch (e) {
@@ -196,7 +205,7 @@ export function BuyersDirectoryPage({ onOpenMobileMenu }: BuyersDirectoryPagePro
         toast.error("Failed to save buyer to Supabase", {
           description: err instanceof Error ? err.message : "Database error",
         });
-        void loadBuyers();
+        void refetchBuyers();
       }
     }
   };
@@ -215,6 +224,7 @@ export function BuyersDirectoryPage({ onOpenMobileMenu }: BuyersDirectoryPagePro
     try {
       if (isConfigured) {
         await updateBuyerInSupabase(buyerId, { status: nextStatus });
+        await invalidateCachedBuyers(queryClient, userId);
       }
       toast.info(
         nextStatus === "Inactive" ? `${target.name} archived` : `${target.name} activated`,
@@ -253,68 +263,108 @@ export function BuyersDirectoryPage({ onOpenMobileMenu }: BuyersDirectoryPagePro
   // Movements belonging to selected buyer
   const selectedBuyerMovements = useMemo(() => {
     if (!selectedBuyer) return [];
-    return BUYER_MOVEMENTS.filter((m) => m.buyerId === selectedBuyer.id);
-  }, [selectedBuyer]);
+    const bId = (selectedBuyer.id || "").toLowerCase();
+    const bName = (selectedBuyer.name || "").toLowerCase();
+    const bComp = (selectedBuyer.company || "").toLowerCase();
+
+    return (allBookings || [])
+      .filter((b) => {
+        const rowBuyerId = (b.buyer_id || "").toLowerCase();
+        const rowCustName = (b.customer_name || "").toLowerCase();
+        const rowBuyerName = (b.buyer_name || "").toLowerCase();
+        return (
+          rowBuyerId === bId ||
+          (bId && rowBuyerId && rowBuyerId === bId) ||
+          (bName && (rowCustName === bName || rowBuyerName === bName)) ||
+          (bComp && (rowCustName === bComp || rowBuyerName === bComp))
+        );
+      })
+      .map((b) => ({
+        id: b.id,
+        ref: b.booking_reference || b.movement_number || b.id,
+        buyerId: selectedBuyer.id,
+        buyerName: selectedBuyer.name,
+        supplierName: b.supplier_name || "Supplier",
+        containersCount: b.container_count || 1,
+        containerSize: (b.container_size as "40HC") || "40HC",
+        polCode: b.pol_code || "POL",
+        polName: b.pol_name || b.origin || "Origin",
+        podCode: b.pod_code || "POD",
+        podName: b.pod_name || b.destination || "Destination",
+        carrier: b.carrier || "Carrier",
+        vessel: b.vessel_name || "Vessel",
+        status: (b.status || "In Transit") as BuyerMovementRecord["status"],
+        etd: b.etd || "—",
+        eta: b.eta || "—",
+        ratePerContainer: b.rate_amount || 0,
+        totalFreight: b.total_freight || 0,
+        currency: b.currency || "USD",
+      }));
+  }, [selectedBuyer, allBookings]);
 
   return (
-    <div className="relative min-h-screen bg-[#FFFFFF] text-[#000000] selection:bg-[#E8F1F3] selection:text-[#6A80A9]">
-      {/* Subtle Atmospheric Background Overlay */}
-      <div className="pointer-events-none fixed inset-0 z-0 bg-gradient-to-b from-[#E8F1F3]/25 via-transparent to-[#E8F1F3]/10" />
+    <div className="relative z-10 w-full min-w-0 max-w-full space-y-7 text-slate-900">
+      {/* 1. Header with Eyebrow, Title & + Add Buyer Button */}
+      <BuyersHeader onOpenMobileMenu={onOpenMobileMenu} onAddBuyer={handleOpenAddModal} />
 
-      {/* Main Container */}
-      <div className="relative z-10 mx-auto max-w-[1520px] px-4 py-8 sm:px-6 lg:px-10 lg:py-10 space-y-7">
-        {/* 1. Header with Eyebrow, Title & + Add Buyer Button */}
-        <BuyersHeader onOpenMobileMenu={onOpenMobileMenu} onAddBuyer={handleOpenAddModal} />
-
-        {/* 2. Connected Glass Summary Strip */}
+      {/* 2. Connected Glass Summary Strip */}
+      {isLoading ? (
+        <DirectorySummaryStripSkeleton />
+      ) : (
         <BuyersSummaryStrip
           totalBuyers={stats.totalBuyers}
           activeBuyers={stats.activeBuyers}
           withActiveMovements={stats.withActiveMovements}
           totalCountries={stats.totalCountries}
         />
+      )}
 
-        {/* 3. Floating Glass Toolbar (Spotlight Search + Filters + Grid/List Switch) */}
-        <BuyersToolbar
-          searchQuery={searchQuery}
-          onSearchChange={setSearchQuery}
-          selectedCountry={selectedCountry}
-          onCountryChange={setSelectedCountry}
-          selectedStatus={selectedStatus}
-          onStatusChange={setSelectedStatus}
-          sortBy={sortBy}
-          onSortChange={setSortBy}
-          viewMode={viewMode}
-          onViewModeChange={setViewMode}
-          onResetFilters={handleResetFilters}
-        />
+      {/* 3. Floating Glass Toolbar (Spotlight Search + Filters + Grid/List Switch) */}
+      <BuyersToolbar
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
+        selectedCountry={selectedCountry}
+        onCountryChange={setSelectedCountry}
+        selectedStatus={selectedStatus}
+        onStatusChange={setSelectedStatus}
+        sortBy={sortBy}
+        onSortChange={setSortBy}
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
+        onResetFilters={handleResetFilters}
+      />
 
-        {/* 4. MAIN HERO: Buyer Card Grid (Default) or List View */}
-        {filteredBuyers.length === 0 ? (
-          <BuyersEmptyState
-            isSearchEmpty={
-              searchQuery !== "" || selectedCountry !== "all" || selectedStatus !== "all"
-            }
-            onResetFilters={handleResetFilters}
-            onAddBuyer={handleOpenAddModal}
-          />
-        ) : viewMode === "grid" ? (
-          <BuyerCardGrid
-            buyers={filteredBuyers}
-            onSelectBuyer={handleSelectBuyer}
-            onEditBuyer={handleOpenEditModal}
-            onToggleArchive={handleToggleArchive}
-            onAddBuyer={handleOpenAddModal}
-          />
+      {/* 4. MAIN HERO: Buyer Card Grid (Default) or List View */}
+      {isLoading ? (
+        viewMode === "grid" ? (
+          <DirectoryCardGridSkeleton count={8} />
         ) : (
-          <BuyersListView
-            buyers={filteredBuyers}
-            onSelectBuyer={handleSelectBuyer}
-            onEditBuyer={handleOpenEditModal}
-            onToggleArchive={handleToggleArchive}
-          />
-        )}
-      </div>
+          <DirectoryTableSkeleton rows={8} />
+        )
+      ) : filteredBuyers.length === 0 ? (
+        <BuyersEmptyState
+          isSearchEmpty={
+            searchQuery !== "" || selectedCountry !== "all" || selectedStatus !== "all"
+          }
+          onResetFilters={handleResetFilters}
+          onAddBuyer={handleOpenAddModal}
+        />
+      ) : viewMode === "grid" ? (
+        <BuyerCardGrid
+          buyers={filteredBuyers}
+          onSelectBuyer={handleSelectBuyer}
+          onEditBuyer={handleOpenEditModal}
+          onToggleArchive={handleToggleArchive}
+          onAddBuyer={handleOpenAddModal}
+        />
+      ) : (
+        <BuyersListView
+          buyers={filteredBuyers}
+          onSelectBuyer={handleSelectBuyer}
+          onEditBuyer={handleOpenEditModal}
+          onToggleArchive={handleToggleArchive}
+        />
+      )}
 
       {/* Add / Edit Buyer Modal */}
       <AddBuyerModal

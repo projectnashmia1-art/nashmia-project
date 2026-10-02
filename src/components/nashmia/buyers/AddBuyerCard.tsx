@@ -9,23 +9,55 @@ export function AddBuyerCard({ onClick }: AddBuyerCardProps) {
     <button
       type="button"
       onClick={onClick}
-      className="group relative flex min-h-[290px] w-full flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50/50 p-6 text-center shadow-2xs transition-all duration-200 hover:-translate-y-1 hover:border-[#0FA3B1] hover:bg-[#E8F5F6]/30 hover:shadow-[0_12px_30px_-6px_rgba(15,163,177,0.12)] active:translate-y-0"
+      style={{
+        background: "linear-gradient(180deg, #FFFFFF 0%, #F5FBFC 45%, #D4F0F6 100%)",
+      }}
+      className="group relative flex min-h-[380px] w-full flex-col justify-between overflow-hidden rounded-[32px] sm:rounded-[36px] border border-white/90 p-6 sm:p-7 text-left shadow-[0_20px_45px_-12px_rgba(15,163,177,0.16),0_4px_16px_rgba(0,0,0,0.02)] transition-all duration-300 hover:-translate-y-1.5 hover:shadow-[0_28px_55px_-12px_rgba(15,163,177,0.22)] active:translate-y-0 cursor-pointer"
     >
-      <div className="grid size-14 place-items-center rounded-2xl border border-[#C7E8E8] bg-white text-[#0FA3B1] shadow-sm transition-all duration-200 group-hover:scale-110 group-hover:bg-[#0FA3B1] group-hover:text-white">
-        <UserPlus className="size-6 transition-transform duration-200 group-hover:scale-105" />
+      {/* Specular Edge Highlight */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-white to-transparent" />
+
+      {/* Top section: Avatar-like Add Icon */}
+      <div>
+        <div className="flex items-start justify-between">
+          <div className="size-16 sm:size-17 rounded-full border-2 border-white bg-gradient-to-br from-[#0FA3B1] via-teal-400 to-[#45DFEB] p-0.5 shadow-[0_6px_18px_rgba(15,163,177,0.25)] flex items-center justify-center transition-transform duration-300 group-hover:scale-105">
+            <div className="size-full rounded-full bg-white/20 backdrop-blur-xs flex items-center justify-center text-white">
+              <UserPlus className="size-7 stroke-[2]" />
+            </div>
+          </div>
+
+          <span className="inline-flex items-center gap-1 rounded-full bg-white/80 border border-slate-200/60 px-3 py-1 text-[11px] font-semibold text-[#0FA3B1] shadow-2xs">
+            <Plus className="size-3" /> Quick Add
+          </span>
+        </div>
+
+        {/* Identity & Description */}
+        <div className="mt-4">
+          <h3 className="text-[21px] sm:text-[22px] font-bold text-slate-900 tracking-tight leading-snug group-hover:text-[#0FA3B1] transition-colors">
+            Register New Buyer
+          </h3>
+          <p className="text-[13.5px] font-medium text-slate-500 mt-1 leading-relaxed">
+            Consignee profile, tax ID validation, and designated discharge port routing.
+          </p>
+
+          <div className="mt-3 flex flex-wrap items-center gap-1.5">
+            <span className="rounded-full bg-white/90 border border-slate-200/60 px-3 py-0.5 text-[11px] font-semibold text-slate-600 shadow-2xs">
+              Direct Onboarding
+            </span>
+            <span className="rounded-full bg-white/90 border border-slate-200/60 px-3 py-0.5 text-[11px] font-semibold text-slate-600 shadow-2xs">
+              Automated EDI
+            </span>
+          </div>
+        </div>
       </div>
 
-      <h3 className="mt-4 text-[17px] font-bold text-slate-900 tracking-tight group-hover:text-[#0FA3B1] transition-colors">
-        + Register New Buyer
-      </h3>
-      <p className="mt-1.5 max-w-[220px] text-[12.5px] text-slate-500 leading-relaxed">
-        Add consignee profiles, export/import tax IDs, and assign port routing.
-      </p>
-
-      <span className="mt-4 inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-1.5 text-[12px] font-semibold text-slate-700 shadow-2xs transition-all group-hover:border-[#0FA3B1]/40 group-hover:text-[#0FA3B1]">
-        <Plus className="size-3.5" />
-        <span>Create Account</span>
-      </span>
+      {/* Bottom Button matching the uploaded design */}
+      <div className="mt-6 flex items-center gap-2.5">
+        <div className="flex-1 rounded-full bg-[#0FA3B1] text-white font-semibold text-[13.5px] py-3 px-5 shadow-[0_4px_16px_rgba(15,163,177,0.3)] border border-[#0FA3B1] transition-all duration-200 group-hover:bg-[#0b828e] text-center flex items-center justify-center gap-1.5">
+          <Plus className="size-4" />
+          <span>Add Buyer Profile</span>
+        </div>
+      </div>
     </button>
   );
 }
