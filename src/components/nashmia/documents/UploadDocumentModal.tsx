@@ -10,8 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { LifecycleDropdownSelect } from "@/components/nashmia/common/LifecycleDropdownSelect";
-import { INITIAL_OWNERS, type DriveFile, type DriveFolder, type FileType } from "./documents-data";
+import { type DriveFile, type DriveFolder, type FileType } from "./documents-data";
 import { saveCutOffsForMovement } from "@/lib/movement-cutoff-service";
 import { extractCutOffDeadlinesOnly } from "@/lib/document-attachment-service";
 import { extractMovementNumber } from "@/lib/movement-lifecycle";
@@ -127,16 +126,18 @@ export function UploadDocumentModal({
         name: file.name,
         type,
         extension: ext,
-        owners: [INITIAL_OWNERS.alex],
+        owners: [],
         lastModified: formattedDate,
         lastModifiedTimestamp: now.toISOString(),
         fileSize: formattedSize,
         folderId: selectedFolder,
-        sharedLink: `https://drive.nashmia.com/f/${file.name.replace(/\s+/g, "-").toLowerCase()}`,
+        sharedLink: "",
         metadata: {
           category: isCutOffNotice ? "Cut-Off Notice" : "Other",
           documentType: isCutOffNotice ? "CUT_OFF_NOTICE" : "OTHER",
           movementNumber: detectedMovement || undefined,
+          hasCutOffDate: extractedCutOffs.hasCutOffDate,
+          detectedCutOffDate: extractedCutOffs.detectedCutOffDate,
           cutOffDeadlines:
             extractedCutOffs.deadlines.length > 0 ? extractedCutOffs.deadlines : undefined,
           cutOffDates: extractedCutOffs.dates,
@@ -144,7 +145,13 @@ export function UploadDocumentModal({
       };
 
       if (detectedMovement && isCutOffNotice) {
-        saveCutOffsForMovement(detectedMovement, extractedCutOffs.dates);
+        saveCutOffsForMovement(detectedMovement, {
+          ...extractedCutOffs.dates,
+          sourceDocumentId: newDriveFile.id,
+          sourceDocumentName: file.name,
+          extractionStatus: extractedCutOffs.hasCutOffDate ? "COMPLETED" : "NO_DATES_DETECTED",
+          reviewStatus: extractedCutOffs.hasAmbiguousDates ? "NEEDS_REVIEW" : "AUTO_VERIFIED",
+        });
       }
 
       onAddFile(newDriveFile);
@@ -157,7 +164,7 @@ export function UploadDocumentModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="w-full sm:max-w-md sm:rounded-2xl max-h-[92vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="text-base font-bold text-slate-800 flex items-center gap-2">
             <Upload className="size-4 text-[#1D63ED]" /> Add to My Drive

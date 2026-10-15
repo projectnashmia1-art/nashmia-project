@@ -473,12 +473,11 @@ export function getPreviousLifecycleStage(
 
 /**
  * Generates a standardized, unique Movement Number.
- * Format: MOV-YYYY-XXXXX (e.g., MOV-2026-00125)
+ * Format: NASH-BK-YYYY-XXXX (e.g., NASH-BK-2026-7023)
  */
 export function generateMovementNumber(year: number = new Date().getFullYear()): string {
-  const randomSuffix = Math.floor(100 + Math.random() * 90000);
-  const padded = String(randomSuffix).padStart(5, "0");
-  return `MOV-${year}-${padded}`;
+  const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+  return `NASH-BK-${year}-${randomSuffix}`;
 }
 
 /**
@@ -486,31 +485,53 @@ export function generateMovementNumber(year: number = new Date().getFullYear()):
  */
 export function isMovementNumber(ref: string | null | undefined): boolean {
   if (!ref) return false;
-  return /^MOV-\d{4}-\d+$/i.test(ref.trim());
+  return (
+    /^(?:NASH-BK|MOV|BK|NASH-MOV|REQ|NASH)-\d{4}-\d+$/i.test(ref.trim()) ||
+    /^(?:NASH[-_][A-Z0-9-]{3,24})$/i.test(ref.trim())
+  );
 }
 
 /**
- * Extracts a Movement or Booking Number (MOV-YYYY-XXXXX, NASH-BK-YYYY-XXXX, REQ-YYYY-XXXXX, BK-YYYY-XXXXX) from any string (subject, body, snippet, etc.)
+ * Extracts a Movement or Booking Number (NASH-2026-000145, BK-YYYY-XXXXX, BK/YYYY/XXXXX, BOOKING-YYYY-XXXXX, REF: BK-YYYY-XXXXX, MOV-YYYY-XXXXX, NASH-BK-YYYY-XXXX, REQ-YYYY-XXXXX)
  */
 export function extractMovementNumber(text: string | null | undefined): string | null {
   if (!text) return null;
 
-  // 1. Strict priority: check for official Movement Number (MOV-) first!
-  const movMatch =
-    text.match(/\b(MOV-\d{4}-\d{3,6})\b/i) ||
-    text.match(/\b([A-Z0-9]{2,10}-MOV-\d{4}-\d{3,6})\b/i) ||
-    text.match(/\b(MOV-[A-Z0-9-]{3,20})\b/i) ||
-    text.match(/\b([A-Z0-9]{2,10}-MOV-[A-Z0-9-]{3,20})\b/i);
-  if (movMatch) return movMatch[1].toUpperCase();
+  // 1. Direct Nashmia movement pattern: "NASH-2026-000145", "NASH-BK-2026-000145", "NASH-MOV-2026-0001"
+  const nashMatch =
+    text.match(/(?:^|[^A-Za-z0-9])(NASH[-_](?:BK[-_]|MOV[-_])?[0-9]{4}[-_][0-9]{3,8})(?:$|[^A-Za-z0-9])/i) ||
+    text.match(/\b(NASH[-_](?:BK[-_]|MOV[-_])?[0-9]{4}[-_][0-9]{3,8})\b/i);
+  if (nashMatch) return nashMatch[1].toUpperCase().replace(/_/g, "-");
 
-  // 2. Secondary references (REQ-, BK-, NASH-)
+  // 2. Full system compound prefixes: "CMA-BK-2026-001", "REQ-2026-001"
+  const compoundMatch =
+    text.match(/\b([A-Z0-9]{2,10}-(?:REQ|BK|MOV|BKG)[-/][0-9]{4}[-/][0-9]{3,8})\b/i) ||
+    text.match(/\b(NASH[-_][A-Z0-9-]{3,20})\b/i);
+  if (compoundMatch) return compoundMatch[1].toUpperCase().replace(/\//g, "-");
+
+  // 2. Ref prefixed (e.g. "REF: BK-2026-000145", "REF. BK/2026/000145", "REF # BK-2026-000145")
+  const refMatch = text.match(
+    /\b(?:REF|REFERENCE|OUR\s*REF|YOUR\s*REF)[\s.:#*-]+((?:BK|BOOKING|MOV|MOVEMENT|NASH[-_]BK|REQ|BKG)[-_/][0-9]{4}[-_/][0-9]{3,8})\b/i,
+  );
+  if (refMatch) return refMatch[1].toUpperCase().replace(/\//g, "-");
+
+  // 3. Official Movement Number (MOV-)
+  const movMatch =
+    text.match(/\b(MOV[-/]\d{4}[-/]\d{3,6})\b/i) ||
+    text.match(/\b(MOVEMENT[-/]\d{4}[-/]\d{3,6})\b/i) ||
+    text.match(/\b(MOV-[A-Z0-9-]{3,20})\b/i);
+  if (movMatch) return movMatch[1].toUpperCase().replace(/\//g, "-");
+
+  // 4. Standard BK formats: "BK-2026-000145" or "BK/2026/000145"
+  const bkMatch =
+    text.match(/\b(BK[-/]\d{4}[-/]\d{3,8})\b/i) || text.match(/\b(BOOKING[-/]\d{4}[-/]\d{3,8})\b/i);
+  if (bkMatch) return bkMatch[1].toUpperCase().replace(/\//g, "-");
+
+  // 5. Secondary references (REQ-, BKG-, REF-)
   const match =
-    text.match(/\b([A-Z0-9]{2,10}-(?:REQ|BK)-\d{4}-\d{3,6})\b/i) ||
-    text.match(/\b((?:REQ|BK)-\d{4}-\d{3,6})\b/i) ||
-    text.match(/\b([A-Z0-9]{2,10}-(?:REQ|BK)-[A-Z0-9-]{3,20})\b/i) ||
+    text.match(/\b((?:REQ|BK)[-/]\d{4}[-/]\d{3,6})\b/i) ||
     text.match(/\b((?:REQ|BK)-[A-Z0-9-]{3,20})\b/i) ||
-    text.match(/\b(NASH-[A-Z0-9-]{3,20})\b/i) ||
     text.match(/\b(BKG?-[A-Z0-9-]{3,20})\b/i) ||
     text.match(/\b(REF-[A-Z0-9-]{3,20})\b/i);
-  return match ? match[1].toUpperCase() : null;
+  return match ? match[1].toUpperCase().replace(/\//g, "-") : null;
 }

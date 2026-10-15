@@ -36,6 +36,7 @@ import { showPillToast } from "@/lib/pill-toast";
 import { LifecycleDropdownSelect } from "@/components/nashmia/common/LifecycleDropdownSelect";
 import { useAuth } from "@/lib/auth-context";
 import { useCachedForwarders } from "@/lib/cache";
+import { sanitizeEmailHtml } from "@/lib/email-cleaning-service";
 import {
   dispatchMultiForwarderRequests,
   generateForwarderEmailContent,
@@ -233,7 +234,7 @@ export function MultiForwarderRequestModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="w-full max-w-full sm:max-w-4xl max-h-[90vh] sm:max-h-[92vh] flex flex-col p-0 overflow-hidden bg-white">
+      <DialogContent className="w-full sm:max-w-4xl max-h-[92vh] flex flex-col p-0 overflow-hidden bg-white sm:rounded-2xl shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-200/80 px-6 py-4 bg-slate-50/60">
           <div className="flex items-center gap-3">
@@ -656,7 +657,7 @@ export function MultiForwarderRequestModal({
                   <div className="p-4">
                     <div
                       className="border border-slate-100 rounded-lg overflow-hidden"
-                      dangerouslySetInnerHTML={{ __html: previewEmail.bodyHtml }}
+                      dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(previewEmail.bodyHtml) }}
                     />
                   </div>
                 </div>

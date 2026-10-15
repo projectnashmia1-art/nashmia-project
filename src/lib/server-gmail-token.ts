@@ -797,13 +797,16 @@ export async function sendEmailViaServerHandler(params: {
 
   if (!response.ok) {
     const errText = await response.text();
-    let parsed: { error?: { message?: string } } = {};
+    let parsed: { error?: { message?: string; code?: number } } = {};
     try {
       parsed = JSON.parse(errText);
     } catch {
       // not json
     }
-    const errorMsg = parsed?.error?.message || errText || `Gmail API error (${response.status})`;
+    const is401 = response.status === 401 || parsed?.error?.code === 401;
+    const errorMsg = is401
+      ? "Gmail authentication credentials expired or invalid (401). Please click 'Connect Email' in settings to authorize your account."
+      : parsed?.error?.message || errText || `Gmail API error (${response.status})`;
     return { success: false, error: errorMsg };
   }
 

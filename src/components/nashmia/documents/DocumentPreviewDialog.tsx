@@ -22,7 +22,7 @@ export function DocumentPreviewDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl max-h-[85vh] flex flex-col p-0 overflow-hidden">
+      <DialogContent className="w-full sm:max-w-2xl max-h-[92vh] sm:max-h-[85vh] flex flex-col p-0 overflow-hidden sm:rounded-2xl shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-white">
           <div className="flex items-center gap-2.5 min-w-0">
@@ -38,12 +38,34 @@ export function DocumentPreviewDialog({
           </div>
 
           <div className="flex items-center gap-2">
+            {file.url || file.metadata?.fileUrl ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const targetUrl = file.url || file.metadata?.fileUrl;
+                  if (targetUrl) {
+                    const a = document.createElement("a");
+                    a.href = targetUrl;
+                    a.target = "_blank";
+                    a.rel = "noopener noreferrer";
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                  }
+                }}
+                className="h-8 text-xs gap-1.5 cursor-pointer"
+              >
+                <ExternalLink className="size-3.5" /> Open
+              </Button>
+            ) : null}
             <Button
               type="button"
               variant="outline"
               size="sm"
               onClick={onShare}
-              className="h-8 text-xs gap-1.5"
+              className="h-8 text-xs gap-1.5 cursor-pointer"
             >
               <Share2 className="size-3.5" /> Share
             </Button>
@@ -51,12 +73,35 @@ export function DocumentPreviewDialog({
               type="button"
               size="sm"
               onClick={() => {
-                const dummy = document.createElement("a");
-                dummy.href = "#";
-                dummy.download = file.name;
-                dummy.click();
+                const storagePath = file.metadata?.storagePath;
+                const msgId = file.metadata?.gmailMessageId || file.metadata?.emailMessageId;
+                const attId = (file.metadata as Record<string, unknown>)?.attachmentId as string | undefined;
+
+                let downloadUrl = "";
+                if (storagePath) {
+                  downloadUrl = `/api/documents/download?path=${encodeURIComponent(storagePath)}`;
+                } else if (msgId && attId) {
+                  const filename = file.metadata?.originalFilename || file.metadata?.fileName || file.name;
+                  downloadUrl = `/api/gmail/attachment?messageId=${encodeURIComponent(msgId)}&attachmentId=${encodeURIComponent(attId)}&filename=${encodeURIComponent(filename)}`;
+                } else if (file.url && file.url !== "#" && !file.url.startsWith("https://drive.nashmia.com")) {
+                  downloadUrl = file.url;
+                } else if (file.metadata?.fileUrl && file.metadata.fileUrl !== "#") {
+                  downloadUrl = file.metadata.fileUrl;
+                }
+
+                if (downloadUrl) {
+                  const a = document.createElement("a");
+                  a.href = downloadUrl;
+                  a.download =
+                    file.metadata?.originalFilename || file.metadata?.fileName || file.name;
+                  a.target = "_blank";
+                  a.rel = "noopener noreferrer";
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+                }
               }}
-              className="h-8 bg-[#1D63ED] hover:bg-blue-700 text-white text-xs gap-1.5"
+              className="h-8 bg-[#1D63ED] hover:bg-blue-700 text-white text-xs gap-1.5 cursor-pointer"
             >
               <Download className="size-3.5" /> Download
             </Button>
@@ -65,15 +110,10 @@ export function DocumentPreviewDialog({
 
         {/* Content Viewer Body */}
         <div className="p-6 overflow-y-auto bg-slate-50 flex-1 min-h-[320px] flex items-center justify-center">
-          {file.type === "image" ||
-          ["jpg", "jpeg", "png", "webp", "gif"].includes((file.extension || "").toLowerCase()) ? (
+          {file.type === "image" && (file.url || file.metadata?.fileUrl) ? (
             <div className="rounded-2xl overflow-hidden border border-slate-200 bg-white shadow-md max-w-full max-h-[420px] flex items-center justify-center p-3">
               <img
-                src={
-                  file.url ||
-                  file.metadata?.fileUrl ||
-                  "https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=800&auto=format&fit=crop&q=80"
-                }
+                src={file.url || file.metadata?.fileUrl || ""}
                 alt={file.name}
                 className="max-h-[380px] w-auto object-contain rounded-xl shadow-inner"
                 referrerPolicy="no-referrer"
@@ -87,11 +127,13 @@ export function DocumentPreviewDialog({
               <div>
                 <h3 className="text-base font-bold text-slate-800 break-all">{file.name}</h3>
                 <p className="text-xs text-slate-500 mt-1">
-                  Attachment Metadata Record &bull; Original file is not stored
+                  {file.metadata?.uploadStatus ||
+                    (file.url ? "Stored in Supabase Storage" : "Metadata Record")}{" "}
+                  &bull; {file.metadata?.source || "Incoming Forwarder Email"}
                 </p>
               </div>
 
-              {/* 7 Display Metadata Fields */}
+              {/* Complete Metadata Fields (Displaying all 9 required attributes) */}
               <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-left text-xs space-y-2.5 text-slate-700">
                 <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
                   <span className="text-slate-400 font-medium">Document Name:</span>
@@ -103,48 +145,84 @@ export function DocumentPreviewDialog({
                   </span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
+                  <span className="text-slate-400 font-medium">Movement Number:</span>
+                  <span className="font-semibold text-blue-700 font-mono">
+                    {file.metadata?.movementNumber ||
+                      file.metadata?.movementReferenceNumber ||
+                      "Not Linked"}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
                   <span className="text-slate-400 font-medium">Document Type:</span>
                   <span className="font-semibold text-blue-600">
                     {file.metadata?.displayDocumentType ||
                       file.metadata?.documentType ||
                       file.metadata?.typeTag ||
-                      "Cut-Off"}
+                      file.metadata?.category ||
+                      "Other"}
                   </span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
-                  <span className="text-slate-400 font-medium">Movement Reference Number:</span>
-                  <span className="font-semibold text-slate-900 font-mono">
-                    {file.metadata?.movementReferenceNumber ||
-                      file.metadata?.movementNumber ||
-                      "Needs Review"}
+                  <span className="text-slate-400 font-medium">Original Filename:</span>
+                  <span
+                    className="font-mono text-slate-800 truncate max-w-[240px]"
+                    title={file.metadata?.originalFilename || file.metadata?.fileName || file.name}
+                  >
+                    {file.metadata?.originalFilename || file.metadata?.fileName || file.name}
                   </span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
-                  <span className="text-slate-400 font-medium">Forwarder:</span>
+                  <span className="text-slate-400 font-medium">File Format & Size:</span>
                   <span className="font-semibold text-slate-900">
-                    {file.metadata?.forwarder || file.metadata?.forwarderName || "Forwarder"}
+                    {(file.metadata?.fileFormat || file.extension).toUpperCase()} &bull;{" "}
+                    {file.fileSize}
                   </span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
                   <span className="text-slate-400 font-medium">Received Date:</span>
                   <span className="font-semibold text-slate-900">
                     {file.metadata?.receivedDate || file.lastModified}
+                    {file.metadata?.receivedTime ? ` (${file.metadata.receivedTime})` : ""}
                   </span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
-                  <span className="text-slate-400 font-medium">File Type / Size:</span>
+                  <span className="text-slate-400 font-medium">Sender / Forwarder:</span>
                   <span className="font-semibold text-slate-900">
-                    {(file.metadata?.fileFormat || file.extension).toUpperCase()} &bull;{" "}
-                    {file.fileSize}
+                    {file.metadata?.forwarder ||
+                      file.metadata?.forwarderName ||
+                      "Freight Forwarder"}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
+                  <span className="text-slate-400 font-medium">Source Email:</span>
+                  <span className="font-mono text-slate-800 text-[11px] truncate max-w-[240px]">
+                    {file.metadata?.sourceEmail ||
+                      file.metadata?.senderEmail ||
+                      file.metadata?.forwarderEmail ||
+                      "Not Provided"}
                   </span>
                 </div>
                 <div className="flex justify-between items-center pt-1">
-                  <span className="text-slate-400 font-medium">Status:</span>
+                  <span className="text-slate-400 font-medium">Upload / Source Status:</span>
                   <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-200/60">
-                    {file.metadata?.status || "Metadata Saved"}
+                    {file.metadata?.uploadStatus || file.metadata?.status || "Processed"}
                   </span>
                 </div>
               </div>
+
+              {/* Open Stored Document Quick Action Button */}
+              {file.url || file.metadata?.fileUrl ? (
+                <div className="pt-2">
+                  <a
+                    href={file.url || file.metadata?.fileUrl || "#"}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center justify-center gap-2 w-full py-2.5 px-4 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 font-medium text-xs border border-blue-200 transition-colors"
+                  >
+                    <ExternalLink className="size-3.5" /> Open Stored Document
+                  </a>
+                </div>
+              ) : null}
             </div>
           )}
         </div>

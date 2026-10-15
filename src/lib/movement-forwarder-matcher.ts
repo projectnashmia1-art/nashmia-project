@@ -6,6 +6,11 @@ import {
   getLocalForwarderRequests,
 } from "./multi-forwarder-service";
 import type { IncomingAttachmentInput } from "./document-attachment-service";
+import {
+  extractBookingNumbersFromText,
+  extractBookingNumberStrictOrder,
+  normalizeBookingNumber,
+} from "./forwarder-quotation-processor";
 
 export type MatchStatus = "MATCHED" | "NEEDS_REVIEW" | "UNMATCHED" | "PENDING";
 
@@ -381,20 +386,32 @@ export function saveEmailMatchAuditRecord(audit: EmailMatchAuditRecord): void {
 }
 
 /**
- * Extracts potential Movement Numbers from textual content (Priority 3)
+ * Extracts potential Movement/Booking Numbers from textual content using configurable regular expressions
+ * Supports: BK-2026-000145, BK/2026/000145, BOOKING-2026-000145, REF: BK-2026-000145, MOV-, etc.
  */
 export function extractMovementNumbers(text: string): string[] {
   if (!text) return [];
   const ids = new Set<string>();
 
-  // Matches MOV-2026-6093, NASH-BK-2026-6093, MOV-1234, MOVEMENT-12345
-  const movMatches = text.matchAll(
-    /\b(?:MOV(?:EMENT)?[-_]?[0-9]{4}[-_]?[0-9]+|NASH[-_]BK[-_]?[0-9]{4}[-_]?[0-9]+|NASH[-_][A-Z0-9-]+|MOV[-_]?[0-9]{3,8}|MN[-_]?[0-9]{3,8})\b/gi,
+  // 1. Direct Nashmia movement pattern match across all occurrences in text
+  const allNashMatches = text.matchAll(
+    /(?:^|[^A-Za-z0-9])(NASH[-_](?:BK[-_]|MOV[-_])?[0-9]{4}[-_][0-9]{3,8})(?:$|[^A-Za-z0-9])/gi,
   );
-  for (const m of movMatches) {
-    ids.add(m[0].trim().toUpperCase());
+  for (const nm of allNashMatches) {
+    if (nm[1]) {
+      ids.add(nm[1].toUpperCase().replace(/_/g, "-"));
+    }
   }
 
+  // 2. Configurable booking number regexes
+  const configuredMatches = extractBookingNumbersFromText(text);
+  for (const cm of configuredMatches) {
+    ids.add(cm.toUpperCase());
+    const normalized = normalizeBookingNumber(cm);
+    if (normalized) ids.add(normalized);
+  }
+
+  // 3. Standard movement number parser
   const stdMov = extractMovementNumber(text);
   if (stdMov) {
     ids.add(stdMov.toUpperCase());
@@ -642,6 +659,7 @@ export async function identifyMovementForIncomingEmail(
       movementNumber: p1MovementNumber,
       forwarderId: p1ForwarderId,
       senderEmail: cleanSender,
+      senderName: input.senderName,
       matchReason: `Confidently matched via Priority 1 (Gmail Thread ID): ${p1Details}.`,
       priorityStepEvaluations,
     });
@@ -712,6 +730,7 @@ export async function identifyMovementForIncomingEmail(
       movementNumber: p2MovementNumber,
       forwarderId: p2ForwarderId,
       senderEmail: cleanSender,
+      senderName: input.senderName,
       matchReason: `Confidently matched via Priority 2 (In-Reply-To / References): ${p2Details}.`,
       priorityStepEvaluations,
     });
@@ -727,41 +746,70 @@ export async function identifyMovementForIncomingEmail(
   let p3Details = "";
   let p3Ambiguous = false;
 
-  const extractedMovementNumbers = extractMovementNumbers(fullText);
+  const orderResult = extractBookingNumberStrictOrder({
+    subject,
+    body,
+    attachments: input.attachments,
+    attachmentFilenames: input.attachments
+      ?.map((a) => a.name || a.filename)
+      .filter(Boolean) as string[],
+    inReplyTo: input.inReplyTo,
+    references: input.references,
+  });
 
-  if (extractedMovementNumbers.length > 0) {
+  const extractedMovementNumbers =
+    orderResult.detectedBookingNumbers.length > 0
+      ? orderResult.detectedBookingNumbers
+      : extractMovementNumbers(fullText);
+
+  if (orderResult.isAmbiguous) {
+    p3Ambiguous = true;
+    p3Details = orderResult.reason;
+  } else if (extractedMovementNumbers.length > 0) {
     const matchedCandidateMap = new Map<
       string,
       { bookingId: string; movementNumber: string; forwarderId?: string }
     >();
 
     for (const movId of extractedMovementNumbers) {
+      const normId = normalizeBookingNumber(movId) || movId;
+      const slashId = movId.includes("-") ? movId.replace(/-/g, "/") : movId;
+
       // 3.1 Check multi-forwarder request register
       const localRequests = getLocalForwarderRequests();
-      const matchedLocal = localRequests.find(
-        (r) => r.movementNumber && r.movementNumber.toUpperCase() === movId.toUpperCase(),
-      );
+      const matchedLocal = localRequests.find((r) => {
+        const rMovNorm = normalizeBookingNumber(r.movementNumber || "");
+        const rRefNorm = normalizeBookingNumber(r.bookingReference || "");
+        return (
+          rMovNorm === normId ||
+          rRefNorm === normId ||
+          r.movementNumber?.toUpperCase() === movId.toUpperCase() ||
+          r.movementNumber?.toUpperCase() === slashId.toUpperCase()
+        );
+      });
 
       if (matchedLocal?.bookingId) {
         matchedCandidateMap.set(matchedLocal.bookingId, {
           bookingId: matchedLocal.bookingId,
-          movementNumber: matchedLocal.movementNumber || movId,
+          movementNumber: matchedLocal.movementNumber || normId,
           forwarderId: matchedLocal.forwarderId,
         });
       }
 
-      // 3.2 Query bookings table
+      // 3.2 Query bookings table (checking both hyphenated and slashed variants)
       const { data: bookingRows } = await supabase
         .from("bookings")
         .select("id, movement_number, booking_reference, reference, forwarder_id")
-        .or(`movement_number.ilike.${movId},booking_reference.ilike.${movId}`)
+        .or(
+          `movement_number.ilike.%${normId}%,booking_reference.ilike.%${normId}%,movement_number.ilike.%${slashId}%,booking_reference.ilike.%${slashId}%`,
+        )
         .limit(5);
 
       if (bookingRows && bookingRows.length > 0) {
         for (const row of bookingRows) {
           matchedCandidateMap.set(row.id, {
             bookingId: row.id,
-            movementNumber: row.movement_number || row.booking_reference || movId,
+            movementNumber: row.movement_number || row.booking_reference || normId,
             forwarderId: row.forwarder_id || undefined,
           });
         }
@@ -774,7 +822,7 @@ export async function identifyMovementForIncomingEmail(
       p3BookingId = single.bookingId;
       p3MovementNumber = single.movementNumber;
       p3ForwarderId = single.forwarderId || null;
-      p3Details = `Exact match for Movement Number [${p3MovementNumber}] in subject/body`;
+      p3Details = `Exact match for Booking/Movement Number [${p3MovementNumber}] in ${orderResult.foundIn || "subject/body"}`;
     } else if (matchedCandidateMap.size > 1) {
       p3Ambiguous = true;
       p3Details = `Ambiguous: Multiple bookings (${Array.from(matchedCandidateMap.keys()).join(", ")}) match movement numbers [${extractedMovementNumbers.join(", ")}]. Must NOT auto-assign.`;
@@ -805,6 +853,7 @@ export async function identifyMovementForIncomingEmail(
       movementNumber: p3MovementNumber,
       forwarderId: p3ForwarderId,
       senderEmail: cleanSender,
+      senderName: input.senderName,
       matchReason: `Confidently matched via Priority 3 (Movement Number in subject/body): ${p3Details}.`,
       priorityStepEvaluations,
     });
@@ -917,6 +966,7 @@ export async function identifyMovementForIncomingEmail(
       movementNumber: p4MovementNumber,
       forwarderId: p4ForwarderId,
       senderEmail: cleanSender,
+      senderName: input.senderName,
       matchReason: `Confidently matched via Priority 4 (Unique per-forwarder Request ID): ${p4Details}.`,
       priorityStepEvaluations,
     });
@@ -1049,6 +1099,7 @@ export async function identifyMovementForIncomingEmail(
       movementNumber: p5MovementNumber,
       forwarderId: p5ForwarderId,
       senderEmail: cleanSender,
+      senderName: input.senderName,
       matchReason: `Confidently matched via Priority 5 (Sender email & linked forwarder): ${p5Details}.`,
       priorityStepEvaluations,
     });
@@ -1241,6 +1292,7 @@ export async function identifyMovementForIncomingEmail(
       movementNumber: p6MovementNumber,
       forwarderId: p6ForwarderId,
       senderEmail: cleanSender,
+      senderName: input.senderName,
       matchReason: `Confidently matched via Priority 6 (Booking Attributes): ${p6Details}.`,
       priorityStepEvaluations,
     });
@@ -1290,6 +1342,7 @@ async function resolveConfidentMatchResult(
     movementNumber: string | null;
     forwarderId: string | null;
     senderEmail: string;
+    senderName?: string | null;
     matchReason: string;
     priorityStepEvaluations: PriorityStepEvaluation[];
   },
@@ -1300,6 +1353,7 @@ async function resolveConfidentMatchResult(
     confidence,
     bookingId,
     senderEmail,
+    senderName,
     matchReason,
     priorityStepEvaluations,
   } = params;
@@ -1347,9 +1401,51 @@ async function resolveConfidentMatchResult(
 
     if (fRec) {
       forwarderData = fRec;
-      forwarderName = fRec.company_name || null;
+      forwarderName = fRec.company_name || fRec.contact_person || null;
       forwarderEmail = fRec.email || null;
     }
+  }
+
+  // Fallback: If not resolved yet, search forwarders table by sender email
+  if (!forwarderName && senderEmail) {
+    const cleanSender = senderEmail.trim().toLowerCase();
+    const { data: fRecByEmail } = await supabase
+      .from("forwarders")
+      .select("id, company_name, email, contact_person, website, notes")
+      .or(`email.ilike.%${cleanSender}%,contact_email.ilike.%${cleanSender}%`)
+      .limit(1)
+      .maybeSingle();
+
+    if (fRecByEmail) {
+      forwarderData = fRecByEmail;
+      finalForwarderId = fRecByEmail.id;
+      forwarderName = fRecByEmail.company_name || fRecByEmail.contact_person || null;
+      forwarderEmail = fRecByEmail.email || cleanSender;
+    }
+  }
+
+  // Fallback 2: Check forwarder_requests table for this movement
+  if (!forwarderName && finalMovementNumber && senderEmail) {
+    const { data: fwdReqs } = await supabase
+      .from("forwarder_requests")
+      .select("forwarder_id, forwarder_name, forwarder_email")
+      .or(`movement_number.eq.${finalMovementNumber},booking_reference.eq.${finalMovementNumber}`)
+      .ilike("forwarder_email", senderEmail)
+      .limit(1);
+
+    if (fwdReqs && fwdReqs.length > 0 && fwdReqs[0].forwarder_name) {
+      forwarderName = fwdReqs[0].forwarder_name;
+      finalForwarderId = fwdReqs[0].forwarder_id || finalForwarderId;
+      forwarderEmail = fwdReqs[0].forwarder_email || senderEmail;
+    }
+  }
+
+  // Fallback 3: Use sender display name or formatted email username
+  if (!forwarderName && (senderName || senderEmail)) {
+    const emailUser = (senderEmail || "").split("@")[0] || "Forwarder";
+    forwarderName =
+      senderName?.trim() || emailUser.charAt(0).toUpperCase() + emailUser.slice(1);
+    forwarderEmail = senderEmail;
   }
 
   // Validate forwarder sender email

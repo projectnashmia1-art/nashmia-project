@@ -63,311 +63,415 @@ export function FileDetailsDrawer({
     (isBlDoc ? "BILL_OF_LADING" : isCutOffDoc ? "CUT_OFF_NOTICE" : undefined);
 
   return (
-    <div className="fixed inset-y-0 right-0 z-50 w-full sm:w-96 bg-white border-l border-slate-200 shadow-2xl p-6 flex flex-col justify-between overflow-y-auto animate-in slide-in-from-right duration-200">
-      <div>
-        {/* Header */}
-        <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-          <div className="flex items-center gap-2.5 min-w-0">
+    <>
+      {/* Mobile Backdrop */}
+      <div
+        onClick={onClose}
+        className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs transition-opacity duration-200 sm:hidden animate-in fade-in"
+      />
+      <div className="fixed inset-x-0 bottom-0 top-auto sm:inset-y-0 sm:right-0 sm:top-0 sm:bottom-0 sm:left-auto z-50 w-full sm:w-96 max-h-[92vh] sm:max-h-none rounded-t-[28px] sm:rounded-none bg-white border-t sm:border-t-0 sm:border-l border-slate-200 shadow-2xl p-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:p-6 flex flex-col justify-between overflow-y-auto animate-in slide-in-from-bottom sm:slide-in-from-right duration-240 ease-[cubic-bezier(0.16,1,0.3,1)]">
+        <div>
+          {/* Mobile Tactile Drag Handle */}
+          <div
+            data-swipe-handle="true"
+            className="mx-auto -mt-2 mb-2 flex h-6 w-full max-w-[140px] cursor-grab touch-none items-center justify-center sm:hidden select-none shrink-0"
+            aria-label="Drag down to dismiss"
+          >
+            <div className="h-1.5 w-12 rounded-full bg-slate-300" />
+          </div>
+
+          {/* Header */}
+          <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+            <div className="flex items-center gap-2.5 min-w-0">
+              {isFolder ? (
+                <div className="p-2 rounded-lg bg-blue-50 text-[#1D63ED]">
+                  <Folder className="size-5" />
+                </div>
+              ) : (
+                <div className="p-2 rounded-lg bg-blue-50 text-[#1D63ED]">
+                  <FileText className="size-5" />
+                </div>
+              )}
+              <div className="min-w-0">
+                <h3 className="text-sm font-bold text-slate-800 truncate">{title}</h3>
+                <p className="text-[11px] text-slate-400 font-medium">
+                  {isFolder ? "Directory Folder" : `${file?.extension?.toUpperCase()} File`}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={onClose}
+              className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+
+          {/* Thumbnail Preview Area */}
+          <div className="my-5 rounded-2xl bg-gradient-to-b from-slate-50 to-slate-100/60 border border-slate-200/80 p-6 flex flex-col items-center justify-center text-center shadow-xs">
             {isFolder ? (
-              <div className="p-2 rounded-lg bg-blue-50 text-[#1D63ED]">
-                <Folder className="size-5" />
+              <div className="size-16 rounded-2xl bg-blue-100/80 text-[#1D63ED] flex items-center justify-center mb-3">
+                <Folder className="size-8" />
+              </div>
+            ) : file ? (
+              <div className="mb-3">
+                <FileThumbnailIcon file={file} size="lg" showFormatTag />
               </div>
             ) : (
-              <div className="p-2 rounded-lg bg-blue-50 text-[#1D63ED]">
-                <FileText className="size-5" />
+              <div className="size-16 rounded-2xl bg-blue-600 text-white flex items-center justify-center mb-3 shadow-md">
+                <FileText className="size-8" />
               </div>
             )}
-            <div className="min-w-0">
-              <h3 className="text-sm font-bold text-slate-800 truncate">{title}</h3>
-              <p className="text-[11px] text-slate-400 font-medium">
-                {isFolder ? "Directory Folder" : `${file?.extension?.toUpperCase()} File`}
-              </p>
-            </div>
+            <span className="text-xs font-semibold text-slate-800 truncate max-w-full px-2">
+              {title}
+            </span>
+            <span className="text-[11px] text-slate-400 mt-0.5 font-medium">
+              {file?.fileSize || folder?.totalSize}
+            </span>
+            {isNeedsReview ? (
+              <span className="mt-2 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                <AlertTriangle className="size-3 text-amber-700" />
+                Needs Review
+              </span>
+            ) : file?.metadata?.category ? (
+              <span className="mt-2 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                {file.metadata.category}
+              </span>
+            ) : null}
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
-          >
-            <X className="size-4" />
-          </button>
-        </div>
 
-        {/* Thumbnail Preview Area */}
-        <div className="my-5 rounded-2xl bg-gradient-to-b from-slate-50 to-slate-100/60 border border-slate-200/80 p-6 flex flex-col items-center justify-center text-center shadow-xs">
-          {isFolder ? (
-            <div className="size-16 rounded-2xl bg-blue-100/80 text-[#1D63ED] flex items-center justify-center mb-3">
-              <Folder className="size-8" />
-            </div>
-          ) : file ? (
-            <div className="mb-3">
-              <FileThumbnailIcon file={file} size="lg" showFormatTag />
-            </div>
-          ) : (
-            <div className="size-16 rounded-2xl bg-blue-600 text-white flex items-center justify-center mb-3 shadow-md">
-              <FileText className="size-8" />
+          {/* Needs Review Alert Banner */}
+          {isNeedsReview && (
+            <div className="mb-5 rounded-xl border border-amber-300 bg-amber-50/90 p-4 space-y-2 text-xs">
+              <div className="flex items-center justify-between font-bold text-amber-900">
+                <span className="flex items-center gap-1.5">
+                  <AlertTriangle className="size-3.5 text-amber-700" /> Manual Review Required
+                </span>
+                <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-amber-200 text-amber-900 font-bold">
+                  Stored Safely
+                </span>
+              </div>
+              <p className="text-amber-800 text-[11px] leading-relaxed">
+                {reviewReason ||
+                  "Movement, document type, or cut-off schedule could not be identified with confidence. Stored safely for operator review."}
+              </p>
+              {unconfidentFields.length > 0 && (
+                <div className="flex flex-wrap gap-1 pt-1">
+                  {unconfidentFields.map((f) => (
+                    <span
+                      key={f}
+                      className="inline-block px-1.5 py-0.5 text-[10px] font-medium bg-amber-200/80 text-amber-900 rounded"
+                    >
+                      {f === "movement"
+                        ? "Unidentified Movement"
+                        : f === "document_type"
+                          ? "Ambiguous Doc Type"
+                          : "Unclear Cut-Off"}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {file && onReview && (
+                <div className="pt-2">
+                  <Button
+                    size="sm"
+                    onClick={() => onReview(file)}
+                    className="w-full bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold gap-1.5 h-8"
+                  >
+                    <ShieldCheck className="size-3.5" />
+                    Review &amp; Link to Movement
+                  </Button>
+                </div>
+              )}
             </div>
           )}
-          <span className="text-xs font-semibold text-slate-800 truncate max-w-full px-2">
-            {title}
-          </span>
-          <span className="text-[11px] text-slate-400 mt-0.5 font-medium">
-            {file?.fileSize || folder?.totalSize}
-          </span>
-          {isNeedsReview ? (
-            <span className="mt-2 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
-              <AlertTriangle className="size-3 text-amber-700" />
-              Needs Review
-            </span>
-          ) : file?.metadata?.category ? (
-            <span className="mt-2 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
-              {file.metadata.category}
-            </span>
-          ) : null}
-        </div>
 
-        {/* Needs Review Alert Banner */}
-        {isNeedsReview && (
-          <div className="mb-5 rounded-xl border border-amber-300 bg-amber-50/90 p-4 space-y-2 text-xs">
-            <div className="flex items-center justify-between font-bold text-amber-900">
-              <span className="flex items-center gap-1.5">
-                <AlertTriangle className="size-3.5 text-amber-700" /> Manual Review Required
-              </span>
-              <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-amber-200 text-amber-900 font-bold">
-                Stored Safely
-              </span>
-            </div>
-            <p className="text-amber-800 text-[11px] leading-relaxed">
-              {reviewReason ||
-                "Movement, document type, or cut-off schedule could not be identified with confidence. Stored safely for operator review."}
-            </p>
-            {unconfidentFields.length > 0 && (
-              <div className="flex flex-wrap gap-1 pt-1">
-                {unconfidentFields.map((f) => (
-                  <span
-                    key={f}
-                    className="inline-block px-1.5 py-0.5 text-[10px] font-medium bg-amber-200/80 text-amber-900 rounded"
-                  >
-                    {f === "movement"
-                      ? "Unidentified Movement"
-                      : f === "document_type"
-                        ? "Ambiguous Doc Type"
-                        : "Unclear Cut-Off"}
-                  </span>
-                ))}
-              </div>
-            )}
-            {file && onReview && (
-              <div className="pt-2">
-                <Button
-                  size="sm"
-                  onClick={() => onReview(file)}
-                  className="w-full bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold gap-1.5 h-8"
-                >
-                  <ShieldCheck className="size-3.5" />
-                  Review &amp; Link to Movement
-                </Button>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Cut-Off Deadlines (Only relevant cut-off dates/times and labels) */}
-        {isCutOffDoc && (
-          <div className="mb-5 rounded-xl border border-amber-200/80 bg-amber-50/40 p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
-                <Clock className="size-3.5 text-amber-600" /> Cut-Off Deadlines
-              </span>
-              {movementNumber && (
-                <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-white text-slate-700 border border-amber-200">
-                  {movementNumber}
-                </span>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              {cutOffDeadlines && cutOffDeadlines.length > 0 ? (
-                cutOffDeadlines.map((item, idx) => (
-                  <div
-                    key={idx}
-                    className="flex items-center justify-between text-xs py-1.5 px-2.5 rounded-lg bg-white border border-amber-200/60 shadow-2xs"
-                  >
-                    <span className="font-semibold text-slate-700">{item.type}</span>
-                    <span
-                      className={cn(
-                        "font-medium text-right",
-                        item.dateTime ? "text-amber-800 font-semibold" : "text-slate-400 italic",
-                      )}
-                    >
-                      {item.dateTime ? `→ ${item.dateTime}` : "Not Provided"}
-                    </span>
-                  </div>
-                ))
-              ) : (
-                <>
-                  {file?.metadata?.cutOffDates?.siCutoff && (
-                    <div className="flex items-center justify-between text-xs py-1.5 px-2.5 rounded-lg bg-white border border-amber-200/60 shadow-2xs">
-                      <span className="font-semibold text-slate-700">SI Cut-Off</span>
-                      <span className="font-semibold text-amber-800">
-                        → {file.metadata.cutOffDates.siCutoff}
-                      </span>
-                    </div>
-                  )}
-                  {file?.metadata?.cutOffDates?.vgmCutoff && (
-                    <div className="flex items-center justify-between text-xs py-1.5 px-2.5 rounded-lg bg-white border border-amber-200/60 shadow-2xs">
-                      <span className="font-semibold text-slate-700">VGM Cut-Off</span>
-                      <span className="font-semibold text-amber-800">
-                        → {file.metadata.cutOffDates.vgmCutoff}
-                      </span>
-                    </div>
-                  )}
-                  {file?.metadata?.cutOffDates?.gateCutoff && (
-                    <div className="flex items-center justify-between text-xs py-1.5 px-2.5 rounded-lg bg-white border border-amber-200/60 shadow-2xs">
-                      <span className="font-semibold text-slate-700">CY Cut-Off</span>
-                      <span className="font-semibold text-amber-800">
-                        → {file.metadata.cutOffDates.gateCutoff}
-                      </span>
-                    </div>
-                  )}
-                  {file?.metadata?.cutOffDates?.portCutoff && (
-                    <div className="flex items-center justify-between text-xs py-1.5 px-2.5 rounded-lg bg-white border border-amber-200/60 shadow-2xs">
-                      <span className="font-semibold text-slate-700">Port Cut-Off</span>
-                      <span className="font-semibold text-amber-800">
-                        → {file.metadata.cutOffDates.portCutoff}
-                      </span>
-                    </div>
-                  )}
-                  {file?.metadata?.cutOffDates?.closingDate && (
-                    <div className="flex items-center justify-between text-xs py-1.5 px-2.5 rounded-lg bg-white border border-amber-200/60 shadow-2xs">
-                      <span className="font-semibold text-slate-700">Cargo Cut-Off</span>
-                      <span className="font-semibold text-amber-800">
-                        → {file.metadata.cutOffDates.closingDate}
-                      </span>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Bill of Lading Details (Stored as BILL_OF_LADING, linked to movement) */}
-        {isBlDoc && (
-          <div className="mb-5 rounded-xl border border-blue-200/80 bg-blue-50/40 p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-blue-900 flex items-center gap-1.5">
-                <FileText className="size-3.5 text-blue-600" /> Bill of Lading (B/L)
-              </span>
-              <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-blue-600 text-white shadow-2xs">
-                BILL_OF_LADING
-              </span>
-            </div>
-
-            <div className="text-xs space-y-1.5 py-2 px-3 rounded-lg bg-white border border-blue-200/60 text-slate-700">
+          {/* Cut-Off Deadlines (Only relevant cut-off dates/times and labels) */}
+          {isCutOffDoc && (
+            <div className="mb-5 rounded-xl border border-amber-200/80 bg-amber-50/40 p-4 space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-slate-400">Status</span>
-                <span className="font-semibold text-emerald-700">Original Document Saved</span>
+                <span className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
+                  <Clock className="size-3.5 text-amber-600" /> Cut-Off Deadlines
+                </span>
+                {movementNumber && (
+                  <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-white text-slate-700 border border-amber-200">
+                    {movementNumber}
+                  </span>
+                )}
               </div>
-              {movementNumber && (
-                <div className="flex items-center justify-between pt-1 border-t border-slate-100">
-                  <span className="text-slate-400">Linked Movement</span>
-                  <span className="font-mono font-bold text-blue-700">{movementNumber}</span>
-                </div>
-              )}
-              {forwarderName && (
-                <div className="flex items-center justify-between pt-1 border-t border-slate-100">
-                  <span className="text-slate-400">Forwarder / Carrier</span>
-                  <span className="font-medium text-slate-800">{forwarderName}</span>
-                </div>
-              )}
+
+              <div className="space-y-2">
+                {cutOffDeadlines && cutOffDeadlines.length > 0 ? (
+                  cutOffDeadlines.map((item, idx) => (
+                    <div
+                      key={idx}
+                      className="flex items-center justify-between text-xs py-1.5 px-2.5 rounded-lg bg-white border border-amber-200/60 shadow-2xs"
+                    >
+                      <span className="font-semibold text-slate-700">{item.type}</span>
+                      <span
+                        className={cn(
+                          "font-medium text-right",
+                          item.dateTime ? "text-amber-800 font-semibold" : "text-slate-400 italic",
+                        )}
+                      >
+                        {item.dateTime ? `→ ${item.dateTime}` : "Not Provided"}
+                      </span>
+                    </div>
+                  ))
+                ) : (
+                  <>
+                    {file?.metadata?.cutOffDates?.siCutoff && (
+                      <div className="flex items-center justify-between text-xs py-1.5 px-2.5 rounded-lg bg-white border border-amber-200/60 shadow-2xs">
+                        <span className="font-semibold text-slate-700">SI Cut-Off</span>
+                        <span className="font-semibold text-amber-800">
+                          → {file.metadata.cutOffDates.siCutoff}
+                        </span>
+                      </div>
+                    )}
+                    {file?.metadata?.cutOffDates?.vgmCutoff && (
+                      <div className="flex items-center justify-between text-xs py-1.5 px-2.5 rounded-lg bg-white border border-amber-200/60 shadow-2xs">
+                        <span className="font-semibold text-slate-700">VGM Cut-Off</span>
+                        <span className="font-semibold text-amber-800">
+                          → {file.metadata.cutOffDates.vgmCutoff}
+                        </span>
+                      </div>
+                    )}
+                    {file?.metadata?.cutOffDates?.gateCutoff && (
+                      <div className="flex items-center justify-between text-xs py-1.5 px-2.5 rounded-lg bg-white border border-amber-200/60 shadow-2xs">
+                        <span className="font-semibold text-slate-700">CY Cut-Off</span>
+                        <span className="font-semibold text-amber-800">
+                          → {file.metadata.cutOffDates.gateCutoff}
+                        </span>
+                      </div>
+                    )}
+                    {file?.metadata?.cutOffDates?.portCutoff && (
+                      <div className="flex items-center justify-between text-xs py-1.5 px-2.5 rounded-lg bg-white border border-amber-200/60 shadow-2xs">
+                        <span className="font-semibold text-slate-700">Port Cut-Off</span>
+                        <span className="font-semibold text-amber-800">
+                          → {file.metadata.cutOffDates.portCutoff}
+                        </span>
+                      </div>
+                    )}
+                    {file?.metadata?.cutOffDates?.closingDate && (
+                      <div className="flex items-center justify-between text-xs py-1.5 px-2.5 rounded-lg bg-white border border-amber-200/60 shadow-2xs">
+                        <span className="font-semibold text-slate-700">Cargo Cut-Off</span>
+                        <span className="font-semibold text-amber-800">
+                          → {file.metadata.cutOffDates.closingDate}
+                        </span>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {/* Properties List */}
-        <div className="space-y-4">
-          <div className="text-[11px] font-bold tracking-wider text-slate-400 uppercase">
-            Properties & Metadata
-          </div>
-
-          <div className="space-y-3 text-xs">
-            {documentType && (
-              <div className="flex items-center justify-between text-slate-600 py-1 border-b border-slate-50">
-                <span className="flex items-center gap-2 text-slate-400">Document Type</span>
-                <span className="font-mono font-bold text-xs text-slate-800 px-1.5 py-0.5 bg-slate-100 rounded">
-                  {documentType}
+          {/* Bill of Lading Details (Stored as BILL_OF_LADING, linked to movement) */}
+          {isBlDoc && (
+            <div className="mb-5 rounded-xl border border-blue-200/80 bg-blue-50/40 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-blue-900 flex items-center gap-1.5">
+                  <FileText className="size-3.5 text-blue-600" /> Bill of Lading (B/L)
+                </span>
+                <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-blue-600 text-white shadow-2xs">
+                  BILL_OF_LADING
                 </span>
               </div>
-            )}
 
-            {movementNumber && (
-              <div className="flex items-center justify-between text-slate-600 py-1 border-b border-slate-50">
-                <span className="flex items-center gap-2 text-slate-400">Movement</span>
-                <span className="font-semibold text-slate-800">{movementNumber}</span>
-              </div>
-            )}
-
-            <div className="flex items-center justify-between text-slate-600 py-1 border-b border-slate-50">
-              <span className="flex items-center gap-2 text-slate-400">
-                <HardDrive className="size-3.5" /> Size
-              </span>
-              <span className="font-semibold text-slate-800">
-                {file?.fileSize || folder?.totalSize}
-              </span>
-            </div>
-
-            <div className="flex items-center justify-between text-slate-600 py-1 border-b border-slate-50">
-              <span className="flex items-center gap-2 text-slate-400">
-                <Calendar className="size-3.5" /> Last Modified
-              </span>
-              <span className="font-medium text-slate-800">{file?.lastModified || "Just now"}</span>
-            </div>
-
-            <div className="py-2 border-b border-slate-50">
-              <div className="flex items-center gap-2 text-slate-400 mb-2">
-                <Users className="size-3.5" /> People with Access
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {(file?.owners || folder?.sharedWith || []).map((owner) => (
-                  <div
-                    key={owner.id}
-                    className="flex items-center gap-1.5 bg-slate-50 border border-slate-200/60 rounded-full py-0.5 pl-1 pr-2.5 text-[11px]"
-                  >
-                    <div
-                      className={cn(
-                        "size-4 rounded-full flex items-center justify-center font-bold text-[8px]",
-                        owner.avatarBg,
-                      )}
-                    >
-                      {owner.avatarText}
-                    </div>
-                    <span className="font-medium text-slate-700">{owner.name}</span>
+              <div className="text-xs space-y-1.5 py-2 px-3 rounded-lg bg-white border border-blue-200/60 text-slate-700">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Status</span>
+                  <span className="font-semibold text-emerald-700">Original Document Saved</span>
+                </div>
+                {movementNumber && (
+                  <div className="flex items-center justify-between pt-1 border-t border-slate-100">
+                    <span className="text-slate-400">Linked Movement</span>
+                    <span className="font-mono font-bold text-blue-700">{movementNumber}</span>
                   </div>
-                ))}
+                )}
+                {forwarderName && (
+                  <div className="flex items-center justify-between pt-1 border-t border-slate-100">
+                    <span className="text-slate-400">Forwarder / Carrier</span>
+                    <span className="font-medium text-slate-800">{forwarderName}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Properties List */}
+          <div className="space-y-4">
+            <div className="text-[11px] font-bold tracking-wider text-slate-400 uppercase">
+              Properties &amp; Metadata
+            </div>
+
+            <div className="space-y-2.5 text-xs">
+              {file && (
+                <div className="flex items-center justify-between text-slate-600 py-1 border-b border-slate-50">
+                  <span className="text-slate-400">Document Name</span>
+                  <span
+                    className="font-semibold text-slate-900 truncate max-w-[200px]"
+                    title={file.name}
+                  >
+                    {file.name}
+                  </span>
+                </div>
+              )}
+
+              {movementNumber && (
+                <div className="flex items-center justify-between text-slate-600 py-1 border-b border-slate-50">
+                  <span className="text-slate-400">Movement Number</span>
+                  <span className="font-mono font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded">
+                    {movementNumber}
+                  </span>
+                </div>
+              )}
+
+              {documentType && (
+                <div className="flex items-center justify-between text-slate-600 py-1 border-b border-slate-50">
+                  <span className="text-slate-400">Document Type</span>
+                  <span className="font-semibold text-slate-800 px-2 py-0.5 bg-slate-100 rounded">
+                    {file?.metadata?.displayDocumentType || documentType}
+                  </span>
+                </div>
+              )}
+
+              {file?.metadata?.originalFilename && (
+                <div className="flex items-center justify-between text-slate-600 py-1 border-b border-slate-50">
+                  <span className="text-slate-400">Original Filename</span>
+                  <span
+                    className="font-mono text-slate-800 text-[11px] truncate max-w-[200px]"
+                    title={file.metadata.originalFilename}
+                  >
+                    {file.metadata.originalFilename}
+                  </span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between text-slate-600 py-1 border-b border-slate-50">
+                <span className="flex items-center gap-2 text-slate-400">
+                  <HardDrive className="size-3.5" /> File Format &amp; Size
+                </span>
+                <span className="font-semibold text-slate-800">
+                  {(file?.metadata?.fileFormat || file?.extension || "PDF").toUpperCase()} &bull;{" "}
+                  {file?.fileSize || folder?.totalSize}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between text-slate-600 py-1 border-b border-slate-50">
+                <span className="flex items-center gap-2 text-slate-400">
+                  <Calendar className="size-3.5" /> Received Date
+                </span>
+                <span className="font-medium text-slate-800">
+                  {file?.metadata?.receivedDate || file?.lastModified || "Just now"}
+                  {file?.metadata?.receivedTime ? ` (${file.metadata.receivedTime})` : ""}
+                </span>
+              </div>
+
+              {(forwarderName || file?.metadata?.forwarder) && (
+                <div className="flex items-center justify-between text-slate-600 py-1 border-b border-slate-50">
+                  <span className="text-slate-400">Sender / Forwarder</span>
+                  <span className="font-semibold text-slate-800 truncate max-w-[200px]">
+                    {forwarderName || file?.metadata?.forwarder}
+                  </span>
+                </div>
+              )}
+
+              {(file?.metadata?.sourceEmail || file?.metadata?.senderEmail) && (
+                <div className="flex items-center justify-between text-slate-600 py-1 border-b border-slate-50">
+                  <span className="text-slate-400">Source Email</span>
+                  <span
+                    className="font-mono text-slate-700 text-[11px] truncate max-w-[200px]"
+                    title={file.metadata.sourceEmail || file.metadata.senderEmail || undefined}
+                  >
+                    {file.metadata.sourceEmail || file.metadata.senderEmail}
+                  </span>
+                </div>
+              )}
+
+              {file?.metadata?.uploadStatus || file?.metadata?.status ? (
+                <div className="flex items-center justify-between text-slate-600 py-1 border-b border-slate-50">
+                  <span className="text-slate-400">Upload / Status</span>
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10.5px] font-bold bg-blue-50 text-blue-700 border border-blue-200/60">
+                    {file.metadata.uploadStatus || file.metadata.status}
+                  </span>
+                </div>
+              ) : null}
+
+              <div className="py-2 border-b border-slate-50">
+                <div className="flex items-center gap-2 text-slate-400 mb-2">
+                  <Users className="size-3.5" /> People with Access
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {(file?.owners || folder?.sharedWith || []).map((owner) => (
+                    <div
+                      key={owner.id}
+                      className="flex items-center gap-1.5 bg-slate-50 border border-slate-200/60 rounded-full py-0.5 pl-1 pr-2.5 text-[11px]"
+                    >
+                      <div
+                        className={cn(
+                          "size-4 rounded-full flex items-center justify-center font-bold text-[8px]",
+                          owner.avatarBg,
+                        )}
+                      >
+                        {owner.avatarText}
+                      </div>
+                      <span className="font-medium text-slate-700">{owner.name}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
         </div>
-      </div>
 
-      {/* Footer Quick Actions */}
-      <div className="pt-6 border-t border-slate-100 flex items-center gap-2">
-        <Button
-          onClick={onShare}
-          className="flex-1 bg-[#1D63ED] hover:bg-blue-700 text-white text-xs font-semibold gap-2"
-        >
-          <Share2 className="size-3.5" /> Share
-        </Button>
-        <Button
-          variant="outline"
-          onClick={() => {
-            onClose();
-          }}
-          className="text-xs"
-        >
-          Close
-        </Button>
+        {/* Footer Quick Actions */}
+        <div className="pt-5 border-t border-slate-100 flex flex-col gap-2">
+          {file && (file.url || file.metadata?.fileUrl) ? (
+            <a
+              href={file.url || file.metadata?.fileUrl || "#"}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center justify-center gap-2 w-full py-2 px-3 rounded-xl bg-blue-50 hover:bg-blue-100 text-[#1D63ED] font-semibold text-xs border border-blue-200 transition-colors"
+            >
+              <ExternalLink className="size-3.5" /> Open Stored Document
+            </a>
+          ) : null}
+          <div className="flex items-center gap-2">
+            {file && (
+              <Button
+                size="sm"
+                onClick={() => {
+                  const storagePath = file.metadata?.storagePath;
+                  const downloadUrl = storagePath
+                    ? `/api/documents/download?path=${encodeURIComponent(storagePath)}`
+                    : file.url || file.metadata?.fileUrl || file.sharedLink;
+                  if (downloadUrl && downloadUrl !== "#") {
+                    const a = document.createElement("a");
+                    a.href = downloadUrl;
+                    a.download =
+                      file.metadata?.originalFilename || file.metadata?.fileName || file.name;
+                    a.target = "_blank";
+                    a.rel = "noopener noreferrer";
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                  }
+                }}
+                className="flex-1 bg-[#1D63ED] hover:bg-blue-700 text-white text-xs font-semibold gap-1.5 h-8.5"
+              >
+                <Download className="size-3.5" /> Download
+              </Button>
+            )}
+            <Button variant="outline" size="sm" onClick={onShare} className="text-xs gap-1.5 h-8.5">
+              <Share2 className="size-3.5" /> Share
+            </Button>
+            <Button variant="ghost" size="sm" onClick={onClose} className="text-xs h-8.5">
+              Close
+            </Button>
+          </div>
+        </div>
       </div>
-    </div>
+    </>
   );
 }

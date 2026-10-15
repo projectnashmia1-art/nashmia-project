@@ -24,6 +24,7 @@ import {
   getLocalForwarderRequests,
   getBookingForwarderSummary,
 } from "@/lib/multi-forwarder-service";
+import { logQuotationResponseDiagnostics } from "@/lib/quotation-diagnostics";
 import type { BookingRequestRecord, RequestStatus, RequestPriority } from "@/types/requests";
 
 interface RequestsCardGridProps {
@@ -35,6 +36,7 @@ interface RequestsCardGridProps {
   onComposeEmail?: (request: BookingRequestRecord) => void;
   onRequestQuotes?: (request: BookingRequestRecord) => void;
   onViewQuotations?: (request: BookingRequestRecord) => void;
+  onOpenAwardDrawer?: (request: BookingRequestRecord) => void;
 }
 
 function getPriorityBadge(priority: RequestPriority) {
@@ -71,6 +73,7 @@ export const RequestsCardGrid = memo(function RequestsCardGrid({
   onComposeEmail,
   onRequestQuotes,
   onViewQuotations,
+  onOpenAwardDrawer,
 }: RequestsCardGridProps) {
   const allForwarderRequests = useMemo(() => {
     const fromProps = forwarderRequests || [];
@@ -82,7 +85,11 @@ export const RequestsCardGrid = memo(function RequestsCardGrid({
     for (const r of fromProps) {
       if (r?.id) map.set(r.id, r);
     }
-    return Array.from(map.values());
+    const res = Array.from(map.values());
+    if (res.length > 0) {
+      logQuotationResponseDiagnostics(res, "RequestsCardGrid");
+    }
+    return res;
   }, [forwarderRequests]);
 
   if (requests.length === 0) {
@@ -277,26 +284,75 @@ export const RequestsCardGrid = memo(function RequestsCardGrid({
                 </div>
               </div>
 
-              {/* Award Status Banner */}
+              {/* Award Status Interactive Section / Drawer Trigger */}
               <div className="mt-2.5">
-                {isAwarded && (fwdSummary.awardedForwarder || req.forwarderName) ? (
-                  <div className="flex items-center justify-between rounded-lg border border-cyan-200/80 bg-cyan-50/70 px-2.5 py-1.5 text-[11.5px] text-cyan-950">
-                    <span className="font-medium text-cyan-800">Award Status:</span>
-                    <span className="font-bold text-cyan-900 flex items-center gap-1">
-                      <Trophy className="size-3 text-cyan-700" />
-                      AWARDED ({fwdSummary.awardedForwarder || req.forwarderName})
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (onOpenAwardDrawer) {
+                      onOpenAwardDrawer(req);
+                    } else if (onViewQuotations) {
+                      onViewQuotations(req);
+                    }
+                  }}
+                  className={`w-full text-left transition-all rounded-lg border px-2.5 py-2 cursor-pointer group/award ${
+                    isAwarded && (fwdSummary.awardedForwarder || req.forwarderName)
+                      ? "border-cyan-200/90 bg-cyan-50/70 hover:bg-cyan-100/60 hover:border-cyan-300 text-cyan-950 shadow-2xs"
+                      : fwdSummary.quotationsReceived > 0
+                        ? "border-emerald-200/90 bg-emerald-50/50 hover:bg-emerald-100/60 hover:border-emerald-300 text-slate-800 shadow-2xs"
+                        : "border-slate-200 bg-slate-50/70 hover:bg-slate-100/80 text-slate-600"
+                  }`}
+                  title="Click to open Award Status & Fast Quotes Drawer"
+                >
+                  <div className="flex items-center justify-between text-[11.5px]">
+                    <span className="font-semibold text-slate-600 flex items-center gap-1">
+                      {isAwarded ? (
+                        <Trophy className="size-3 text-cyan-700" />
+                      ) : (
+                        <Sparkles className="size-3 text-[#0FA3B1]" />
+                      )}
+                      <span>Award Status:</span>
                     </span>
+
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-bold text-[11px]">
+                        {isAwarded ? (
+                          <span className="text-cyan-900">
+                            AWARDED ({fwdSummary.awardedForwarder || req.forwarderName})
+                          </span>
+                        ) : fwdSummary.quotationsReceived > 0 ? (
+                          <span className="text-emerald-800">
+                            {fwdSummary.quotationsReceived} Quote{fwdSummary.quotationsReceived > 1 ? "s" : ""} Received
+                          </span>
+                        ) : (
+                          <span className="text-slate-500 font-normal">Awaiting Quotations</span>
+                        )}
+                      </span>
+                      <ChevronRight className="size-3 text-slate-400 group-hover/award:text-slate-700 group-hover/award:translate-x-0.5 transition-transform" />
+                    </div>
                   </div>
-                ) : (
-                  <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11.5px] text-slate-600 shadow-2xs">
-                    <span className="font-medium text-slate-500">Award Status:</span>
-                    <span className="font-medium text-slate-700">
-                      {fwdSummary.quotationsReceived > 0
-                        ? "Awaiting Award Decision"
-                        : "Awaiting Quotations"}
-                    </span>
-                  </div>
-                )}
+
+                  {/* Chota Sa Rate & ETD Preview when forwarder responds */}
+                  {(fwdSummary.bestRate || fwdSummary.bestEtd || fwdSummary.quotationsReceived > 0) && (
+                    <div className="mt-1 pt-1 border-t border-slate-200/60 flex items-center justify-between text-[11px]">
+                      <div className="flex items-center gap-1 text-slate-700 font-mono">
+                        <span className="text-[10px] text-slate-500 font-sans">Rate:</span>
+                        <strong className="text-slate-900">
+                          ${(fwdSummary.bestRate || req.totalFreight).toLocaleString()}
+                        </strong>
+                        <span className="text-[9.5px] text-slate-400 font-sans">
+                          /{fwdSummary.bestRateCurrency || req.currency || "cntr"}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-1 text-teal-800 font-mono text-[10.5px]">
+                        <Calendar className="size-3 text-teal-600" />
+                        <span>ETD: {fwdSummary.bestEtd || req.requestedEtd || "Prompt"}</span>
+                      </div>
+                    </div>
+                  )}
+                </button>
               </div>
             </div>
 

@@ -355,7 +355,7 @@ export class GoogleOAuth2GmailService {
     const redirect = options?.redirectUri || this.redirectUri;
     const scopes = (options?.scopes || this.defaultScopes).join(" ");
     const state = options?.state || "";
-    const prompt = options?.prompt || "consent";
+    const prompt = options?.prompt || "select_account";
     const accessType = options?.accessType || "offline";
 
     const params = new URLSearchParams({

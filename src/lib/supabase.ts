@@ -29,12 +29,16 @@ function resolveEnv(key: string): string {
 
 const supabaseUrl = (resolveEnv("VITE_SUPABASE_URL") || resolveEnv("SUPABASE_URL") || "") as string;
 
-const supabaseAnonKey = (resolveEnv("SUPABASE_SECRET_KEY") ||
-  resolveEnv("SUPABASE_SERVICE_ROLE_KEY") ||
+// Client-safe public Supabase credentials.
+// Service-role keys and email credentials must NEVER be exposed to frontend code.
+const isServerEnvironment = typeof window === "undefined" && typeof process !== "undefined";
+
+const supabaseAnonKey = (
   resolveEnv("VITE_SUPABASE_ANON_KEY") ||
   resolveEnv("VITE_SUPABASE_PUBLISHABLE_KEY") ||
   resolveEnv("SUPABASE_PUBLISHABLE_KEY") ||
-  "") as string;
+  ""
+) as string;
 
 export const isSupabaseConfigured = Boolean(
   supabaseUrl && supabaseAnonKey && !supabaseUrl.includes("placeholder-project"),
@@ -51,8 +55,9 @@ const fallbackUrl = "https://placeholder-project.supabase.co";
 const fallbackKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.placeholder";
 
 /**
- * Centralized Supabase client instance.
+ * Centralized Supabase client instance using anonymous public key.
  * Exported for application-wide reuse across authentication, tables, and realtime services.
+ * Strictly avoids service-role keys to ensure user-scoped permissions and RLS.
  */
 export const supabase: SupabaseClient<Database> = createClient<Database>(
   supabaseUrl || fallbackUrl,
@@ -65,6 +70,23 @@ export const supabase: SupabaseClient<Database> = createClient<Database>(
     },
   },
 );
+
+/**
+ * Server-only Supabase client for backend tasks.
+ * Throws if called from browser/frontend code to prevent credential leakage.
+ */
+export function getServerSupabaseClient(): SupabaseClient<Database> {
+  if (typeof window !== "undefined") {
+    throw new Error("Security Violation: Service client cannot be initialized in browser frontend.");
+  }
+  const secretKey = resolveEnv("SUPABASE_SECRET_KEY") || resolveEnv("SUPABASE_SERVICE_ROLE_KEY") || supabaseAnonKey;
+  return createClient<Database>(supabaseUrl || fallbackUrl, secretKey || fallbackKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  });
+}
 
 export interface SupabaseConnectionResult {
   success: boolean;

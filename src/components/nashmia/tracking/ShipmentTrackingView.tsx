@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import {
   Anchor,
   ArrowLeft,
@@ -18,6 +18,7 @@ import {
   FileCheck2,
   FileText,
   HelpCircle,
+  Loader2,
   MapPin,
   Play,
   RotateCcw,
@@ -35,6 +36,7 @@ import {
   fetchShipmentAlertsFromSupabase,
   getShipmentSubscription,
 } from "@/lib/tracking-alerts-service";
+import { getSavedDocuments, type DriveFile } from "@/components/nashmia/documents/documents-data";
 import { getTrackingProviderConfig } from "@/lib/tracking-adapter";
 import { TrackingMapSection } from "./TrackingMapSection";
 import { TrackingAlertsModal } from "./TrackingAlertsModal";
@@ -141,7 +143,9 @@ export function ShipmentTrackingView({
   const [isSubscribed, setIsSubscribed] = useState(false);
   const [showAlertsModal, setShowAlertsModal] = useState(false);
   const [alertsModalTab, setAlertsModalTab] = useState<"alerts" | "subscribe">("alerts");
-  const [alertsCount, setAlertsCount] = useState(4);
+  const [alertsCount, setAlertsCount] = useState(0);
+  const [movementDocuments, setMovementDocuments] = useState<DriveFile[]>([]);
+  const [isLoadingDocuments, setIsLoadingDocuments] = useState(false);
   const [isTransportCollapsed, setIsTransportCollapsed] = useState(false);
   const [isProductCollapsed, setIsProductCollapsed] = useState(false);
 
@@ -158,6 +162,84 @@ export function ShipmentTrackingView({
       "—"
     );
   }, [booking, movementId]);
+
+  // Load real alerts dynamically for this shipment
+  useEffect(() => {
+    let active = true;
+    if (!movementRef || movementRef === "—") {
+      setAlertsCount(0);
+      return;
+    }
+    fetchShipmentAlertsFromSupabase(movementRef, booking as FullBookingRecord)
+      .then((al) => {
+        if (active) setAlertsCount(al.length);
+      })
+      .catch(() => {
+        if (active) setAlertsCount(0);
+      });
+    return () => {
+      active = false;
+    };
+  }, [movementRef, booking]);
+
+  // Load real documents linked to this movement from server and local storage
+  const loadShipmentDocuments = useCallback(async () => {
+    if (!movementRef || movementRef === "—") {
+      setMovementDocuments([]);
+      return;
+    }
+    setIsLoadingDocuments(true);
+    try {
+      const res = await fetch(`/api/documents?movementNumber=${encodeURIComponent(movementRef)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.files)) {
+          const cleanRef = movementRef.trim().toUpperCase();
+          const bkId = (booking as { id?: string })?.id;
+          const matched = data.files.filter((doc: DriveFile) => {
+            const docMov = (
+              doc.metadata?.movementNumber ||
+              doc.metadata?.movementReferenceNumber ||
+              ""
+            ).trim().toUpperCase();
+            const docBkId = doc.metadata?.bookingId;
+            return (
+              (cleanRef && docMov && (docMov === cleanRef || cleanRef.includes(docMov) || docMov.includes(cleanRef))) ||
+              (bkId && docBkId === bkId)
+            );
+          });
+          setMovementDocuments(matched);
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn("[ShipmentTrackingView] Fetch documents error:", err);
+    } finally {
+      setIsLoadingDocuments(false);
+    }
+
+    // Fallback to locally saved documents if offline
+    const localDocs = getSavedDocuments();
+    const cleanRef = movementRef.trim().toUpperCase();
+    const bkId = (booking as { id?: string })?.id;
+    const matchedLocal = localDocs.filter((doc) => {
+      const docMov = (
+        doc.metadata?.movementNumber ||
+        doc.metadata?.movementReferenceNumber ||
+        ""
+      ).trim().toUpperCase();
+      const docBkId = doc.metadata?.bookingId;
+      return (
+        (cleanRef && docMov && (docMov === cleanRef || cleanRef.includes(docMov) || docMov.includes(cleanRef))) ||
+        (bkId && docBkId === bkId)
+      );
+    });
+    setMovementDocuments(matchedLocal);
+  }, [movementRef, booking]);
+
+  useEffect(() => {
+    loadShipmentDocuments();
+  }, [loadShipmentDocuments]);
 
   // Real events from Supabase
   const bookingEvents = useMemo(() => {

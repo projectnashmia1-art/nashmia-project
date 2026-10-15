@@ -1,8 +1,76 @@
+import DOMPurify from "dompurify";
+
 /**
  * Production-Ready Rule-Based Email Cleaning Service
  * Deterministically strips quoted replies, signatures, and disclaimers
  * while preserving the newest relevant message and audit traceability.
  */
+
+/**
+ * Deterministically sanitizes HTML content before rendering to protect against
+ * XSS attacks, injected scripts, malicious iframes, and javascript: links.
+ */
+export function sanitizeEmailHtml(html: string): string {
+  if (!html) return "";
+  if (typeof window !== "undefined" && DOMPurify && typeof DOMPurify.sanitize === "function") {
+    return DOMPurify.sanitize(html, {
+      ALLOWED_TAGS: [
+        "b",
+        "i",
+        "em",
+        "strong",
+        "a",
+        "p",
+        "br",
+        "div",
+        "span",
+        "ul",
+        "ol",
+        "li",
+        "table",
+        "thead",
+        "tbody",
+        "tr",
+        "th",
+        "td",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "hr",
+        "blockquote",
+        "pre",
+        "code",
+      ],
+      ALLOWED_ATTR: [
+        "href",
+        "title",
+        "target",
+        "style",
+        "class",
+        "align",
+        "valign",
+        "border",
+        "cellpadding",
+        "cellspacing",
+      ],
+      FORBID_TAGS: ["script", "iframe", "object", "embed", "applet", "form", "svg"],
+      FORBID_ATTR: ["onerror", "onload", "onclick", "onmouseover", "onfocus", "onblur"],
+    });
+  }
+
+  // Robust SSR / server-side regex sanitization fallback
+  return html
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
+    .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, "")
+    .replace(/<object\b[^<]*(?:(?!<\/object>)<[^<]*)*<\/object>/gi, "")
+    .replace(/<embed\b[^<]*(?:(?!<\/embed>)<[^<]*)*<\/embed>/gi, "")
+    .replace(/\s*on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(/href\s*=\s*["']\s*javascript:[^"']*["']/gi, 'href="#"')
+    .replace(/javascript\s*:/gi, "blocked:");
+}
 
 export interface CleanedEmailResult {
   /** The clean, newest message content ready for deterministic quotation extraction */

@@ -58,18 +58,69 @@ export function NewBookingPage({
 }) {
   const { userId, isConfigured } = useAuth();
 
-  // Dynamic party options from Supabase
-  const [dynamicBuyers, setDynamicBuyers] = useState<BuyerAccount[]>([]);
-  const [dynamicSuppliers, setDynamicSuppliers] = useState<SupplierVendor[]>([]);
-  const [dynamicAgents, setDynamicAgents] = useState<BookingAgent[]>([]);
+  // Cached parties with automatic deduplication, page navigation reuse & background revalidation
+  const { data: bList = [] } = useCachedBuyers(userId, { enabled: isConfigured });
+  const { data: sList = [] } = useCachedSuppliers(userId, { enabled: isConfigured });
+  const { data: fList = [] } = useCachedForwarders(userId, { enabled: isConfigured });
 
-  // Form State initialized with stable default for SSR hydration consistency
-  const [reference, setReference] = useState<string>("MOV-2026-00001");
+  // Manually created extra parties
+  const [extraBuyers, setExtraBuyers] = useState<BuyerAccount[]>([]);
+  const [extraSuppliers, setExtraSuppliers] = useState<SupplierVendor[]>([]);
+  const [extraAgents, setExtraAgents] = useState<BookingAgent[]>([]);
 
-  useEffect(() => {
-    // Generate unique movement number after initial client mount to eliminate hydration mismatch
-    setReference(generateMovementNumber());
-  }, []);
+  // Dynamically derived lists
+  const dynamicBuyers = useMemo<BuyerAccount[]>(() => {
+    const mapped: BuyerAccount[] = bList.map((b) => ({
+      id: b.id,
+      name: b.name,
+      country: b.country,
+      consignee: b.company || b.name,
+      code: b.code || `${b.name.slice(0, 3).toUpperCase()}`,
+      badge: b.company ? "Consignee" : "Direct Buyer",
+      status: b.status,
+      destinationPort: b.preferredPort || b.destinationPort,
+      activeMovements: b.activeMovements,
+      creditTerm: "30 Days NET",
+    }));
+    const ids = new Set(mapped.map((b) => b.id));
+    return [...extraBuyers.filter((b) => !ids.has(b.id)), ...mapped];
+  }, [bList, extraBuyers]);
+
+  const dynamicSuppliers = useMemo<SupplierVendor[]>(() => {
+    const mapped: SupplierVendor[] = sList.map((s) => ({
+      id: s.id,
+      name: s.name,
+      country: s.country,
+      city: s.city || "London",
+      address: s.address || "Warehouse Bay",
+      loadPoint: s.loadPoint || `${s.city || "London"} Warehouse`,
+      contact: s.contactPerson,
+      email: s.email,
+      status: s.status,
+    }));
+    const ids = new Set(mapped.map((s) => s.id));
+    return [...extraSuppliers.filter((s) => !ids.has(s.id)), ...mapped];
+  }, [sList, extraSuppliers]);
+
+  const dynamicAgents = useMemo<BookingAgent[]>(() => {
+    const mapped: BookingAgent[] = fList.map((f) => ({
+      id: f.id,
+      name: f.name,
+      code: f.code || `${f.name.slice(0, 3).toUpperCase()}-FWD`,
+      contact: f.contactPerson,
+      email: f.email,
+      phone: f.whatsapp,
+      contractTier: f.badge || "Tier 1 Priority",
+      activeRates: f.rateCards ? f.rateCards.length : 0,
+      slaHours: 4,
+      supportedLines: f.shippingLines || ["MSC", "Maersk"],
+    }));
+    const ids = new Set(mapped.map((a) => a.id));
+    return [...extraAgents.filter((a) => !ids.has(a.id)), ...mapped];
+  }, [fList, extraAgents]);
+
+  // Form State initialized with stable default
+  const [reference, setReference] = useState<string>(() => generateMovementNumber());
   const [buyer, setBuyer] = useState<BuyerAccount | null>(null);
   const [supplier, setSupplier] = useState<SupplierVendor | null>(null);
   const [pol, setPol] = useState<Port | null>(PORTS_OF_LOADING[0] || null); // Felixstowe (FXT)
@@ -91,73 +142,6 @@ export function NewBookingPage({
   const [currency, setCurrency] = useState<string>("USD");
 
   const queryClient = useQueryClient();
-
-  // Cached parties with automatic deduplication, page navigation reuse & background revalidation
-  const { data: bList = [] } = useCachedBuyers(userId, { enabled: isConfigured });
-  const { data: sList = [] } = useCachedSuppliers(userId, { enabled: isConfigured });
-  const { data: fList = [] } = useCachedForwarders(userId, { enabled: isConfigured });
-
-  // Map cached buyers to booking party format
-  useEffect(() => {
-    if (bList.length > 0) {
-      const mappedB: BuyerAccount[] = bList.map((b) => ({
-        id: b.id,
-        name: b.name,
-        country: b.country,
-        consignee: b.company || b.name,
-        code: b.code || `${b.name.slice(0, 3).toUpperCase()}`,
-        badge: b.company ? "Consignee" : "Direct Buyer",
-        status: b.status,
-        destinationPort: b.preferredPort || b.destinationPort,
-        activeMovements: b.activeMovements,
-        creditTerm: "30 Days NET",
-      }));
-      setDynamicBuyers(mappedB);
-    }
-  }, [bList]);
-
-  // Map cached suppliers to booking party format
-  useEffect(() => {
-    if (sList.length > 0) {
-      const mappedS: SupplierVendor[] = sList.map((s) => ({
-        id: s.id,
-        name: s.name,
-        country: s.country,
-        city: s.city || "London",
-        address: s.address || "Warehouse Bay",
-        loadPoint: s.loadPoint || `${s.city || "London"} Warehouse`,
-        contact: s.contactPerson,
-        email: s.email,
-        status: s.status,
-      }));
-      setDynamicSuppliers(mappedS);
-    }
-  }, [sList]);
-
-  // Map cached forwarders to booking agent format
-  useEffect(() => {
-    if (fList.length > 0) {
-      const mappedF: BookingAgent[] = fList.map((f) => ({
-        id: f.id,
-        name: f.name,
-        code: f.code || `${f.name.slice(0, 3).toUpperCase()}-FWD`,
-        contact: f.contactPerson,
-        email: f.email,
-        phone: f.whatsapp,
-        contractTier: f.badge || "Tier 1 Priority",
-        activeRates: f.rateCards ? f.rateCards.length : 0,
-        slaHours: 4,
-        supportedLines: f.shippingLines || ["MSC", "Maersk"],
-      }));
-      setDynamicAgents(mappedF);
-    } else {
-      setDynamicAgents([]);
-    }
-  }, [fList]);
-
-  useEffect(() => {
-    setReference(`NASH-BK-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`);
-  }, []);
 
   // Realtime Supabase Sync for Buyers, Suppliers, Forwarders: invalidates query cache for background refresh
   useSupabaseRealtime(
@@ -200,7 +184,7 @@ export function NewBookingPage({
         activeMovements: created.activeMovements || 0,
         creditTerm: "30 Days NET",
       };
-      setDynamicBuyers((prev) => {
+      setExtraBuyers((prev) => {
         const filtered = prev.filter(
           (b) => b.id !== mapped.id && b.name.toLowerCase() !== mapped.name.toLowerCase(),
         );
@@ -230,7 +214,7 @@ export function NewBookingPage({
         email: created.email,
         status: created.status || "Active",
       };
-      setDynamicSuppliers((prev) => {
+      setExtraSuppliers((prev) => {
         const filtered = prev.filter(
           (s) => s.id !== mapped.id && s.name.toLowerCase() !== mapped.name.toLowerCase(),
         );
@@ -261,7 +245,7 @@ export function NewBookingPage({
         slaHours: 4,
         supportedLines: created.shippingLines || ["MSC", "Maersk"],
       };
-      setDynamicAgents((prev) => {
+      setExtraAgents((prev) => {
         const filtered = prev.filter(
           (a) => a.id !== mapped.id && a.name.toLowerCase() !== mapped.name.toLowerCase(),
         );
@@ -340,7 +324,7 @@ export function NewBookingPage({
       }
     }
 
-    setDynamicBuyers((prev) => [createdAcc, ...prev.filter((b) => b.id !== createdAcc.id)]);
+    setExtraBuyers((prev) => [createdAcc, ...prev.filter((b) => b.id !== createdAcc.id)]);
     setBuyer(createdAcc);
     return createdAcc;
   };
@@ -409,7 +393,7 @@ export function NewBookingPage({
       }
     }
 
-    setDynamicSuppliers((prev) => [createdSup, ...prev.filter((s) => s.id !== createdSup.id)]);
+    setExtraSuppliers((prev) => [createdSup, ...prev.filter((s) => s.id !== createdSup.id)]);
     setSupplier(createdSup);
     return createdSup;
   };
@@ -429,27 +413,29 @@ export function NewBookingPage({
       if (supId) {
         const foundSup = dynamicSuppliers.find((s) => s.id === supId);
         if (foundSup) {
-          setSupplier(foundSup);
+          setSupplier((prev) => (prev?.id === foundSup.id ? prev : foundSup));
         }
       }
 
       if (bId) {
         const foundBuyer = dynamicBuyers.find((b) => b.id === bId);
         if (foundBuyer) {
-          setBuyer(foundBuyer);
+          setBuyer((prev) => (prev?.id === foundBuyer.id ? prev : foundBuyer));
         }
       }
 
       if (agentId) {
         const foundAgent = dynamicAgents.find((a) => a.id === agentId);
         if (foundAgent) {
-          setBookingAgent(foundAgent);
-          setSelectedBookingAgents([foundAgent]);
+          setBookingAgent((prev) => (prev?.id === foundAgent.id ? prev : foundAgent));
+          setSelectedBookingAgents((prev) =>
+            prev.some((a) => a.id === foundAgent.id) ? prev : [foundAgent],
+          );
         }
       }
 
       if (urlSize && (urlSize === "20FT" || urlSize === "40FT" || urlSize === "40HC")) {
-        setContainerSize(urlSize as ContainerSize);
+        setContainerSize((prev) => (prev === urlSize ? prev : (urlSize as ContainerSize)));
       }
     } catch {
       // safe fallback
@@ -727,6 +713,41 @@ export function NewBookingPage({
       <div className="mt-6 sm:mt-8 grid grid-cols-1 gap-8 lg:grid-cols-12">
         {/* LEFT 70% — BOOKING FORM (col-span-8) */}
         <div className="space-y-8 lg:col-span-8">
+          {/* BOOKING / MOVEMENT REFERENCE BANNER */}
+          <div className="rounded-2xl border border-slate-200/90 bg-white p-4.5 shadow-2xs flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="size-10 rounded-xl bg-[#0FA3B1]/10 text-[#0FA3B1] grid place-items-center font-bold text-xs shrink-0">
+                REF
+              </div>
+              <div>
+                <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+                  Booking & Movement Reference
+                </div>
+                <div className="flex items-center gap-2 mt-1">
+                  <input
+                    type="text"
+                    value={reference}
+                    onChange={(e) => setReference(e.target.value.trim())}
+                    className="font-mono text-sm font-bold text-slate-900 bg-slate-50 hover:bg-white focus:bg-white border border-slate-200 focus:border-[#0FA3B1] rounded-lg px-3 py-1.5 outline-none transition-all w-56 tracking-tight"
+                    placeholder="e.g. NASH-BK-2026-7023"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setReference(generateMovementNumber())}
+                    className="text-xs text-[#0FA3B1] hover:text-[#0D919E] hover:underline font-semibold cursor-pointer"
+                    title="Generate new NASH-BK number"
+                  >
+                    Regenerate
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div className="text-xs text-slate-500 max-w-xs leading-relaxed">
+              Standard Nashmia Global movement identifier used across forwarder RFQ emails and
+              carrier confirmation.
+            </div>
+          </div>
+
           {/* SECTION 1: BOOKING PARTIES */}
           <BookingPartiesSection
             selectedBuyer={buyer}

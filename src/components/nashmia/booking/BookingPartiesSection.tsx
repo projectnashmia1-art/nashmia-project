@@ -634,7 +634,7 @@ export function BookingPartiesSection({
 
       {/* QUICK ADD BUYER MODAL */}
       <Dialog open={isQuickAddOpen} onOpenChange={setIsQuickAddOpen}>
-        <DialogContent className="w-[95vw] max-w-[95vw] sm:max-w-[480px] max-h-[90vh] overflow-y-auto rounded-[24px] border border-slate-150 bg-white p-5 sm:p-6 shadow-2xl focus:outline-none [scrollbar-width:thin]">
+        <DialogContent className="w-full sm:max-w-[480px] max-h-[92vh] overflow-y-auto sm:rounded-[28px] bg-white p-5 sm:p-6 shadow-2xl focus:outline-none [scrollbar-width:thin]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-lg font-bold text-black">
               <Building2 className="size-5 text-[#6A80A9]" />
@@ -755,7 +755,7 @@ export function BookingPartiesSection({
 
       {/* QUICK ADD SUPPLIER MODAL */}
       <Dialog open={isQuickSupplierOpen} onOpenChange={setIsQuickSupplierOpen}>
-        <DialogContent className="w-[95vw] max-w-[95vw] sm:max-w-[480px] max-h-[90vh] overflow-y-auto rounded-[24px] border border-slate-150 bg-white p-5 sm:p-6 shadow-2xl focus:outline-none [scrollbar-width:thin]">
+        <DialogContent className="w-full sm:max-w-[480px] max-h-[92vh] overflow-y-auto sm:rounded-[28px] bg-white p-5 sm:p-6 shadow-2xl focus:outline-none [scrollbar-width:thin]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-lg font-bold text-black">
               <Warehouse className="size-5 text-[#6A80A9]" />

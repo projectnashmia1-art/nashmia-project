@@ -286,74 +286,7 @@ export async function fetchShipmentAlertsFromSupabase(
     }
   }
 
-  // 3. Fallback to realistic Reference Timeline Milestones (matching uploaded reference design)
-  // Ensures user always has a rich, professional operational exception stream
-  const referenceAlerts: ShipmentAlert[] = [
-    {
-      id: "ref-alt-1",
-      type: "delay",
-      title: "Vessel Departure Schedule Adjusted",
-      description: `Vessel departure from ${booking?.pol_name || "London Gateway"} departed at 17:39 UTC (+18h) due to severe North Sea crosswinds and terminal quay crane berthing queue.`,
-      timestamp: "20 Sep 2026 - 17:39 UTC",
-      rawDate: "2026-09-20T17:39:00Z",
-      badge: "+18h Departure",
-      badgeType: "orange",
-      location: booking?.pol_name || "London Gateway",
-      source: "live_feed",
-    },
-    {
-      id: "ref-alt-2",
-      type: "early",
-      title: "Transshipment Transit Expedited",
-      description:
-        "Feeder connection at Colombo Port updated to arrive 1 day ahead of schedule. Feeder connection slot confirmed by Mediterranean Shipping Company operations desk.",
-      timestamp: "22 Sep 2026 - 08:30 UTC",
-      rawDate: "2026-09-22T08:30:00Z",
-      badge: "-1d Early Arrival",
-      badgeType: "green",
-      location: "Colombo Port, Sri Lanka",
-      source: "live_feed",
-    },
-    {
-      id: "ref-alt-3",
-      type: "success",
-      title: "Verified Gross Mass (VGM) & Customs Gate-In Approved",
-      description: `Full export declaration processed without manual intervention. Container ${
-        booking?.containers?.[0]?.container_number || "MSMU7506677"
-      } passed optical character recognition (OCR) at terminal in-gate.`,
-      timestamp: "11 Sep 2026 - 14:15 UTC",
-      rawDate: "2026-09-11T14:15:00Z",
-      badge: "Customs Cleared",
-      badgeType: "blue",
-      location: booking?.pol_name || "London Gateway",
-      source: "live_feed",
-    },
-    {
-      id: "ref-alt-4",
-      type: "info",
-      title: "Automated Satellite AIS Ping Received",
-      description: `${
-        booking?.vessel_name || "MSC MARTINA MARIA"
-      } transmitting standard Class A AIS positioning in Bay of Biscay sailing at 18.4 knots on heading 198°.`,
-      timestamp: "24 Sep 2026 - 05:22 UTC",
-      rawDate: "2026-09-24T05:22:00Z",
-      badge: "Live AIS Confirmed",
-      badgeType: "slate",
-      location: "Bay of Biscay (44.5°N, 9.5°W)",
-      source: "live_feed",
-    },
-  ];
-
-  // Merge, deduplicate by title similarity
-  const combined = [...alerts];
-  referenceAlerts.forEach((refItem) => {
-    const exists = combined.some((a) => a.title.toLowerCase() === refItem.title.toLowerCase());
-    if (!exists) {
-      combined.push(refItem);
-    }
-  });
-
-  return combined;
+  return alerts;
 }
 
 /**

@@ -36,17 +36,17 @@ export interface TrackingMapSectionProps {
 }
 
 export function TrackingMapSection({
-  originName = "Kettering",
-  originCountryCode = "GB",
-  polName = "London Gateway",
-  polCountryCode = "GB",
-  transshipmentName = "Colombo",
-  transCountryCode = "LK",
-  destinationName = "Karachi",
-  destCountryCode = "PK",
-  vesselName = "MSC MARTINA MARIA (9540077)",
-  vesselStatus = "In Transit (+18h)",
-  etaFormatted = "31 Oct 2026",
+  originName = "",
+  originCountryCode = "",
+  polName = "",
+  polCountryCode = "",
+  transshipmentName = "",
+  transCountryCode = "",
+  destinationName = "",
+  destCountryCode = "",
+  vesselName = "",
+  vesselStatus = "",
+  etaFormatted = "",
   className,
 }: TrackingMapSectionProps) {
   const containerRef = useRef<HTMLDivElement>(null);

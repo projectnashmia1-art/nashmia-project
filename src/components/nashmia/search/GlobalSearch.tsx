@@ -259,48 +259,49 @@ export const GlobalSearch = memo(function GlobalSearch({
       );
     });
 
-    matchedMovements.slice(0, 5).forEach((m: FullBookingRecord | Movement, idx: number) => {
+    matchedMovements.slice(0, 5).forEach((m: FullBookingRecord | Movement) => {
       const ref =
         (m as FullBookingRecord).movement_number ||
         (m as FullBookingRecord).booking_reference ||
         (m as Movement).ref ||
-        `MOV-2026-${String(idx + 1).padStart(5, "0")}`;
+        (m.id ? `MOV-${String(m.id).slice(0, 8).toUpperCase()}` : "Movement");
       const buyer =
         (m as FullBookingRecord).buyer_name ||
         (m as FullBookingRecord).buyer?.company_name ||
         (m as Movement).buyer ||
-        "Consignee";
+        "—";
       const supplier =
         (m as FullBookingRecord).supplier_name ||
         (m as FullBookingRecord).supplier?.company_name ||
         (m as Movement).supplier ||
-        "Supplier";
+        "—";
       const forwarder =
         (m as FullBookingRecord).forwarder_name ||
         (m as FullBookingRecord).forwarder?.company_name ||
         (m as Movement).forwarder ||
-        "Apex Logistics";
+        "Unassigned";
       const pol = (
         (m as FullBookingRecord).origin_port ||
         (m as Movement).pol ||
-        "FXT"
+        ""
       ).toUpperCase();
       const pod = (
         (m as FullBookingRecord).destination_port ||
         (m as Movement).pod ||
-        "KHI"
+        ""
       ).toUpperCase();
-      const vessel = (m as FullBookingRecord).vessel_name || (m as Movement).vessel || "MSC EMMA";
+      const vessel = (m as FullBookingRecord).vessel_name || (m as Movement).vessel || "—";
       const stage = (m as FullBookingRecord).status || (m as Movement).stage || "Booking Requested";
 
       const isConfirmed =
         stage.toLowerCase().includes("confirmed") ||
         (m as FullBookingRecord).confirmation_status === "CONFIRMED";
 
+      const laneText = pol && pod ? ` · ${pol} → ${pod}` : "";
       items.push({
         id: `mov-${m.id || ref}`,
         category: "movement",
-        title: `${ref} · ${pol} → ${pod}`,
+        title: `${ref}${laneText}`,
         subtitle: `${buyer} • ${supplier} • Forwarder: ${forwarder} • Vessel: ${vessel}`,
         meta: pol && pod ? `${pol} → ${pod}` : undefined,
         badge: {
@@ -555,11 +556,11 @@ export const GlobalSearch = memo(function GlobalSearch({
         ) : (
           <div
             className={cn(
-              "glass-apple-subtle flex h-10 w-full items-center gap-2.5 rounded-[12px] border border-white/80 px-3.5 shadow-sm transition-all duration-200",
-              isOpen && "border-primary/40 ring-2 ring-primary/20",
+              "flex h-8.5 w-full items-center gap-2 rounded-xl border border-slate-200/80 bg-white/90 px-3 shadow-2xs transition-all duration-150 hover:border-slate-300 focus-within:border-slate-900 focus-within:bg-white focus-within:ring-2 focus-within:ring-slate-900/10",
+              isOpen && "border-slate-900 bg-white ring-2 ring-slate-900/10",
             )}
           >
-            <Search className="size-4 shrink-0 text-muted-foreground" />
+            <Search className="size-3.5 shrink-0 text-slate-400" />
             <input
               ref={inputRef}
               type="text"
@@ -573,7 +574,7 @@ export const GlobalSearch = memo(function GlobalSearch({
               onKeyDown={handleInputKeyDown}
               aria-label="Search operations"
               placeholder={placeholder || defaultPlaceholder}
-              className="w-full bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground/75"
+              className="w-full bg-transparent text-[12.5px] text-slate-900 outline-none placeholder:text-slate-400"
             />
             {searchQuery ? (
               <button

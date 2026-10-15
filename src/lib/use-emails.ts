@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { supabase, isSupabaseConfigured } from "./supabase";
 import {
   fetchEmailsFromSupabase,
@@ -101,30 +101,38 @@ export function useEmails(selectedFolder: EmailFolderId = "all") {
   const allEmails = query.data || [];
 
   // Filter emails based on the active folder
-  const filteredEmails = allEmails.filter((email) => {
-    switch (selectedFolder) {
-      case "inbox":
-        return email.direction === "inbound";
-      case "sent":
-        return email.status === "SENT";
-      case "drafts":
-        return email.status === "DRAFT";
-      case "pending":
-        return email.status === "PENDING" || email.status === "SENDING";
-      case "failed":
-        return email.status === "FAILED" || email.status === "CANCELLED";
-      case "booking":
-        return email.emailType.startsWith("BOOKING_") || Boolean(email.bookingId);
-      case "system":
-        return email.emailType === "SYSTEM";
-      case "all":
-      default:
-        return true;
-    }
-  });
+  const filteredEmails = useMemo(() => {
+    return allEmails.filter((email) => {
+      switch (selectedFolder) {
+        case "inbox":
+          return email.direction === "inbound";
+        case "sent":
+          return email.status === "SENT";
+        case "drafts":
+          return email.status === "DRAFT";
+        case "pending":
+          return email.status === "PENDING" || email.status === "SENDING";
+        case "failed":
+          return email.status === "FAILED" || email.status === "CANCELLED";
+        case "booking":
+          return email.emailType.startsWith("BOOKING_") || Boolean(email.bookingId);
+        case "system":
+          return email.emailType === "SYSTEM";
+        case "all":
+        default:
+          return true;
+      }
+    });
+  }, [allEmails, selectedFolder]);
 
-  const statistics: EmailStatistics = calculateEmailStatistics(allEmails);
-  const folderCounts: EmailFolderCount = calculateFolderCounts(allEmails);
+  const statistics: EmailStatistics = useMemo(
+    () => calculateEmailStatistics(allEmails),
+    [allEmails],
+  );
+  const folderCounts: EmailFolderCount = useMemo(
+    () => calculateFolderCounts(allEmails),
+    [allEmails],
+  );
 
   return {
     ...query,

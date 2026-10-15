@@ -187,7 +187,8 @@ export function mapBookingRecordToRequest(booking: FullBookingRecord): BookingRe
       (booking as { supplierName?: string })?.supplierName ||
       "Supplier",
     supplierCode: booking.supplier?.code || "SUPPLIER",
-    supplierCity: booking.supplier?.city || (booking as { supplierCity?: string })?.supplierCity || "",
+    supplierCity:
+      booking.supplier?.city || (booking as { supplierCity?: string })?.supplierCity || "",
     supplierLoadPoint: booking.supplier?.load_point || "",
     forwarderId: isConfirmed ? booking.forwarder_id || undefined : undefined,
     forwarderName: isConfirmed
@@ -436,7 +437,7 @@ export async function approveBookingRequestInSupabase(
     existing?.movement_number ||
     existing?.booking_reference ||
     existing?.reference ||
-    (requestId.startsWith("MOV-") || requestId.startsWith("NASH-") ? requestId : "MOV-2026-00001");
+    (requestId.startsWith("MOV-") || requestId.startsWith("NASH-") ? requestId : "NASH-BK-2026-7023");
 
   // Call Server-Side API to update Supabase with Service Role
   try {

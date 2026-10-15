@@ -156,8 +156,9 @@ export function AddSupplierModal({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        hideCloseButton
         className={cn(
-          "w-[95vw] max-w-[95vw] sm:max-w-[560px] max-h-[90vh] flex flex-col p-0 overflow-hidden rounded-[24px] sm:rounded-[28px] border border-slate-100 bg-white shadow-2xl focus:outline-none",
+          "w-full sm:max-w-[560px] max-h-[92vh] flex flex-col p-0 overflow-hidden sm:rounded-[28px] bg-white shadow-2xl focus:outline-none",
           isSuccess && "sm:max-w-[420px]",
         )}
       >

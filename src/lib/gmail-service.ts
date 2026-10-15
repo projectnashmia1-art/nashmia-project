@@ -41,7 +41,7 @@ GMAIL_SCOPES.forEach((scope) => {
   googleProvider.addScope(scope);
 });
 googleProvider.setCustomParameters({
-  prompt: "consent",
+  prompt: "select_account",
   access_type: "offline",
 });
 
@@ -412,7 +412,7 @@ export async function connectGmailAccount(userId?: string | null): Promise<{
             const client = window.google!.accounts!.oauth2!.initTokenClient({
               client_id: googleClientId,
               scope: GMAIL_SCOPES.join(" "),
-              prompt: "consent",
+              prompt: "",
               callback: (response) => {
                 if (response.access_token) {
                   resolve({
@@ -433,7 +433,7 @@ export async function connectGmailAccount(userId?: string | null): Promise<{
                 reject(err);
               },
             });
-            client.requestAccessToken({ prompt: "consent" });
+            client.requestAccessToken({ prompt: "" });
           } catch (initErr) {
             reject(initErr);
           }
@@ -903,11 +903,22 @@ export async function sendEmailDirectlyViaGmail(params: {
     body: JSON.stringify(requestPayload),
   });
 
-  // If 401 Unauthorized, automatically refresh token via backend and retry once
+  // If 401 Unauthorized, automatically refresh token or prompt re-authorization popup and retry
   if (response.status === 401) {
-    console.warn("[GmailService] Token expired on send (HTTP 401). Refreshing token...");
+    console.warn("[GmailService] Token expired on send (HTTP 401). Attempting token refresh/re-authentication...");
     cachedAccessToken = null;
-    const refreshedToken = await getGmailAccessToken(params.userId, true);
+    let refreshedToken = await getGmailAccessToken(params.userId, true);
+
+    if (!refreshedToken) {
+      try {
+        console.log("[GmailService] Stale token detected. Prompting Google OAuth re-authentication popup...");
+        const connResult = await connectGmailAccount(params.userId);
+        refreshedToken = connResult.accessToken;
+      } catch (connErr) {
+        console.warn("[GmailService] Interactive re-authentication popup skipped or cancelled:", connErr);
+      }
+    }
+
     if (refreshedToken) {
       console.log("[GmailService] Re-attempting send with fresh access token...");
       token = refreshedToken;
@@ -996,12 +1007,15 @@ export async function sendEmailDirectlyViaGmail(params: {
       },
     });
 
-    // If 401 Unauthorized, token expired
+    // If 401 Unauthorized, token expired or invalid
     if (status === 401) {
       console.warn(
         "[GmailService] Token expired or invalid (HTTP 401). Invalidating cached token.",
       );
       cachedAccessToken = null;
+      throw new Error(
+        "Gmail authentication credentials expired or invalid (401). Please click 'Connect Email' in settings to authorize your account.",
+      );
     }
 
     const detailedMessage =
@@ -1029,6 +1043,17 @@ export async function sendEmailDirectlyViaGmail(params: {
   };
 }
 
+export interface GmailAttachmentItem {
+  id?: string;
+  attachmentId?: string;
+  filename?: string;
+  name?: string;
+  mimeType?: string;
+  size?: number | string;
+  url?: string;
+  data?: string;
+}
+
 export interface GmailFetchedMessage {
   id: string;
   threadId: string;
@@ -1036,11 +1061,30 @@ export interface GmailFetchedMessage {
   subject: string;
   from: string;
   to: string;
+  fromEmail?: string;
+  fromName?: string;
+  toEmail?: string;
+  toName?: string;
   date: string;
   internalDate: string;
   labelIds: string[];
   body: string;
   bodyHtml?: string;
+  attachments?: GmailAttachmentItem[];
+}
+
+/**
+ * Format bytes to readable size string
+ */
+export function formatAttachmentSize(bytes: number | string | undefined): string {
+  if (typeof bytes === "string" && (bytes.includes("KB") || bytes.includes("MB") || bytes.includes("B"))) {
+    return bytes;
+  }
+  const num = typeof bytes === "number" ? bytes : parseInt(String(bytes || 0), 10);
+  if (!num || isNaN(num) || num <= 0) return "0 KB";
+  if (num < 1024) return `${num} B`;
+  if (num < 1024 * 1024) return `${(num / 1024).toFixed(1)} KB`;
+  return `${(num / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 /**
@@ -1066,28 +1110,70 @@ function safeBase64UrlDecode(input: string): string {
 }
 
 interface MessagePartPayload {
+  filename?: string;
   mimeType?: string;
-  body?: { data?: string };
+  body?: { data?: string; attachmentId?: string; size?: number };
   parts?: MessagePartPayload[];
 }
 
 /**
- * Recursively extracts plaintext and HTML bodies from Gmail MIME payload
+ * Recursively extracts plaintext, HTML bodies, and attachment metadata from Gmail MIME payload
  */
-function extractBodyFromPayload(payload: MessagePartPayload | undefined): {
+function extractBodyAndAttachmentsFromPayload(
+  payload: MessagePartPayload | undefined,
+  messageId: string,
+): {
   text: string;
   html?: string;
+  attachments: GmailAttachmentItem[];
 } {
   let text = "";
   let html = "";
+  const attachments: GmailAttachmentItem[] = [];
 
   function walk(part: MessagePartPayload | undefined) {
     if (!part) return;
+
+    const rawFilename = part.filename?.trim();
+    const attachmentId = part.body?.attachmentId;
+    const hasData = Boolean(part.body?.data);
+    const size = part.body?.size || 0;
+    const isAttachment =
+      Boolean(rawFilename && rawFilename.length > 0) ||
+      Boolean(attachmentId) ||
+      (part.mimeType &&
+        ![
+          "text/plain",
+          "text/html",
+          "multipart/alternative",
+          "multipart/mixed",
+          "multipart/related",
+        ].includes(part.mimeType));
+
+    if (isAttachment && (rawFilename || attachmentId || size > 0 || hasData)) {
+      const safeName = rawFilename || `attachment_${attachments.length + 1}`;
+      const downloadUrl = attachmentId
+        ? `/api/gmail/attachment?messageId=${encodeURIComponent(messageId)}&attachmentId=${encodeURIComponent(attachmentId)}&filename=${encodeURIComponent(safeName)}`
+        : undefined;
+
+      attachments.push({
+        id: attachmentId || `att-${messageId}-${attachments.length}`,
+        attachmentId,
+        filename: safeName,
+        name: safeName,
+        mimeType: part.mimeType || "application/octet-stream",
+        size: formatAttachmentSize(size),
+        url: downloadUrl,
+        data: part.body?.data,
+      });
+    }
+
     if (part.mimeType === "text/plain" && part.body?.data && !text) {
       text = safeBase64UrlDecode(part.body.data);
     } else if (part.mimeType === "text/html" && part.body?.data && !html) {
       html = safeBase64UrlDecode(part.body.data);
     }
+
     if (part.parts && Array.isArray(part.parts)) {
       for (const subPart of part.parts) {
         walk(subPart);
@@ -1096,7 +1182,7 @@ function extractBodyFromPayload(payload: MessagePartPayload | undefined): {
   }
 
   walk(payload);
-  return { text, html: html || undefined };
+  return { text, html: html || undefined, attachments };
 }
 
 /**
@@ -1213,7 +1299,24 @@ export async function fetchLiveGmailMessages(options?: {
           (h: { name: string; value: string }) => h.name.toLowerCase() === name.toLowerCase(),
         )?.value || "";
 
-      const extracted = extractBodyFromPayload(fullMsg.payload);
+      const fromRaw = getHeader("From") || "Unknown Sender";
+      const toRaw = getHeader("To") || "";
+      let fromName = fromRaw;
+      let fromEmail = fromRaw;
+      const fromMatch = fromRaw.match(/^(?:"?([^"]*)"?\s)?<?([^>]+)>?$/);
+      if (fromMatch) {
+        fromName = fromMatch[1] ? fromMatch[1].trim() : fromMatch[2] || fromRaw;
+        fromEmail = fromMatch[2] ? fromMatch[2].trim() : fromRaw;
+      }
+      let toName = toRaw;
+      let toEmail = toRaw;
+      const toMatch = toRaw.match(/^(?:"?([^"]*)"?\s)?<?([^>]+)>?$/);
+      if (toMatch) {
+        toName = toMatch[1] ? toMatch[1].trim() : toMatch[2] || toRaw;
+        toEmail = toMatch[2] ? toMatch[2].trim() : toRaw;
+      }
+
+      const extracted = extractBodyAndAttachmentsFromPayload(fullMsg.payload, msg.id);
       const snippet = fullMsg.snippet || "";
       const body = extracted.text || snippet;
       const bodyHtml = extracted.html;
@@ -1223,13 +1326,18 @@ export async function fetchLiveGmailMessages(options?: {
         threadId: fullMsg.threadId,
         snippet,
         subject: getHeader("Subject") || "(No Subject)",
-        from: getHeader("From") || "Unknown Sender",
-        to: getHeader("To") || "",
+        from: fromRaw,
+        to: toRaw,
+        fromEmail,
+        fromName,
+        toEmail,
+        toName,
         date: getHeader("Date") || new Date().toISOString(),
         internalDate: fullMsg.internalDate,
         labelIds: fullMsg.labelIds || [],
         body,
         bodyHtml,
+        attachments: extracted.attachments,
       };
 
       messageDetailsCache.set(msg.id, record);
@@ -1265,21 +1373,25 @@ export function mapGmailMessageToEmailRecord(
   const direction: "inbound" | "outbound" = isSent ? "outbound" : "inbound";
 
   // Parse Sender
-  let fromName = msg.from;
-  let fromEmail = msg.from;
-  const fromMatch = msg.from.match(/^(?:"?([^"]*)"?\s)?<?([^>]+)>?$/);
-  if (fromMatch) {
-    fromName = fromMatch[1] ? fromMatch[1].trim() : fromMatch[2] || msg.from;
-    fromEmail = fromMatch[2] ? fromMatch[2].trim() : msg.from;
+  let fromName = msg.fromName || msg.from;
+  let fromEmail = msg.fromEmail || msg.from;
+  if (!msg.fromEmail) {
+    const fromMatch = msg.from.match(/^(?:"?([^"]*)"?\s)?<?([^>]+)>?$/);
+    if (fromMatch) {
+      fromName = fromMatch[1] ? fromMatch[1].trim() : fromMatch[2] || msg.from;
+      fromEmail = fromMatch[2] ? fromMatch[2].trim() : msg.from;
+    }
   }
 
   // Parse Recipient
-  let toName = msg.to;
-  let toEmail = msg.to;
-  const toMatch = msg.to.match(/^(?:"?([^"]*)"?\s)?<?([^>]+)>?$/);
-  if (toMatch) {
-    toName = toMatch[1] ? toMatch[1].trim() : toMatch[2] || msg.to;
-    toEmail = toMatch[2] ? toMatch[2].trim() : msg.to;
+  let toName = msg.toName || msg.to;
+  let toEmail = msg.toEmail || msg.to;
+  if (!msg.toEmail) {
+    const toMatch = msg.to.match(/^(?:"?([^"]*)"?\s)?<?([^>]+)>?$/);
+    if (toMatch) {
+      toName = toMatch[1] ? toMatch[1].trim() : toMatch[2] || msg.to;
+      toEmail = toMatch[2] ? toMatch[2].trim() : msg.to;
+    }
   }
 
   // Detect Booking / Movement Reference if present in subject, snippet, or body
@@ -1306,6 +1418,18 @@ export function mapGmailMessageToEmailRecord(
   } catch {
     // Keep fallback
   }
+
+  const realAttachments = (msg.attachments || []).map((att) => ({
+    name: att.name || att.filename || "Attachment",
+    filename: att.filename || att.name || "Attachment",
+    size: typeof att.size === "string" ? att.size : formatAttachmentSize(att.size),
+    url: att.url,
+    type: att.mimeType,
+    mimeType: att.mimeType,
+    attachmentId: att.attachmentId,
+    gmailMessageId: msg.id,
+    data: att.data,
+  }));
 
   return {
     id: `gmail-${msg.id}`,
@@ -1337,6 +1461,6 @@ export function mapGmailMessageToEmailRecord(
     confirmationConfidence: detResult?.confidence,
     confirmationReason: detResult?.reason,
     confirmationDetectedBy: isConfirmed ? "DETERMINISTIC" : undefined,
-    attachments: [],
+    attachments: realAttachments,
   };
 }

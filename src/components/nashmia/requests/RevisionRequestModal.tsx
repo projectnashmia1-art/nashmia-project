@@ -46,7 +46,7 @@ export const RevisionRequestModal = memo(function RevisionRequestModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="w-full sm:max-w-md sm:rounded-2xl max-h-[92vh] overflow-y-auto">
         <DialogHeader>
           <div className="flex items-center gap-3">
             <div className="grid size-10 place-items-center rounded-xl bg-amber-100 text-amber-800">

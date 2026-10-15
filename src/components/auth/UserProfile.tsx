@@ -291,7 +291,7 @@ export function UserProfile({ className, onClose }: UserProfileProps) {
     <div
       id="user-profile-card"
       className={cn(
-        "relative rounded-[22px] border border-border/70 bg-card text-card-foreground shadow-lg overflow-hidden",
+        "relative rounded-t-[28px] rounded-b-none sm:rounded-[22px] border-t sm:border border-border/70 bg-card text-card-foreground shadow-lg overflow-y-auto max-h-[92vh] sm:max-h-none",
         className,
       )}
     >

@@ -401,6 +401,9 @@ export function GmailProvider({ children }: { children: ReactNode }) {
           window.dispatchEvent(
             new CustomEvent("nashmia_bookings_updated", { detail: { updated: true } }),
           );
+          window.dispatchEvent(
+            new CustomEvent("nashmia_multi_forwarder_updated", { detail: { updated: true } }),
+          );
 
           // ONLY dispatch booking_confirmed if specific movements were newly auto-confirmed in this sync
           if (Array.isArray(serverResult?.details)) {

@@ -112,7 +112,7 @@ export const ApproveRequestModal = memo(function ApproveRequestModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-[460px] p-0 overflow-hidden border border-slate-200/90 shadow-xl rounded-2xl bg-white">
+      <DialogContent className="w-full sm:max-w-[460px] p-0 overflow-hidden sm:rounded-2xl bg-white shadow-xl">
         {/* Minimal Header */}
         <div className="px-6 pt-5 pb-4 border-b border-slate-100">
           <div className="flex items-center justify-between">

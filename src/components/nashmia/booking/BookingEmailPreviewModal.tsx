@@ -423,111 +423,6 @@ export function BookingEmailPreviewModal({
     setIsProcessModalOpen(true);
   };
 
-  const [isDirectCreating, setIsDirectCreating] = useState(false);
-
-  const handleDirectCreateBooking = async () => {
-    setIsDirectCreating(true);
-    try {
-      const effectiveRate =
-        customRate !== null && customRate !== undefined
-          ? customRate
-          : matchedRate?.ratePerContainer || 0;
-      const effectiveTotal = effectiveRate * quantity;
-
-      const bRecord = await createBookingInSupabase(userId, {
-        reference,
-        bookingReference: reference,
-        movementNumber: reference,
-        buyerId: buyer?.id,
-        buyerName: buyer?.name,
-        buyerCountry: buyer?.country,
-        supplierId: supplier?.id,
-        supplierName: supplier?.name,
-        supplierCity: supplier?.city,
-        forwarderId:
-          rateMode === "AGREED_RATE" && forwardersList.length === 1
-            ? forwardersList[0]?.id || bookingAgent?.id
-            : undefined,
-        forwarderName:
-          rateMode === "AGREED_RATE" && forwardersList.length === 1
-            ? forwardersList[0]?.name || bookingAgent?.name
-            : "Pending Award",
-        shippingLineId: shippingLine?.id,
-        shippingLineName: shippingLine?.name,
-        rateCardId: matchedRate?.id,
-        origin: pol?.name || pol?.code || "Felixstowe (FXT)",
-        destination: pod?.name || pod?.code || "Karachi (KHI)",
-        polName: pol?.name || "Felixstowe (FXT)",
-        podName: pod?.name || "Karachi (KHI)",
-        polCode: pol?.code || "FXT",
-        podCode: pod?.code || "KHI",
-        containerSize,
-        containerType: "High Cube",
-        containerCount: quantity,
-        loadingDate,
-        requestedEtd: loadingDate,
-        productDescription: productDescription || "Commercial Cargo",
-        notes: instructions || "",
-        rateMode,
-        freightRateMode: rateMode,
-        customRate: rateMode === "ASKING_RATE" ? null : effectiveRate,
-        totalFreight: rateMode === "ASKING_RATE" ? null : effectiveTotal,
-        currency: effectiveCurrency,
-        status: rateMode === "ASKING_RATE" ? "Booking Requested" : "Booking Confirmed",
-      });
-
-      queryClient.invalidateQueries({ queryKey: ["dashboard-data"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard-bookings"] });
-      queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
-      queryClient.invalidateQueries({ queryKey: ["bookings"] });
-      queryClient.invalidateQueries({ queryKey: ["movements"] });
-
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(
-          new CustomEvent("nashmia_bookings_updated", {
-            detail: {
-              updated: true,
-              id: bRecord.id,
-              movementNumber: reference,
-              bookingReference: reference,
-            },
-          }),
-        );
-        window.dispatchEvent(
-          new CustomEvent("nashmia_movement_created", {
-            detail: {
-              booking: bRecord,
-              id: bRecord.id,
-              movementNumber: reference,
-              bookingReference: reference,
-            },
-          }),
-        );
-      }
-
-      toast.success("Booking Created Successfully!", {
-        description: `Movement ${reference} registered into the database.`,
-      });
-
-      onSuccess?.({
-        success: true,
-        bookingId: bRecord.id,
-        reference: bRecord.booking_reference || reference,
-        movementNumber: bRecord.movement_number || reference,
-        toEmail: recipients.map((r) => r.email).join(", "),
-        gmailStatus: "direct_created",
-        forwardersCount: 1,
-      });
-
-      onClose();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to create booking";
-      toast.error(msg);
-    } finally {
-      setIsDirectCreating(false);
-    }
-  };
-
   const handleSendSingleForwarder = async (item: ForwarderSendingItem) => {
     try {
       let bRecord = createdBookingRef.current;
@@ -770,14 +665,24 @@ export function BookingEmailPreviewModal({
       {/* Centered Sleek Modal Card Matching Compose Email Exactly */}
       <div
         className={cn(
-          "fixed z-50 bg-white shadow-2xl transition-all duration-300 flex flex-col justify-between overflow-hidden",
-          "border border-slate-200/80 rounded-[28px] p-6 text-slate-900",
+          "fixed z-50 bg-white shadow-2xl transition-all flex flex-col justify-between overflow-hidden text-slate-900 outline-none",
           isMaximized
-            ? "inset-4 w-auto h-auto rounded-[20px]"
-            : "top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-[660px] max-h-[92vh] min-h-[580px]",
+            ? "inset-2 sm:inset-4 w-auto h-auto rounded-[20px] p-5 sm:p-6 border border-slate-200/80"
+            : "inset-x-0 bottom-0 top-auto translate-x-0 translate-y-0 w-full max-h-[92vh] rounded-t-[28px] rounded-b-none border-t border-x-0 border-b-0 border-slate-200/90 p-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] animate-in slide-in-from-bottom duration-240 ease-[cubic-bezier(0.16,1,0.3,1)] sm:inset-auto sm:top-1/2 sm:left-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:w-full sm:max-w-[660px] sm:max-h-[92vh] sm:min-h-[580px] sm:rounded-[28px] sm:border sm:border-slate-200/80 sm:p-6 sm:slide-in-from-bottom-0 sm:zoom-in-95 sm:duration-150",
         )}
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Mobile Tactile Drag Handle */}
+        {!isMaximized && (
+          <div
+            data-swipe-handle="true"
+            className="mx-auto -mt-2 mb-2 flex h-6 w-full max-w-[140px] cursor-grab touch-none items-center justify-center sm:hidden select-none shrink-0"
+            aria-label="Drag down to dismiss"
+          >
+            <div className="h-1.5 w-12 rounded-full bg-slate-300" />
+          </div>
+        )}
+
         {/* 1. Header: Mail Icon + "Compose email" + Action Controls */}
         <div className="flex items-center justify-between pb-3.5 border-b border-slate-100">
           <div className="flex items-center gap-2">
@@ -1152,31 +1057,11 @@ export function BookingEmailPreviewModal({
               </div>
             )}
 
-            {/* Direct Create Booking Button */}
-            <button
-              type="button"
-              onClick={handleDirectCreateBooking}
-              disabled={isDirectCreating || isProcessModalOpen}
-              className="rounded-xl border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-semibold px-3.5 py-2 flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors disabled:opacity-50"
-            >
-              {isDirectCreating ? (
-                <>
-                  <Loader2 className="size-3.5 animate-spin text-emerald-600" />
-                  <span>Saving...</span>
-                </>
-              ) : (
-                <>
-                  <Check className="size-3.5 text-emerald-600" />
-                  <span>Create Booking Now</span>
-                </>
-              )}
-            </button>
-
             {/* Primary Dark Send Button */}
             <button
               type="button"
               onClick={handleSend}
-              disabled={isProcessModalOpen || isDirectCreating}
+              disabled={isProcessModalOpen}
               className={cn(
                 "bg-[#0F172A] hover:bg-black text-white text-xs font-bold px-4.5 py-2 rounded-xl flex items-center gap-2 cursor-pointer shadow-sm active:scale-95 transition-all",
                 isProcessModalOpen && "opacity-80 cursor-wait",

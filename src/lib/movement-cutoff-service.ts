@@ -17,35 +17,113 @@ import { safeInsertNotification, safeUuid } from "./supabase-services";
 import {
   saveDriveDocument,
   getSavedDocuments,
-  INITIAL_OWNERS,
   type DriveFile,
 } from "../components/nashmia/documents/documents-data";
 
 export interface MovementCutOffDeadline {
-  type: string; // e.g. "SI Cut-Off", "VGM Cut-Off", "Port Cut-Off", "Gate Cut-Off"
-  dateTime: string; // e.g. "18 Sep 2026 4:00 PM"
-  date?: string; // e.g. "18 Sep 2026"
-  time?: string; // e.g. "4:00 PM"
+  type: string; // e.g. "Cut-off Date", "Cargo Cut-off", "SI Cut-off", "Shipping Instruction Cut-off", "VGM Cut-off", "Documentation Cut-off", "CY Cut-off"
+  cutoffType?: string; // Standard alias for type
+  cutoff_type?: string;
+  dateTime: string; // e.g. "2026-10-24 18:00" or "2026-10-24"
+  cutoffDate?: string | null; // Standard normalized date/time string
+  cutoff_date?: string | null;
+  normalizedDate?: string | null; // e.g. "2026-10-24" (YYYY-MM-DD)
+  normalized_date?: string | null;
+  originalExtractedText?: string; // original extracted text for auditing
+  original_extracted_text?: string;
+  date?: string; // e.g. "24 Oct 2026"
+  time?: string; // e.g. "18:00"
   in?: string; // e.g. "in 1 day"
   raw?: string;
+  isAmbiguous?: boolean;
+  is_ambiguous?: boolean;
+  requiresManualReview?: boolean;
+  requires_manual_review?: boolean;
+  reviewReason?: string | null;
+  review_reason?: string | null;
+  bookingId?: string | null;
+  booking_id?: string | null;
+  movementId?: string | null;
+  movement_id?: string | null;
+  movementNumber?: string | null;
+  movement_number?: string | null;
+  sourceDocumentId?: string | null;
+  source_document_id?: string | null;
+  sourceEmailId?: string | null;
+  source_email_id?: string | null;
+  extractionStatus?: string;
+  extraction_status?: string;
+  reviewStatus?: string;
+  review_status?: string;
+  createdAt?: string;
+  created_at?: string;
+  updatedAt?: string;
+  updated_at?: string;
   reminderDateTime?: string; // e.g. "16 Sep 2026 — 4:00 PM" (exactly 48 hours before Cut-Off)
   isReminderDue?: boolean; // true if current time has reached 48 hours before deadline
   reminderDueTimeMs?: number; // timestamp in ms of 48 hours before deadline
 }
 
 export interface MovementCutOffDates {
-  siCutoff?: string | null;
-  vgmCutoff?: string | null;
-  portCutoff?: string | null;
-  gateCutoff?: string | null;
+  cutoffDate?: string | null;
+  cutoff_date?: string | null;
+  cutoffType?: string | null;
+  cutoff_type?: string | null;
   cargoCutoff?: string | null;
+  cargo_cutoff?: string | null;
+  siCutoff?: string | null;
+  si_cutoff?: string | null;
+  shippingInstructionCutoff?: string | null;
+  shipping_instruction_cutoff?: string | null;
+  vgmCutoff?: string | null;
+  vgm_cutoff?: string | null;
   docCutoff?: string | null;
+  doc_cutoff?: string | null;
   cyCutoff?: string | null;
+  cy_cutoff?: string | null;
+  portCutoff?: string | null;
+  port_cutoff?: string | null;
+  gateCutoff?: string | null;
+  gate_cutoff?: string | null;
+  terminalCutoff?: string | null;
+  terminal_cutoff?: string | null;
+  closingDate?: string | null;
+  closing_date?: string | null;
   deadlines?: MovementCutOffDeadline[];
-  receivedAt?: string;
-  sourceDocumentId?: string;
-  sourceDocumentName?: string;
+  hasCutOffDate?: boolean;
+  has_cut_off_date?: boolean;
+  detectedCutOffDate?: string | null;
+  detected_cut_off_date?: string | null;
+  hasAmbiguousDates?: boolean;
+  has_ambiguous_dates?: boolean;
+  isScannedOrUnreadable?: boolean;
+  is_scanned_or_unreadable?: boolean;
+  requiresManualReview?: boolean;
+  requires_manual_review?: boolean;
+  reviewReason?: string | null;
+  review_reason?: string | null;
+  bookingId?: string | null;
+  booking_id?: string | null;
+  movementId?: string | null;
+  movement_id?: string | null;
   movementNumber?: string;
+  movement_number?: string;
+  sourceDocumentId?: string;
+  source_document_id?: string;
+  sourceDocumentName?: string;
+  source_document_name?: string;
+  sourceEmailId?: string;
+  source_email_id?: string;
+  extractionStatus?: string;
+  extraction_status?: string;
+  reviewStatus?: string;
+  review_status?: string;
+  createdAt?: string;
+  created_at?: string;
+  updatedAt?: string;
+  updated_at?: string;
+  receivedAt?: string;
+  received_at?: string;
 }
 
 export const MOVEMENT_CUTOFFS_STORAGE_KEY = "nashmia_movement_cutoffs_registry_v1";
@@ -482,6 +560,8 @@ export function buildNormalizedDeadlines(dates: MovementCutOffDates): MovementCu
     };
   };
 
+  const nowIso = new Date().toISOString();
+
   if (Array.isArray(dates.deadlines) && dates.deadlines.length > 0) {
     return dates.deadlines.map((d) => {
       const base = enrich(
@@ -491,37 +571,190 @@ export function buildNormalizedDeadlines(dates: MovementCutOffDates): MovementCu
         d.time,
         d.in,
       );
+      const cutoffType = d.cutoffType || d.cutoff_type || d.type;
+      const normalizedDate = d.normalizedDate ?? null;
+      const cutoffDate = d.cutoffDate || d.cutoff_date || normalizedDate || d.dateTime || null;
+      const originalExtractedText =
+        d.originalExtractedText || d.original_extracted_text || d.raw || "";
+
       return {
         ...base,
-        raw: d.raw,
+        type: d.type,
+        cutoffType,
+        cutoff_type: cutoffType,
+        cutoffDate,
+        cutoff_date: cutoffDate,
+        normalizedDate,
+        normalized_date: normalizedDate,
+        originalExtractedText,
+        original_extracted_text: originalExtractedText,
+        bookingId: d.bookingId || d.booking_id || dates.bookingId || dates.booking_id || null,
+        booking_id: d.booking_id || d.bookingId || dates.booking_id || dates.bookingId || null,
+        movementId: d.movementId || d.movement_id || dates.movementId || dates.movement_id || null,
+        movement_id:
+          d.movement_id || d.movement_id || dates.movement_id || dates.movementId || null,
+        movementNumber:
+          d.movementNumber ||
+          d.movement_number ||
+          dates.movementNumber ||
+          dates.movement_number ||
+          null,
+        movement_number:
+          d.movement_number ||
+          d.movementNumber ||
+          dates.movement_number ||
+          dates.movementNumber ||
+          null,
+        sourceDocumentId:
+          d.sourceDocumentId ||
+          d.source_document_id ||
+          dates.sourceDocumentId ||
+          dates.source_document_id ||
+          null,
+        source_document_id:
+          d.source_document_id ||
+          d.sourceDocumentId ||
+          dates.source_document_id ||
+          dates.sourceDocumentId ||
+          null,
+        sourceEmailId:
+          d.sourceEmailId ||
+          d.source_email_id ||
+          dates.sourceEmailId ||
+          dates.source_email_id ||
+          null,
+        source_email_id:
+          d.source_email_id ||
+          d.sourceEmailId ||
+          dates.source_email_id ||
+          dates.sourceEmailId ||
+          null,
+        extractionStatus:
+          d.extractionStatus ||
+          d.extraction_status ||
+          dates.extractionStatus ||
+          dates.extraction_status ||
+          "COMPLETED",
+        extraction_status:
+          d.extraction_status ||
+          d.extractionStatus ||
+          dates.extraction_status ||
+          dates.extractionStatus ||
+          "COMPLETED",
+        reviewStatus:
+          d.reviewStatus ||
+          d.review_status ||
+          dates.reviewStatus ||
+          dates.review_status ||
+          "AUTO_VERIFIED",
+        review_status:
+          d.review_status ||
+          d.reviewStatus ||
+          dates.review_status ||
+          dates.reviewStatus ||
+          "AUTO_VERIFIED",
+        isAmbiguous: Boolean(d.isAmbiguous || d.is_ambiguous),
+        is_ambiguous: Boolean(d.is_ambiguous || d.isAmbiguous),
+        requiresManualReview: Boolean(d.requiresManualReview || d.requires_manual_review),
+        requires_manual_review: Boolean(d.requires_manual_review || d.requiresManualReview),
+        reviewReason: d.reviewReason || d.review_reason || null,
+        review_reason: d.review_reason || d.reviewReason || null,
+        createdAt: d.createdAt || d.created_at || dates.createdAt || dates.created_at || nowIso,
+        created_at: d.created_at || d.createdAt || dates.created_at || dates.createdAt || nowIso,
+        updatedAt: d.updatedAt || d.updated_at || dates.updatedAt || dates.updated_at || nowIso,
+        updated_at: d.updated_at || d.updatedAt || dates.updated_at || dates.updatedAt || nowIso,
+        raw: d.raw || originalExtractedText,
       };
     });
   }
 
   const list: MovementCutOffDeadline[] = [];
-  if (dates.siCutoff) list.push(enrich("SI Cut-Off", dates.siCutoff));
-  if (dates.vgmCutoff) list.push(enrich("VGM Cut-Off", dates.vgmCutoff));
-  if (dates.portCutoff) list.push(enrich("Port Cut-Off", dates.portCutoff));
-  if (dates.gateCutoff) list.push(enrich("Gate Cut-Off", dates.gateCutoff));
-  if (dates.cargoCutoff) list.push(enrich("Cargo Cut-Off", dates.cargoCutoff));
-  if (dates.docCutoff) list.push(enrich("Documentation Cut-Off", dates.docCutoff));
-  if (dates.cyCutoff) list.push(enrich("CY Cut-Off", dates.cyCutoff));
+  const enrichWithMetadata = (label: string, dtVal: string) => {
+    const base = enrich(label, dtVal);
+    return {
+      ...base,
+      cutoffType: label,
+      cutoff_type: label,
+      cutoffDate: base.normalizedDate || dtVal,
+      cutoff_date: base.normalizedDate || dtVal,
+      normalizedDate: base.normalizedDate || null,
+      normalized_date: base.normalizedDate || null,
+      originalExtractedText: dtVal,
+      original_extracted_text: dtVal,
+      bookingId: dates.bookingId || dates.booking_id || null,
+      booking_id: dates.booking_id || dates.bookingId || null,
+      movementId: dates.movementId || dates.movement_id || null,
+      movement_id: dates.movement_id || dates.movementId || null,
+      movementNumber: dates.movementNumber || dates.movement_number || null,
+      movement_number: dates.movement_number || dates.movementNumber || null,
+      sourceDocumentId: dates.sourceDocumentId || dates.source_document_id || null,
+      source_document_id: dates.source_document_id || dates.sourceDocumentId || null,
+      sourceEmailId: dates.sourceEmailId || dates.source_email_id || null,
+      source_email_id: dates.source_email_id || dates.sourceEmailId || null,
+      extractionStatus: dates.extractionStatus || dates.extraction_status || "COMPLETED",
+      extraction_status: dates.extraction_status || dates.extractionStatus || "COMPLETED",
+      reviewStatus: dates.reviewStatus || dates.review_status || "AUTO_VERIFIED",
+      review_status: dates.review_status || dates.reviewStatus || "AUTO_VERIFIED",
+      isAmbiguous: Boolean(dates.hasAmbiguousDates || dates.has_ambiguous_dates),
+      is_ambiguous: Boolean(dates.has_ambiguous_dates || dates.hasAmbiguousDates),
+      requiresManualReview: Boolean(dates.requiresManualReview || dates.requires_manual_review),
+      requires_manual_review: Boolean(dates.requires_manual_review || dates.requiresManualReview),
+      reviewReason: dates.reviewReason || dates.review_reason || null,
+      review_reason: dates.review_reason || dates.reviewReason || null,
+      createdAt: dates.createdAt || dates.created_at || nowIso,
+      created_at: dates.created_at || dates.createdAt || nowIso,
+      updatedAt: dates.updatedAt || dates.updated_at || nowIso,
+      updated_at: dates.updated_at || dates.updatedAt || nowIso,
+    };
+  };
+
+  if (dates.siCutoff || dates.si_cutoff)
+    list.push(enrichWithMetadata("SI Cut-Off", (dates.siCutoff || dates.si_cutoff)!));
+  if (dates.shippingInstructionCutoff || dates.shipping_instruction_cutoff)
+    list.push(
+      enrichWithMetadata(
+        "Shipping Instruction Cut-Off",
+        (dates.shippingInstructionCutoff || dates.shipping_instruction_cutoff)!,
+      ),
+    );
+  if (dates.vgmCutoff || dates.vgm_cutoff)
+    list.push(enrichWithMetadata("VGM Cut-Off", (dates.vgmCutoff || dates.vgm_cutoff)!));
+  if (dates.portCutoff || dates.port_cutoff)
+    list.push(enrichWithMetadata("Port Cut-Off", (dates.portCutoff || dates.port_cutoff)!));
+  if (dates.gateCutoff || dates.gate_cutoff)
+    list.push(enrichWithMetadata("Gate Cut-Off", (dates.gateCutoff || dates.gate_cutoff)!));
+  if (dates.cargoCutoff || dates.cargo_cutoff)
+    list.push(enrichWithMetadata("Cargo Cut-Off", (dates.cargoCutoff || dates.cargo_cutoff)!));
+  if (dates.docCutoff || dates.doc_cutoff)
+    list.push(enrichWithMetadata("Documentation Cut-Off", (dates.docCutoff || dates.doc_cutoff)!));
+  if (dates.cyCutoff || dates.cy_cutoff)
+    list.push(enrichWithMetadata("CY Cut-Off", (dates.cyCutoff || dates.cy_cutoff)!));
+  if (dates.terminalCutoff || dates.terminal_cutoff)
+    list.push(
+      enrichWithMetadata("Terminal Cut-Off", (dates.terminalCutoff || dates.terminal_cutoff)!),
+    );
+  if (dates.closingDate || dates.closing_date)
+    list.push(enrichWithMetadata("Closing Date", (dates.closingDate || dates.closing_date)!));
+  if (dates.cutoffDate || dates.cutoff_date)
+    list.push(enrichWithMetadata("Cut-Off Date", (dates.cutoffDate || dates.cutoff_date)!));
 
   return list;
 }
+
+const serverCutOffsRegistry: Record<string, MovementCutOffDates> = {};
 
 /**
  * Gets all movement cut-offs from the persistent registry.
  */
 function getCutOffsRegistry(): Record<string, MovementCutOffDates> {
-  if (typeof window === "undefined") return {};
+  if (typeof window === "undefined") return serverCutOffsRegistry;
   try {
     const raw = localStorage.getItem(MOVEMENT_CUTOFFS_STORAGE_KEY);
-    if (!raw) return {};
+    if (!raw) return serverCutOffsRegistry;
     const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed : {};
+    return parsed && typeof parsed === "object" ? parsed : serverCutOffsRegistry;
   } catch (_e) {
-    return {};
+    return serverCutOffsRegistry;
   }
 }
 
@@ -586,33 +819,95 @@ export function getCutOffsForMovement(
  * Maintains and saves extracted Cut-Off dates directly inside the specific Movement / Booking data.
  * Guarantees isolation: saved strictly under that Movement's identifier.
  */
-export function saveCutOffsForMovement(
+export async function saveCutOffsForMovement(
   movementIdentifier: string,
   cutOffs: MovementCutOffDates,
   bookingId?: string | null,
-): void {
-  if (!movementIdentifier) return;
+): Promise<MovementCutOffDates> {
+  if (!movementIdentifier) {
+    return {
+      movementNumber: "",
+      deadlines: [],
+    };
+  }
 
   const normKey = normalizeMovementKey(movementIdentifier);
   const rawKey = movementIdentifier.trim().toUpperCase();
   const nowIso = new Date().toISOString();
 
   const normalizedDeadlines = buildNormalizedDeadlines(cutOffs);
+  const primaryCutoffType =
+    cutOffs.cutoffType ||
+    cutOffs.cutoff_type ||
+    normalizedDeadlines[0]?.cutoffType ||
+    "Cut-off Date";
+  const primaryCutoffDate =
+    cutOffs.detectedCutOffDate ||
+    cutOffs.detected_cut_off_date ||
+    cutOffs.cutoffDate ||
+    cutOffs.cutoff_date ||
+    normalizedDeadlines[0]?.cutoffDate ||
+    normalizedDeadlines[0]?.dateTime ||
+    null;
+  const sourceDocId = cutOffs.sourceDocumentId || cutOffs.source_document_id || null;
+  const sourceMailId = cutOffs.sourceEmailId || cutOffs.source_email_id || null;
+  const extStatus =
+    cutOffs.extractionStatus ||
+    cutOffs.extraction_status ||
+    (cutOffs.isScannedOrUnreadable
+      ? "SCANNED_UNREADABLE"
+      : cutOffs.hasAmbiguousDates
+        ? "AMBIGUOUS"
+        : primaryCutoffDate || normalizedDeadlines.length > 0
+          ? "COMPLETED"
+          : "NO_DATES_DETECTED");
+  const revStatus =
+    cutOffs.reviewStatus ||
+    cutOffs.review_status ||
+    (cutOffs.requiresManualReview || cutOffs.hasAmbiguousDates ? "NEEDS_REVIEW" : "AUTO_VERIFIED");
+
   const payload: MovementCutOffDates = {
     ...cutOffs,
+    bookingId: bookingId || cutOffs.bookingId || cutOffs.booking_id || null,
+    booking_id: bookingId || cutOffs.booking_id || cutOffs.bookingId || null,
+    movementId: bookingId || cutOffs.movementId || cutOffs.movement_id || null,
+    movement_id: bookingId || cutOffs.movement_id || cutOffs.movementId || null,
     movementNumber: movementIdentifier,
+    movement_number: movementIdentifier,
+    cutoffType: primaryCutoffType,
+    cutoff_type: primaryCutoffType,
+    cutoffDate: primaryCutoffDate,
+    cutoff_date: primaryCutoffDate,
+    sourceDocumentId: sourceDocId || undefined,
+    source_document_id: sourceDocId || undefined,
+    sourceEmailId: sourceMailId || undefined,
+    source_email_id: sourceMailId || undefined,
+    extractionStatus: extStatus,
+    extraction_status: extStatus,
+    reviewStatus: revStatus,
+    review_status: revStatus,
     deadlines: normalizedDeadlines,
     receivedAt: cutOffs.receivedAt || nowIso,
+    createdAt: cutOffs.createdAt || cutOffs.created_at || nowIso,
+    created_at: cutOffs.created_at || cutOffs.createdAt || nowIso,
+    updatedAt: nowIso,
+    updated_at: nowIso,
   };
+
+  // 1. Update memory movement registry
+  try {
+    const registry = getCutOffsRegistry();
+    registry[normKey] = payload;
+    if (rawKey !== normKey) {
+      registry[rawKey] = payload;
+    }
+  } catch (_e) {
+    // Memory registry notice
+  }
 
   if (typeof window !== "undefined") {
     try {
-      // 1. Update persistent movement registry
       const registry = getCutOffsRegistry();
-      registry[normKey] = payload;
-      if (rawKey !== normKey) {
-        registry[rawKey] = payload;
-      }
       localStorage.setItem(MOVEMENT_CUTOFFS_STORAGE_KEY, JSON.stringify(registry));
 
       // 2. Update local booking record if it exists
@@ -678,23 +973,27 @@ export function saveCutOffsForMovement(
 
         if (!hasDoc && normalizedDeadlines.length > 0) {
           const newDoc: DriveFile = {
-            id: `doc-cutoff-${normKey}-${Date.now()}`,
+            id: sourceDocId || `doc-cutoff-${normKey}-${Date.now()}`,
             name: `CutOff_Notice_${movementIdentifier}.pdf`,
             type: "pdf",
             extension: "pdf",
-            owners: [INITIAL_OWNERS.alex],
+            owners: [],
             lastModified: "Just now",
             lastModifiedTimestamp: nowIso,
             fileSize: "384 KB",
             folderId: "folder-design",
             starred: true,
-            sharedLink: `https://drive.nashmia.com/f/cutoff-${normKey}`,
+            sharedLink: `/documents?movement=${encodeURIComponent(movementIdentifier)}`,
             metadata: {
               category: "Cut-Off Notice",
               documentType: "CUT_OFF_NOTICE",
               movementNumber: movementIdentifier,
               cutOffDeadlines: normalizedDeadlines,
               cutOffDates: payload,
+              sourceDocumentId: sourceDocId || undefined,
+              sourceEmailId: sourceMailId || undefined,
+              extractionStatus: extStatus,
+              reviewStatus: revStatus,
               savedAt: nowIso,
             },
           };
@@ -722,7 +1021,6 @@ export function saveCutOffsForMovement(
       );
 
       // 5. Evaluate and trigger 48-hour reminders for newly saved or updated Cut-Offs
-      // Strictly created once per: Movement + Cut-Off Type + Cut-Off Date/Time
       try {
         const now = Date.now();
         for (const d of normalizedDeadlines) {
@@ -812,52 +1110,146 @@ export function saveCutOffsForMovement(
   }
 
   // 6. Direct Database Persistence to Supabase
+  // Strictly saves cut-off date against the correct Movement Number in existing tables:
+  // - bookings (cut_off_dates, cut_off_deadlines, confirmation_details)
+  // - booking_documents (links source PDF document if present)
+  // - booking_events (records audit event with all 9 required fields)
   if (isSupabaseConfigured) {
-    void (async () => {
-      try {
-        const validBookingUuid = safeUuid(bookingId);
-        const updatePayload = {
+    try {
+      let validBookingUuid = safeUuid(bookingId);
+      const cleanRef = movementIdentifier.trim();
+      const slashMov = cleanRef.includes("-") ? cleanRef.replace(/-/g, "/") : cleanRef;
+      const dashMov = cleanRef.includes("/") ? cleanRef.replace(/\//g, "-") : cleanRef;
+
+      let existingConfirmationDetails: Record<string, unknown> = {};
+
+      // If bookingId was not provided, look up the existing booking record by movement_number or booking_reference
+      if (!validBookingUuid && cleanRef) {
+        const { data: foundBooking } = await supabase
+          .from("bookings")
+          .select(
+            "id, confirmation_details, cut_off_dates, cut_off_deadlines, movement_number, booking_reference",
+          )
+          .or(
+            `movement_number.eq.${cleanRef},booking_reference.eq.${cleanRef},reference.eq.${cleanRef},movement_number.eq.${slashMov},booking_reference.eq.${slashMov},movement_number.eq.${dashMov},booking_reference.eq.${dashMov}`,
+          )
+          .limit(1)
+          .maybeSingle();
+
+        if (foundBooking?.id) {
+          validBookingUuid = safeUuid(foundBooking.id);
+          existingConfirmationDetails =
+            (foundBooking.confirmation_details as Record<string, unknown>) || {};
+        }
+      }
+
+      if (!validBookingUuid && cleanRef) {
+        const { data: foundIlike } = await supabase
+          .from("bookings")
+          .select("id, confirmation_details")
+          .ilike("movement_number", `%${cleanRef}%`)
+          .limit(1)
+          .maybeSingle();
+        if (foundIlike?.id) {
+          validBookingUuid = safeUuid(foundIlike.id);
+          existingConfirmationDetails =
+            (foundIlike.confirmation_details as Record<string, unknown>) || {};
+        }
+      }
+
+      const updatePayload = {
+        cut_off_dates: payload as unknown as import("@/types/database.types").Json,
+        cut_off_deadlines: normalizedDeadlines as unknown as import("@/types/database.types").Json,
+        confirmation_details: {
+          ...existingConfirmationDetails,
           cut_off_dates: payload,
           cut_off_deadlines: normalizedDeadlines,
-          confirmation_details: {
-            cut_off_dates: payload,
-            cut_off_deadlines: normalizedDeadlines,
-          },
+          detected_cut_off_date: payload.detectedCutOffDate || payload.cutoffDate || null,
+          has_cut_off_date: Boolean(payload.hasCutOffDate),
+          requires_cutoff_review: Boolean(payload.requiresManualReview),
+          has_ambiguous_cutoff_date: Boolean(payload.hasAmbiguousDates),
+          is_scanned_cutoff_pdf: Boolean(payload.isScannedOrUnreadable),
+          cutoff_review_reason: payload.reviewReason || null,
+          source_document_id: sourceDocId,
+          source_email_id: sourceMailId,
+          extraction_status: extStatus,
+          review_status: revStatus,
           updated_at: nowIso,
-        };
+        },
+        updated_at: nowIso,
+      };
 
-        if (validBookingUuid) {
-          await supabase.from("bookings").update(updatePayload).eq("id", validBookingUuid);
-        } else {
-          // Try updating by movement_number or booking_reference
-          const cleanRef = movementIdentifier.trim();
-          await supabase
-            .from("bookings")
-            .update(updatePayload)
-            .or(`movement_number.eq.${cleanRef},booking_reference.eq.${cleanRef}`);
+      if (validBookingUuid) {
+        await supabase.from("bookings").update(updatePayload).eq("id", validBookingUuid);
+      } else if (cleanRef) {
+        const { data: updatedByRef } = await supabase
+          .from("bookings")
+          .update(updatePayload)
+          .or(`movement_number.eq.${cleanRef},booking_reference.eq.${cleanRef}`)
+          .select("id")
+          .maybeSingle();
+        if (updatedByRef?.id) {
+          validBookingUuid = safeUuid(updatedByRef.id);
         }
-
-        // Insert database tracking event into booking_events table
-        if (validBookingUuid) {
-          await supabase.from("booking_events").insert({
-            booking_id: validBookingUuid,
-            event_type: "Cut-Off Schedule Extracted",
-            event_date: nowIso,
-            location: "Operations Desk",
-            title: "Cut-Off Schedule Maintained",
-            description: `Extracted ${normalizedDeadlines.length} cut-off deadlines for Movement ${movementIdentifier}`,
-            payload: {
-              movementNumber: movementIdentifier,
-              deadlines: normalizedDeadlines,
-              cutOffDates: payload,
-              savedAt: nowIso,
-            },
-          });
-        }
-      } catch (dbErr) {
-        console.warn("[saveCutOffsForMovement] Supabase update notice:", dbErr);
       }
-    })();
+
+      // Link in booking_documents if sourceDocumentId is a valid UUID
+      if (validBookingUuid && sourceDocId && safeUuid(sourceDocId)) {
+        try {
+          await supabase
+            .from("booking_documents")
+            .update({
+              booking_id: validBookingUuid,
+              document_type: "CUT_OFF_NOTICE",
+              status: extStatus === "COMPLETED" ? "Completed" : "Needs Review",
+              updated_at: nowIso,
+            })
+            .eq("id", sourceDocId);
+        } catch (docUpdateErr) {
+          console.warn("[saveCutOffsForMovement] booking_documents update notice:", docUpdateErr);
+        }
+      }
+
+      // Insert database tracking event into booking_events table
+      if (validBookingUuid) {
+        await supabase.from("booking_events").insert({
+          booking_id: validBookingUuid,
+          event_type: "Cut-Off Schedule Extracted",
+          event_date: nowIso,
+          location: "Operations Desk",
+          title: `Cut-Off Schedule Maintained (${movementIdentifier})`,
+          description: `Extracted ${normalizedDeadlines.length} cut-off deadlines for Movement ${movementIdentifier}. Status: ${extStatus}, Review: ${revStatus}.`,
+          payload: {
+            bookingId: validBookingUuid,
+            booking_id: validBookingUuid,
+            movementId: validBookingUuid,
+            movement_id: validBookingUuid,
+            movementNumber: movementIdentifier,
+            movement_number: movementIdentifier,
+            cutoffType: primaryCutoffType,
+            cutoff_type: primaryCutoffType,
+            cutoffDate: primaryCutoffDate,
+            cutoff_date: primaryCutoffDate,
+            sourceDocumentId: sourceDocId,
+            source_document_id: sourceDocId,
+            sourceEmailId: sourceMailId,
+            source_email_id: sourceMailId,
+            extractionStatus: extStatus,
+            extraction_status: extStatus,
+            reviewStatus: revStatus,
+            review_status: revStatus,
+            deadlines: normalizedDeadlines,
+            cutOffDates: payload,
+            createdAt: payload.createdAt || nowIso,
+            created_at: payload.createdAt || nowIso,
+            updatedAt: nowIso,
+            updated_at: nowIso,
+          },
+        });
+      }
+    } catch (dbErr) {
+      console.warn("[saveCutOffsForMovement] Supabase update notice:", dbErr);
+    }
   }
 
   // 7. Background update to server API as secondary fallback
@@ -874,12 +1266,214 @@ export function saveCutOffsForMovement(
           confirmation_details: {
             cut_off_dates: payload,
             cut_off_deadlines: normalizedDeadlines,
+            source_document_id: sourceDocId,
+            source_email_id: sourceMailId,
+            extraction_status: extStatus,
+            review_status: revStatus,
           },
         },
       }),
     }).catch(() => {
       // Background sync, suppress errors
     });
+  }
+
+  return payload;
+}
+
+/**
+ * Saves extracted cut-off date data directly into the database against the correct Movement Number.
+ * Inspects and reuses the existing bookings, booking_documents, and booking_events tables and relationships.
+ * Stores:
+ * - Booking/movement ID
+ * - Movement Number
+ * - Cut-off type
+ * - Cut-off date
+ * - Source PDF/document ID
+ * - Source email ID
+ * - Extraction status
+ * - Review status
+ * - Created and updated timestamps
+ * Does not create duplicate tables.
+ */
+export async function saveCutOffDataToDatabase(params: {
+  movementNumber: string;
+  bookingId?: string | null;
+  cutoffType?: string | null;
+  cutoffDate?: string | null;
+  sourceDocumentId?: string | null;
+  sourceEmailId?: string | null;
+  extractionStatus?: string | null;
+  reviewStatus?: string | null;
+  deadlines?: MovementCutOffDeadline[];
+  cutOffDates?: MovementCutOffDates;
+  createdAt?: string;
+  updatedAt?: string;
+}): Promise<{
+  success: boolean;
+  bookingId: string | null;
+  movementNumber: string;
+  savedDeadlinesCount: number;
+  cutOffDates: MovementCutOffDates;
+  error?: string | null;
+}> {
+  const {
+    movementNumber,
+    bookingId,
+    cutoffType,
+    cutoffDate,
+    sourceDocumentId,
+    sourceEmailId,
+    extractionStatus,
+    reviewStatus,
+    deadlines,
+    cutOffDates = {},
+    createdAt,
+    updatedAt,
+  } = params;
+
+  const nowIso = new Date().toISOString();
+  const primaryCutoffType =
+    cutoffType ||
+    (deadlines && deadlines[0]?.cutoffType) ||
+    (deadlines && deadlines[0]?.type) ||
+    "Cut-off Date";
+  const primaryCutoffDate =
+    cutoffDate ||
+    (deadlines && deadlines[0]?.cutoffDate) ||
+    (deadlines && deadlines[0]?.dateTime) ||
+    null;
+  const extStatus = extractionStatus || "COMPLETED";
+  const revStatus = reviewStatus || "AUTO_VERIFIED";
+
+  const datesToSave: MovementCutOffDates = {
+    ...cutOffDates,
+    bookingId: bookingId || cutOffDates.bookingId || null,
+    booking_id: bookingId || cutOffDates.booking_id || null,
+    movementNumber,
+    movement_number: movementNumber,
+    cutoffType: primaryCutoffType,
+    cutoff_type: primaryCutoffType,
+    cutoffDate: primaryCutoffDate,
+    cutoff_date: primaryCutoffDate,
+    sourceDocumentId: sourceDocumentId || cutOffDates.sourceDocumentId || undefined,
+    source_document_id: sourceDocumentId || cutOffDates.source_document_id || undefined,
+    sourceEmailId: sourceEmailId || cutOffDates.sourceEmailId || undefined,
+    source_email_id: sourceEmailId || cutOffDates.source_email_id || undefined,
+    extractionStatus: extStatus,
+    extraction_status: extStatus,
+    reviewStatus: revStatus,
+    review_status: revStatus,
+    deadlines: deadlines || cutOffDates.deadlines,
+    createdAt: createdAt || cutOffDates.createdAt || nowIso,
+    created_at: createdAt || cutOffDates.created_at || nowIso,
+    updatedAt: updatedAt || nowIso,
+    updated_at: updatedAt || nowIso,
+  };
+
+  const savedPayload = await saveCutOffsForMovement(movementNumber, datesToSave, bookingId);
+  return {
+    success: true,
+    bookingId: savedPayload.bookingId || bookingId || null,
+    movementNumber,
+    savedDeadlinesCount: (savedPayload.deadlines || []).length,
+    cutOffDates: savedPayload,
+  };
+}
+
+/**
+ * Queries cut-off data stored in the database for a Movement Number.
+ * Returns all stored cut-off fields:
+ * - Booking/movement ID
+ * - Movement Number
+ * - Cut-off type
+ * - Cut-off date
+ * - Source PDF/document ID
+ * - Source email ID
+ * - Extraction status
+ * - Review status
+ * - Created and updated timestamps
+ */
+export async function getCutOffDataFromDatabase(movementIdentifier: string): Promise<{
+  bookingId: string | null;
+  movementNumber: string;
+  cutoffType: string | null;
+  cutoffDate: string | null;
+  sourceDocumentId: string | null;
+  sourceEmailId: string | null;
+  extractionStatus: string;
+  reviewStatus: string;
+  createdAt: string;
+  updatedAt: string;
+  cutOffDates: MovementCutOffDates | null;
+  deadlines: MovementCutOffDeadline[];
+} | null> {
+  if (!movementIdentifier) return null;
+  const cleanRef = movementIdentifier.trim();
+  const slashMov = cleanRef.includes("-") ? cleanRef.replace(/-/g, "/") : cleanRef;
+
+  try {
+    let bookingRecord: Record<string, unknown> | null = null;
+    if (isSupabaseConfigured) {
+      const { data } = await supabase
+        .from("bookings")
+        .select(
+          "id, movement_number, booking_reference, cut_off_dates, cut_off_deadlines, confirmation_details, created_at, updated_at",
+        )
+        .or(
+          `movement_number.eq.${cleanRef},booking_reference.eq.${cleanRef},reference.eq.${cleanRef},movement_number.eq.${slashMov},booking_reference.eq.${slashMov}`,
+        )
+        .limit(1)
+        .maybeSingle();
+      if (data) bookingRecord = data as unknown as Record<string, unknown>;
+    }
+
+    const cutOffDates = getCutOffsForMovement(cleanRef, bookingRecord);
+    if (!cutOffDates) return null;
+
+    const deadlines = cutOffDates.deadlines || buildNormalizedDeadlines(cutOffDates);
+    const primaryType =
+      cutOffDates.cutoffType ||
+      cutOffDates.cutoff_type ||
+      deadlines[0]?.cutoffType ||
+      "Cut-off Date";
+    const primaryDate =
+      cutOffDates.detectedCutOffDate ||
+      cutOffDates.cutoffDate ||
+      cutOffDates.cutoff_date ||
+      deadlines[0]?.cutoffDate ||
+      null;
+    const sourceDocId = cutOffDates.sourceDocumentId || cutOffDates.source_document_id || null;
+    const sourceMailId = cutOffDates.sourceEmailId || cutOffDates.source_email_id || null;
+    const extStatus = cutOffDates.extractionStatus || cutOffDates.extraction_status || "COMPLETED";
+    const revStatus = cutOffDates.reviewStatus || cutOffDates.review_status || "AUTO_VERIFIED";
+
+    return {
+      bookingId:
+        (bookingRecord?.id as string) || cutOffDates.bookingId || cutOffDates.booking_id || null,
+      movementNumber: cleanRef,
+      cutoffType: primaryType,
+      cutoffDate: primaryDate,
+      sourceDocumentId: sourceDocId,
+      sourceEmailId: sourceMailId,
+      extractionStatus: extStatus,
+      reviewStatus: revStatus,
+      createdAt:
+        cutOffDates.createdAt ||
+        cutOffDates.created_at ||
+        (bookingRecord?.created_at as string) ||
+        new Date().toISOString(),
+      updatedAt:
+        cutOffDates.updatedAt ||
+        cutOffDates.updated_at ||
+        (bookingRecord?.updated_at as string) ||
+        new Date().toISOString(),
+      cutOffDates,
+      deadlines,
+    };
+  } catch (err) {
+    console.warn("[getCutOffDataFromDatabase] Error querying database:", err);
+    return null;
   }
 }
 

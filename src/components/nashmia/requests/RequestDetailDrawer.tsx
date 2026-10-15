@@ -22,6 +22,7 @@ import {
   Plus,
   Send,
   Sparkles,
+  Trophy,
 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { showPillToast } from "@/lib/pill-toast";
@@ -35,6 +36,7 @@ import {
   updateForwarderQuotation,
   updateForwarderQuoteStatus,
 } from "@/lib/multi-forwarder-service";
+import { logQuotationResponseDiagnostics } from "@/lib/quotation-diagnostics";
 import { AwardForwarderModal } from "./AwardForwarderModal";
 import { EditQuotationModal } from "./EditQuotationModal";
 import { QuotationStatusBadge } from "./QuotationStatusBadge";
@@ -54,6 +56,8 @@ interface RequestDetailDrawerProps {
   onRequestRevision: (request: BookingRequestRecord) => void;
   onComposeEmail?: (request: BookingRequestRecord) => void;
   onRequestQuotes?: (request: BookingRequestRecord) => void;
+  onViewQuotations?: (request: BookingRequestRecord) => void;
+  onOpenAwardDrawer?: (request: BookingRequestRecord) => void;
 }
 
 export const RequestDetailDrawer = memo(function RequestDetailDrawer({
@@ -64,6 +68,8 @@ export const RequestDetailDrawer = memo(function RequestDetailDrawer({
   onRequestRevision,
   onComposeEmail,
   onRequestQuotes,
+  onViewQuotations,
+  onOpenAwardDrawer,
 }: RequestDetailDrawerProps) {
   const { userId } = useAuth();
   const [forwarderRequests, setForwarderRequests] = useState<ForwarderQuoteRequestRecord[]>([]);
@@ -79,6 +85,7 @@ export const RequestDetailDrawer = memo(function RequestDetailDrawer({
     if (!request) return;
     try {
       const list = await fetchForwarderRequestsForBooking(request);
+      logQuotationResponseDiagnostics(list, "RequestCardQuotationFetcher - RequestDetailDrawer");
       setForwarderRequests(list);
     } catch (err) {
       console.warn("[RequestDetailDrawer] Error loading forwarder requests:", err);
@@ -181,10 +188,19 @@ export const RequestDetailDrawer = memo(function RequestDetailDrawer({
 
       {/* Drawer Container */}
       <aside
-        className="fixed inset-y-0 right-0 z-50 flex w-full max-w-2xl flex-col bg-white shadow-2xl transition-transform duration-300 ease-out"
+        className="fixed inset-x-0 bottom-0 top-auto sm:inset-y-0 sm:right-0 sm:top-0 sm:bottom-0 sm:left-auto z-50 flex w-full sm:max-w-2xl max-h-[92vh] sm:max-h-none flex-col rounded-t-[28px] sm:rounded-none border-t sm:border-t-0 sm:border-l border-slate-200 bg-white shadow-2xl overflow-hidden transition-all duration-240 ease-[cubic-bezier(0.16,1,0.3,1)] animate-in slide-in-from-bottom sm:slide-in-from-right outline-none"
         role="dialog"
         aria-label="Request details"
       >
+        {/* Mobile Tactile Drag Handle */}
+        <div
+          data-swipe-handle="true"
+          className="mx-auto pt-2 pb-1 flex h-6 w-full max-w-[140px] cursor-grab touch-none items-center justify-center sm:hidden select-none shrink-0 bg-white"
+          aria-label="Drag down to dismiss"
+        >
+          <div className="h-1.5 w-12 rounded-full bg-slate-300" />
+        </div>
+
         {/* Top Sticky Header */}
         <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
           <div className="flex items-center gap-3">
@@ -493,13 +509,37 @@ export const RequestDetailDrawer = memo(function RequestDetailDrawer({
                 </p>
               </div>
 
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {onOpenAwardDrawer && request && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onOpenAwardDrawer(request)}
+                    className="h-8 gap-1.5 border-cyan-300 bg-cyan-50/60 text-cyan-900 hover:bg-cyan-100 text-xs font-semibold cursor-pointer"
+                  >
+                    <Trophy className="size-3.5 text-cyan-700" />
+                    <span>Award Status & Rates</span>
+                  </Button>
+                )}
+                {onViewQuotations && forwarderRequests.length > 0 && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onViewQuotations(request)}
+                    className="h-8 gap-1.5 border-[#0FA3B1]/40 text-[#0FA3B1] hover:bg-[#E8F5F6] text-xs font-semibold cursor-pointer"
+                  >
+                    <Users className="size-3.5" />
+                    <span>Compare Quotations</span>
+                  </Button>
+                )}
                 {onRequestQuotes && (
                   <Button
                     type="button"
                     size="sm"
                     onClick={() => onRequestQuotes(request)}
-                    className="h-8 gap-1.5 bg-[#0FA3B1] hover:bg-[#0D919E] text-white text-xs font-semibold"
+                    className="h-8 gap-1.5 bg-[#0FA3B1] hover:bg-[#0D919E] text-white text-xs font-semibold cursor-pointer"
                   >
                     <Plus className="size-3.5" />
                     <span>Request Quotes</span>

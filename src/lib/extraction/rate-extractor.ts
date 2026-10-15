@@ -30,19 +30,22 @@ export interface RateExtractionResult {
 
 // Deterministic Freight Rate Patterns
 const RATE_PATTERNS = [
-  // 1. Explicit conversational phrases: "our price is around 1,200 usd", "rate is $2,100", "price of 1500"
+  // 1. Direct rate/price/quote keywords: "Rate 2000", "Rate: 3000", "Price: $1800", "Quote 2500", "Rate - 2100"
+  /(?:^|\b)(?:rate|price|quote|offer|cost|freight|charges?|ocean\s*rate)\s*[:=-]?\s*(?:usd|eur|gbp|aed|pkr|\$|€|£)?\s*([0-9,.]+)\b/i,
+
+  // 2. Explicit conversational phrases: "our price is around 1,200 usd", "rate is $2,100", "price of 1500"
   /(?:our\s+price\s+is\s+(?:around\s+|approx\s+)?|rate\s+is\s+|price\s+is\s+|quoted\s+at\s+|freight\s+is\s+)(?:usd|eur|gbp|aed|pkr|\$|€|£)?\s*([0-9,.]+)\s*(?:usd|eur|gbp|aed|pkr|\$|€|£)?/i,
 
-  // 2. Abbreviated / Commercial forms: "Fr8 $1000", "O/F: $1,800", "Base freight: 2100"
+  // 3. Abbreviated / Commercial forms: "Fr8 $1000", "O/F: $1,800", "Base freight: 2100"
   /(?:fr8|o\/f|ocean\s*freight|base\s*freight|sea\s*freight|freight\s*rate)\s*[:=-]?\s*(?:usd|eur|gbp|aed|pkr|\$|€|£)?\s*([0-9,.]+)\s*(?:usd|eur|gbp|aed|pkr|\$|€|£)?/i,
 
-  // 3. Per container expressions: "$1,200 / cntr", "2100 usd / 40hc", "1800 per box"
+  // 4. Per container expressions: "$1,200 / cntr", "2100 usd / 40hc", "1800 per box"
   /(?:usd|eur|gbp|aed|pkr|\$|€|£)?\s*([0-9,.]+)\s*(?:usd|eur|gbp|aed|pkr|\$|€|£)?\s*(?:\/|\s+per\s+)(?:cntr|container|box|unit|feu|teu|40hc|20ft|40ft)/i,
 
-  // 4. Rate with preceding currency: "$2,100", "USD 1850", "EUR 1600"
+  // 5. Rate with preceding currency: "$2,100", "USD 1850", "EUR 1600"
   /(?:\$|€|£|usd|eur|gbp|aed|pkr)\s*([0-9,.]+)(?:\s*(?:net|all\s*in|plus|all-in))?/i,
 
-  // 5. Rate with trailing currency: "2100 USD", "1850 $"
+  // 6. Rate with trailing currency: "2100 USD", "1850 $"
   /\b([0-9,.]+)\s*(?:usd|eur|gbp|aed|pkr|\$|€|£)(?:\s*(?:net|all\s*in|plus|all-in))?/i,
 ];
 

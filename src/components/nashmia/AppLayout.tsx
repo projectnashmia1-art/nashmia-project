@@ -40,7 +40,7 @@ export function AppLayout({
         )}
         style={
           {
-            "--offset": collapsed ? "100px" : "284px",
+            "--offset": collapsed ? "72px" : "260px",
             willChange: "padding-left",
           } as React.CSSProperties
         }

@@ -91,19 +91,19 @@ export function EmailsManagementPage({ onOpenMobileMenu }: EmailsManagementPageP
     }
   }, [allEmails]);
 
-  // Automatically select the first email when loaded if none is selected
+  // Automatically select the first email when loaded if none is selected or when switching folders
   useEffect(() => {
-    if (!selectedEmail && displayedEmails.length > 0) {
-      setSelectedEmail(displayedEmails[0]);
-    } else if (selectedEmail && !displayedEmails.find((e) => e.id === selectedEmail.id)) {
-      const stillInAll = allEmails.find((e) => e.id === selectedEmail.id);
-      if (stillInAll) {
-        setSelectedEmail(stillInAll);
-      } else {
-        setSelectedEmail(displayedEmails[0] || null);
-      }
+    if (displayedEmails.length === 0) {
+      setSelectedEmail(null);
+      return;
     }
-  }, [displayedEmails, allEmails, selectedEmail]);
+
+    setSelectedEmail((prev) => {
+      if (!prev) return displayedEmails[0];
+      const match = displayedEmails.find((e) => e.id === prev.id);
+      return match || displayedEmails[0];
+    });
+  }, [displayedEmails]);
 
   const handleOpenCompose = () => {
     setDraftToEdit(null);

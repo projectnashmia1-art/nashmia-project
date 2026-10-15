@@ -24,6 +24,7 @@ import { RevisionRequestModal } from "./RevisionRequestModal";
 import { ComposeEmailModal } from "../emails/ComposeEmailModal";
 import { MultiForwarderRequestModal } from "./MultiForwarderRequestModal";
 import { GroupedQuotationModal } from "./GroupedQuotationModal";
+import { AwardStatusDrawer } from "./AwardStatusDrawer";
 import {
   RequestsMetricsSkeleton,
   RequestsTableSkeleton,
@@ -74,6 +75,7 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
   const [isMultiForwarderModalOpen, setIsMultiForwarderModalOpen] = useState(false);
   const [viewingQuotationsBooking, setViewingQuotationsBooking] =
     useState<BookingRequestRecord | null>(null);
+  const [awardDrawerBooking, setAwardDrawerBooking] = useState<BookingRequestRecord | null>(null);
 
   // React Query Fetch Booking Requests
   const {
@@ -259,6 +261,40 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
       }
     };
 
+    const handleOpenQuotationReview = (e?: Event) => {
+      if (e && "detail" in e) {
+        const detail = (e as CustomEvent).detail;
+        if (detail?.bookingId) {
+          const target = requests.find(
+            (r) =>
+              r.id === detail.bookingId ||
+              r.movementNumber === detail.bookingId ||
+              r.bookingReference === detail.bookingId,
+          );
+          if (target) {
+            setViewingQuotationsBooking(target);
+          }
+        }
+      }
+    };
+
+    const handleOpenAwardDrawer = (e?: Event) => {
+      if (e && "detail" in e) {
+        const detail = (e as CustomEvent).detail;
+        if (detail?.bookingId) {
+          const target = requests.find(
+            (r) =>
+              r.id === detail.bookingId ||
+              r.movementNumber === detail.bookingId ||
+              r.bookingReference === detail.bookingId,
+          );
+          if (target) {
+            setAwardDrawerBooking(target);
+          }
+        }
+      }
+    };
+
     window.addEventListener("nashmia_multi_forwarder_updated", handleUpdate);
     window.addEventListener("nashmia_multi_forwarder_dispatched", handleUpdate);
     window.addEventListener("nashmia_forwarder_offer_received", handleUpdate);
@@ -268,6 +304,8 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
     window.addEventListener("supabase_realtime_bookings_change", handleUpdate);
     window.addEventListener("nashmia_bookings_updated", handleUpdate);
     window.addEventListener("nashmia_email_matched", handleUpdate);
+    window.addEventListener("nashmia_open_quotation_review", handleOpenQuotationReview);
+    window.addEventListener("nashmia_open_award_drawer", handleOpenAwardDrawer);
 
     return () => {
       window.removeEventListener("nashmia_multi_forwarder_updated", handleUpdate);
@@ -279,6 +317,8 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
       window.removeEventListener("supabase_realtime_bookings_change", handleUpdate);
       window.removeEventListener("nashmia_bookings_updated", handleUpdate);
       window.removeEventListener("nashmia_email_matched", handleUpdate);
+      window.removeEventListener("nashmia_open_quotation_review", handleOpenQuotationReview);
+      window.removeEventListener("nashmia_open_award_drawer", handleOpenAwardDrawer);
     };
   }, [queryClient]);
 
@@ -741,6 +781,7 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
               onRequestRevision={(req) => setRevisingRequest(req)}
               onRequestQuotes={(req) => handleOpenMultiForwarder(req)}
               onViewQuotations={(req) => setViewingQuotationsBooking(req)}
+              onOpenAwardDrawer={(req) => setAwardDrawerBooking(req)}
               onComposeEmail={(req) => {
                 setEmailingRequest(req);
                 setIsEmailModalOpen(true);
@@ -760,6 +801,7 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
               onRequestRevision={(req) => setRevisingRequest(req)}
               onRequestQuotes={(req) => handleOpenMultiForwarder(req)}
               onViewQuotations={(req) => setViewingQuotationsBooking(req)}
+              onOpenAwardDrawer={(req) => setAwardDrawerBooking(req)}
               onComposeEmail={(req) => {
                 setEmailingRequest(req);
                 setIsEmailModalOpen(true);
@@ -792,6 +834,8 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
           setRevisingRequest(req);
         }}
         onRequestQuotes={(req) => handleOpenMultiForwarder(req)}
+        onViewQuotations={(req) => setViewingQuotationsBooking(req)}
+        onOpenAwardDrawer={(req) => setAwardDrawerBooking(req)}
         onComposeEmail={(req) => {
           setEmailingRequest(req);
           setIsEmailModalOpen(true);
@@ -839,6 +883,24 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
           onRequestMoreQuotes={(req) => {
             setViewingQuotationsBooking(null);
             handleOpenMultiForwarder(req);
+          }}
+        />
+      )}
+
+      {/* Award Status & Fast Quotes Drawer */}
+      {awardDrawerBooking && (
+        <AwardStatusDrawer
+          booking={awardDrawerBooking}
+          isOpen={Boolean(awardDrawerBooking)}
+          onClose={() => setAwardDrawerBooking(null)}
+          onOpenFullQuotations={(req) => {
+            setAwardDrawerBooking(null);
+            setViewingQuotationsBooking(req);
+          }}
+          onAwarded={() => {
+            void refetch();
+            void queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
+            void queryClient.invalidateQueries({ queryKey: ["all-forwarder-requests"] });
           }}
         />
       )}

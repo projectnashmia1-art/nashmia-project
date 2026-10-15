@@ -26,6 +26,7 @@ interface FileRowItemProps {
   isSelected?: boolean;
   onSelect?: () => void;
   onPreview?: () => void;
+  onDownload?: () => void;
   onShare?: () => void;
   onDelete?: () => void;
   onToggleStar?: () => void;
@@ -38,6 +39,7 @@ export function FileRowItem({
   isSelected = false,
   onSelect,
   onPreview,
+  onDownload,
   onShare,
   onDelete,
   onToggleStar,
@@ -233,11 +235,20 @@ export function FileRowItem({
               {file.starred ? "Remove from Starred" : "Add to Starred"}
             </DropdownMenuItem>
             <DropdownMenuItem
-              onClick={() => {
-                const dummy = document.createElement("a");
-                dummy.href = "#";
-                dummy.download = file.name;
-                dummy.click();
+              onClick={(e) => {
+                e.stopPropagation();
+                if (onDownload) {
+                  onDownload();
+                } else if (file.url && file.url !== "#") {
+                  const a = document.createElement("a");
+                  a.href = file.url;
+                  a.download = file.name;
+                  a.target = "_blank";
+                  a.rel = "noopener noreferrer";
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+                }
               }}
               className="gap-2 text-xs"
             >

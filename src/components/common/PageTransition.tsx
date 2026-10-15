@@ -18,11 +18,7 @@ export function PageTransition({
   children: ReactNode;
   className?: string;
 }) {
-  return (
-    <div className={`linear-page-transition w-full min-w-0 max-w-full ${className}`.trim()}>
-      {children}
-    </div>
-  );
+  return <div className={`w-full min-w-0 max-w-full ${className}`.trim()}>{children}</div>;
 }
 
 export function PageTransitionProvider({ children }: { children: ReactNode }) {

@@ -203,6 +203,33 @@ export function mapDatabaseEmailToRecord(
     ? (msg.attachments as Array<{ name: string; size: string }>)
     : [];
 
+  const rawDirection = (msg.direction || headers.direction || "outbound").toLowerCase();
+  const isInbound = rawDirection === "inbound";
+
+  const resolvedFromName = isInbound
+    ? msg.sender_name ||
+      headers.sender_name ||
+      forwarder?.company_name ||
+      (msg.sender_email
+        ? msg.sender_email.split("@")[0].replace(/[._-]/g, " ")
+        : "Freight Forwarder")
+    : msg.sender_name || "Nashmia Logistics";
+
+  const resolvedFromEmail =
+    msg.sender_email ||
+    msg.from_email ||
+    headers.from_email ||
+    (isInbound ? "quotes@forwarder.com" : "operations@nashmiaindustries.com");
+
+  const resolvedForwarderName =
+    forwarder?.company_name ||
+    booking?.forwarder?.company_name ||
+    (isInbound
+      ? msg.sender_name ||
+        headers.sender_name ||
+        (msg.sender_email ? msg.sender_email.split("@")[0].replace(/[._-]/g, " ") : "Forwarder")
+      : msg.recipient_name || "Forwarder");
+
   return {
     id: msg.id,
     threadId: msg.thread_id || thread?.id || msg.id,
@@ -212,12 +239,8 @@ export function mapDatabaseEmailToRecord(
     movementId,
     movementNumber,
     forwarderId: msg.forwarder_id || headers.forwarder_id || forwarder?.id || null,
-    fromEmail:
-      msg.sender_email ||
-      msg.from_email ||
-      headers.from_email ||
-      "operations@nashmiaindustries.com",
-    fromName: msg.sender_name || "Nashmia Industries",
+    fromEmail: resolvedFromEmail,
+    fromName: resolvedFromName,
     toEmail: msg.recipient_email || msg.to_email || headers.to_email || "",
     toName: msg.recipient_name || forwarder?.contact_person || forwarder?.company_name || "",
     cc: msg.cc || null,
@@ -228,10 +251,7 @@ export function mapDatabaseEmailToRecord(
     snippet: msg.body ? msg.body.slice(0, 140) : thread?.snippet || "",
     emailType,
     status,
-    direction:
-      msg.direction?.toLowerCase() === "inbound" || headers.direction === "inbound"
-        ? "inbound"
-        : "outbound",
+    direction: isInbound ? "inbound" : "outbound",
     gmailMessageId: msg.gmail_message_id || headers.gmail_message_id || null,
     gmailThreadId:
       msg.gmail_thread_id || thread?.gmail_thread_id || headers.gmail_thread_id || null,
@@ -241,16 +261,13 @@ export function mapDatabaseEmailToRecord(
     updatedAt: msg.updated_at || msg.created_at || new Date().toISOString(),
     sentAt: msg.sent_at || (status === "SENT" ? msg.created_at : null),
     receivedAt:
-      msg.received_at ||
-      headers.received_at ||
-      msg.sent_at ||
-      (msg.direction?.toLowerCase() === "inbound" ? msg.created_at : null),
+      msg.received_at || headers.received_at || msg.sent_at || (isInbound ? msg.created_at : null),
 
     // Matching Engine (Step 3)
     matchStatus:
       (msg.match_status as "MATCHED" | "NEEDS_REVIEW" | "UNMATCHED" | "PENDING") ||
       (headers.match_status as "MATCHED" | "NEEDS_REVIEW" | "UNMATCHED" | "PENDING") ||
-      (msg.direction?.toLowerCase() === "inbound" ? (booking ? "MATCHED" : "NEEDS_REVIEW") : null),
+      (isInbound ? (booking ? "MATCHED" : "NEEDS_REVIEW") : null),
     matchReason: msg.match_reason || (headers.match_reason as string) || null,
     matchedBy:
       (msg.matched_by as "THREAD_ID" | "MOVEMENT_NUMBER" | "MANUAL" | "NONE") ||
@@ -306,8 +323,7 @@ export function mapDatabaseEmailToRecord(
     bookingDestination: booking?.destination || null,
     buyerName: booking?.buyer?.company_name || booking?.buyer_name || null,
     supplierName: booking?.supplier?.company_name || booking?.supplier_name || null,
-    forwarderName:
-      forwarder?.company_name || booking?.forwarder?.company_name || msg.recipient_name || null,
+    forwarderName: resolvedForwarderName,
     forwarderCode: forwarder?.code || booking?.forwarder?.code || null,
     containerSize: booking?.container_size || null,
     containerCount: booking?.container_count || null,

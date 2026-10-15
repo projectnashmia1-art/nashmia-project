@@ -27,7 +27,11 @@ export function ShareDocumentModal({ item, open, onOpenChange }: ShareDocumentMo
 
   if (!item) return null;
 
-  const shareUrl = `https://drive.nashmia.com/share/${item.id}`;
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const shareUrl =
+    (item as DriveFile).url ||
+    (item as DriveFile).metadata?.fileUrl ||
+    `${origin}/documents?id=${encodeURIComponent(item.id)}`;
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(shareUrl);
@@ -52,7 +56,7 @@ export function ShareDocumentModal({ item, open, onOpenChange }: ShareDocumentMo
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="w-full sm:max-w-md sm:rounded-2xl">
         <DialogHeader>
           <DialogTitle className="text-base font-bold text-slate-800 flex items-center gap-2">
             <Users className="size-4 text-[#1D63ED]" /> Share &ldquo;{item.name}&rdquo;

@@ -13,19 +13,8 @@ export default defineConfig({
     server: { entry: "server" },
   },
   nitro: {
-    rolldownConfig: {
-      onwarn(warning, warn) {
-        if (
-          warning.code === "MODULE_LEVEL_DIRECTIVE" ||
-          (warning.message && warning.message.includes("use client"))
-        ) {
-          return;
-        }
-        if (warn) warn(warning);
-      },
-    },
     rollupConfig: {
-      onwarn(warning, warn) {
+      onwarn(warning: { code?: string; message?: string }, warn?: (warning: unknown) => void) {
         if (
           warning.code === "MODULE_LEVEL_DIRECTIVE" ||
           (warning.message && warning.message.includes("use client"))
@@ -36,12 +25,16 @@ export default defineConfig({
       },
     },
     hooks: {
-      "rollup:before": (nitro, rollupConfig) => {
+      "rollup:before": (
+        _nitro: unknown,
+        rollupConfig: { onwarn?: (warning: unknown, warn?: (w: unknown) => void) => void },
+      ) => {
         const prevOnwarn = rollupConfig.onwarn;
-        rollupConfig.onwarn = (warning, warn) => {
+        rollupConfig.onwarn = (warning: unknown, warn?: (w: unknown) => void) => {
+          const w = warning as { code?: string; message?: string };
           if (
-            warning.code === "MODULE_LEVEL_DIRECTIVE" ||
-            (warning.message && warning.message.includes("use client"))
+            w?.code === "MODULE_LEVEL_DIRECTIVE" ||
+            (w?.message && w.message.includes("use client"))
           ) {
             return;
           }
@@ -52,9 +45,15 @@ export default defineConfig({
     },
   },
   vite: {
+    server: {
+      allowedHosts: true,
+    },
     build: {
       rollupOptions: {
-        onwarn(warning, defaultHandler) {
+        onwarn(
+          warning: { code?: string; message?: string },
+          defaultHandler: (warning: unknown) => void,
+        ) {
           if (
             warning.code === "MODULE_LEVEL_DIRECTIVE" ||
             (warning.message && warning.message.includes('"use client"'))
@@ -68,7 +67,17 @@ export default defineConfig({
     plugins: [
       {
         name: "api-dev-server-middleware",
-        configureServer(server) {
+        configureServer(server: {
+          middlewares: {
+            use: (
+              fn: (
+                req: import("http").IncomingMessage,
+                res: import("http").ServerResponse,
+                next: (err?: unknown) => void,
+              ) => void,
+            ) => void;
+          };
+        }) {
           server.middlewares.use(async (req, res, next) => {
             if (req.url && req.url.startsWith("/api/")) {
               try {
@@ -83,7 +92,10 @@ export default defineConfig({
                   const webRequest = new Request(url.href, {
                     method: req.method,
                     headers,
-                    body: req.method !== "GET" && req.method !== "HEAD" ? body : undefined,
+                    body:
+                      req.method !== "GET" && req.method !== "HEAD"
+                        ? (body as unknown as BodyInit)
+                        : undefined,
                   });
 
                   try {

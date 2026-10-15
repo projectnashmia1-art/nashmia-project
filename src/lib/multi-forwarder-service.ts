@@ -1,12 +1,19 @@
 import { supabase, isSupabaseConfigured } from "./supabase";
 import { getGmailAccessToken, sendEmailDirectlyViaGmail } from "./gmail-service";
-import { safeUuid, getLocalBookings, updateLocalBooking } from "./supabase-services";
+import {
+  safeUuid,
+  getLocalBookings,
+  getLocalForwarders,
+  updateLocalBooking,
+} from "./supabase-services";
+import { extractMovementNumber } from "./movement-lifecycle";
 import {
   extractQuotationFromEmail,
   extractQuotationRuleBased,
   validateQuotationForBackendAction,
   type ExtractedQuotation,
 } from "./quotation-extractor";
+import { extractQuotationFieldsDeterministic } from "./forwarder-quotation-processor";
 import { recordQuotationAuditEvent } from "./quotation-audit-logger";
 import {
   persistQuotationToDatabase,
@@ -23,6 +30,8 @@ import type {
 } from "../types/requests";
 import { normalizeQuoteStatus } from "../types/requests";
 import type { ForwarderAccount } from "./forwarders-data";
+import { matchSenderWithForwarderMaster } from "./forwarder-matching-service";
+import { logQuotationResponseDiagnostics } from "./quotation-diagnostics";
 
 const STORAGE_KEY = "nashmia_multi_forwarder_requests_v2";
 const LEGACY_STORAGE_KEY = "nashmia_forwarder_requests";
@@ -79,6 +88,47 @@ export function saveLocalForwarderRequests(requests: ForwarderQuoteRequestRecord
 }
 
 /**
+ * Merges a list of forwarder requests into localStorage without overwriting unrelated booking records
+ */
+export function mergeLocalForwarderRequests(requests: ForwarderQuoteRequestRecord[]): void {
+  if (typeof window === "undefined" || !requests || requests.length === 0) return;
+  try {
+    const existing = getLocalForwarderRequests();
+    const map = new Map<string, ForwarderQuoteRequestRecord>();
+    for (const item of existing) {
+      if (item.id) map.set(item.id, item);
+      if (item.bookingId && item.forwarderId) {
+        map.set(`${item.bookingId}_${item.forwarderId}`, item);
+      }
+      if (item.movementNumber && item.forwarderId) {
+        map.set(`${item.movementNumber}_${item.forwarderId}`, item);
+      }
+    }
+    for (const item of requests) {
+      if (item.id) map.set(item.id, item);
+      if (item.bookingId && item.forwarderId) {
+        map.set(`${item.bookingId}_${item.forwarderId}`, item);
+      }
+      if (item.movementNumber && item.forwarderId) {
+        map.set(`${item.movementNumber}_${item.forwarderId}`, item);
+      }
+    }
+    // De-duplicate by unique item.id
+    const seenIds = new Set<string>();
+    const merged: ForwarderQuoteRequestRecord[] = [];
+    for (const record of map.values()) {
+      if (record.id && !seenIds.has(record.id)) {
+        seenIds.add(record.id);
+        merged.push(record);
+      }
+    }
+    saveLocalForwarderRequests(merged);
+  } catch (err) {
+    console.warn("[MultiForwarderService] Error merging local requests:", err);
+  }
+}
+
+/**
  * Fetch all forwarder requests to whom quotation request emails were sent,
  * optionally filtered by booking object or booking identifier.
  */
@@ -93,17 +143,51 @@ export async function fetchForwarderRequestsForBooking(
 
   // Collect all known identifiers for this booking
   const validKeys = new Set<string>();
+  const rawKeyStrings: string[] = [];
+
   if (typeof bookingOrIdentifier === "string") {
-    const trimmed = bookingOrIdentifier.trim();
-    if (trimmed) validKeys.add(trimmed.toLowerCase());
+    const raw = bookingOrIdentifier.trim();
+    if (raw) {
+      rawKeyStrings.push(raw);
+      validKeys.add(raw.toLowerCase());
+      validKeys.add(raw.toUpperCase());
+      if (raw.toLowerCase().startsWith("nash-")) {
+        validKeys.add(raw.replace(/^nash-/i, "").toLowerCase());
+        validKeys.add(raw.replace(/^nash-/i, "").toUpperCase());
+      } else {
+        validKeys.add(`nash-${raw.toLowerCase()}`);
+        validKeys.add(`NASH-${raw.toUpperCase()}`);
+      }
+    }
   } else if (typeof bookingOrIdentifier === "object") {
-    if (bookingOrIdentifier.id) validKeys.add(bookingOrIdentifier.id.trim().toLowerCase());
-    if (bookingOrIdentifier.movementNumber)
-      validKeys.add(bookingOrIdentifier.movementNumber.trim().toLowerCase());
-    if (bookingOrIdentifier.reference)
-      validKeys.add(bookingOrIdentifier.reference.trim().toLowerCase());
-    if (bookingOrIdentifier.bookingReference)
-      validKeys.add(bookingOrIdentifier.bookingReference.trim().toLowerCase());
+    const rawIds = [
+      bookingOrIdentifier.id,
+      bookingOrIdentifier.movementNumber,
+      bookingOrIdentifier.reference,
+      bookingOrIdentifier.bookingReference,
+      (bookingOrIdentifier as Record<string, unknown>).bookingId as string,
+      (bookingOrIdentifier as Record<string, unknown>).booking_id as string,
+      (bookingOrIdentifier as Record<string, unknown>).movement_number as string,
+      (bookingOrIdentifier as Record<string, unknown>).booking_reference as string,
+      (bookingOrIdentifier as Record<string, unknown>).bookingNumber as string,
+      (bookingOrIdentifier as Record<string, unknown>).booking_number as string,
+    ].filter(Boolean) as string[];
+
+    for (const raw of rawIds) {
+      const trimmed = raw.trim();
+      if (trimmed) {
+        rawKeyStrings.push(trimmed);
+        validKeys.add(trimmed.toLowerCase());
+        validKeys.add(trimmed.toUpperCase());
+        if (trimmed.toLowerCase().startsWith("nash-")) {
+          validKeys.add(trimmed.replace(/^nash-/i, "").toLowerCase());
+          validKeys.add(trimmed.replace(/^nash-/i, "").toUpperCase());
+        } else {
+          validKeys.add(`nash-${trimmed.toLowerCase()}`);
+          validKeys.add(`NASH-${trimmed.toUpperCase()}`);
+        }
+      }
+    }
   }
 
   if (validKeys.size === 0) {
@@ -120,11 +204,23 @@ export async function fetchForwarderRequestsForBooking(
       if (
         (bId && validKeys.has(bId)) ||
         (bMov && validKeys.has(bMov)) ||
-        (bRef && validKeys.has(bRef))
+        (bRef && validKeys.has(bRef)) ||
+        Array.from(validKeys).some((k) => (bMov && bMov.includes(k)) || (bRef && bRef.includes(k)))
       ) {
-        if (bId) validKeys.add(bId);
-        if (bMov) validKeys.add(bMov);
-        if (bRef) validKeys.add(bRef);
+        if (b.id) {
+          validKeys.add(b.id.toLowerCase());
+          rawKeyStrings.push(b.id);
+        }
+        if (b.movement_number) {
+          validKeys.add(b.movement_number.toLowerCase());
+          validKeys.add(b.movement_number.toUpperCase());
+          rawKeyStrings.push(b.movement_number);
+        }
+        if (b.booking_reference) {
+          validKeys.add(b.booking_reference.toLowerCase());
+          validKeys.add(b.booking_reference.toUpperCase());
+          rawKeyStrings.push(b.booking_reference);
+        }
       }
     }
   } catch (err) {
@@ -134,27 +230,31 @@ export async function fetchForwarderRequestsForBooking(
   // Primary Source of Truth: Supabase PostgreSQL database
   if (isSupabaseConfigured) {
     try {
-      const candidateKey =
-        Array.from(validKeys)[0] ||
-        (typeof bookingOrIdentifier === "string"
-          ? bookingOrIdentifier
-          : bookingOrIdentifier?.id || "");
-      const dbList = await fetchForwarderRequestsFromDatabase(candidateKey);
+      const candidateKeys = Array.from(new Set([...rawKeyStrings, ...Array.from(validKeys)]));
+      const dbList = await fetchForwarderRequestsFromDatabase(candidateKeys);
       if (dbList && dbList.length > 0) {
-        const filteredFromDb = dbList.filter((req) => {
-          const rBkId = (req.bookingId || "").toLowerCase();
-          const rRef = (req.bookingReference || "").toLowerCase();
-          const rMov = (req.movementNumber || "").toLowerCase();
-          return (
-            validKeys.size === 0 ||
-            validKeys.has(rBkId) ||
-            validKeys.has(rRef) ||
-            validKeys.has(rMov)
-          );
-        });
-        if (filteredFromDb.length > 0) {
-          return filteredFromDb;
-        }
+        logQuotationResponseDiagnostics(dbList, "MultiForwarderService Database Fetcher");
+        console.log(
+          "[MultiForwarderService] fetchForwarderRequestsForBooking raw response object:",
+          {
+            bookingOrIdentifier,
+            recordsCount: dbList.length,
+            quotations: dbList.map((r) => ({
+              requestId: r.id,
+              id: r.offerData?.id || r.id,
+              quotation_id: r.quotationId || r.offerData?.id || r.id,
+              forwarderName: r.forwarderName,
+              status: r.status,
+              ratePerContainer: r.offerData?.ratePerContainer || r.ratePerContainer,
+              totalFreight: r.offerData?.totalFreight || r.totalFreight,
+              currency: r.offerData?.currency || r.currency,
+              associatedChargeRowsCount: r.offerData?.itemizedCharges?.length || 0,
+              associatedChargeRows: r.offerData?.itemizedCharges || [],
+            })),
+            rawList: dbList,
+          },
+        );
+        return dbList;
       }
     } catch (dbErr) {
       console.warn("[MultiForwarderService] Notice fetching from database:", dbErr);
@@ -1281,7 +1381,7 @@ function getEmailDomain(email?: string | null): string {
 function isSenderMatchingForwarder(
   senderEmail: string,
   forwarderEmail: string,
-  forwarderName?: string,
+  _forwarderName?: string,
 ): boolean {
   const sClean = (senderEmail || "").toLowerCase().trim();
   const fClean = (forwarderEmail || "").toLowerCase().trim();
@@ -1297,29 +1397,31 @@ function isSenderMatchingForwarder(
     "gmail.com",
     "googlemail.com",
     "yahoo.com",
+    "ymail.com",
+    "rocketmail.com",
     "hotmail.com",
     "outlook.com",
+    "live.com",
+    "msn.com",
     "icloud.com",
+    "me.com",
+    "mac.com",
     "aol.com",
     "mail.com",
+    "zoho.com",
     "proton.me",
     "protonmail.com",
+    "fastmail.com",
+    "gmx.com",
+    "yandex.com",
   ]);
 
-  // 2. Corporate domain match (only if not a public email provider like gmail.com)
+  // 2. Corporate domain match (only if registered and not a public email provider like gmail.com)
   if (sDomain && fDomain && !publicMailProviders.has(sDomain) && sDomain === fDomain) {
     return true;
   }
 
-  // 3. User name part match if forwarder company name is distinct (min 4 chars)
-  if (forwarderName) {
-    const fnClean = forwarderName.toLowerCase().replace(/[^a-z0-9]/g, "");
-    const sUser = sClean.split("@")[0].replace(/[^a-z0-9]/g, "");
-    if (fnClean.length >= 4 && sUser.includes(fnClean)) {
-      return true;
-    }
-  }
-
+  // Strictly DO NOT match by display name or username alone!
   return false;
 }
 
@@ -1679,7 +1781,9 @@ export async function processIncomingForwarderEmailReply(input: IncomingEmailMat
     }
   } else {
     // Dynamic resolution if email is associated with a booking/movement
-    const targetBkId = input.bookingId || input.movementNumber;
+    const extractedMov =
+      input.movementNumber || (input.subject ? extractMovementNumber(input.subject) : null);
+    const targetBkId = input.bookingId || extractedMov;
     const allBookings = getLocalBookings();
     const bk = allBookings.find(
       (b) =>
@@ -1692,10 +1796,58 @@ export async function processIncomingForwarderEmailReply(input: IncomingEmailMat
           b.booking_reference.toLowerCase() === targetBkId.toLowerCase()) ||
         (input.subject &&
           b.movement_number &&
-          input.subject.toLowerCase().includes(b.movement_number.toLowerCase())),
+          input.subject.toLowerCase().includes(b.movement_number.toLowerCase())) ||
+        (extractedMov &&
+          b.movement_number &&
+          (b.movement_number.toLowerCase().includes(extractedMov.toLowerCase()) ||
+            extractedMov.toLowerCase().includes(b.movement_number.toLowerCase()))),
     );
 
-    if (!bk && !input.movementNumber && !input.bookingId) {
+    let dbBkId: string | null = null;
+    let dbMov: string | null = null;
+    let dbPol: string | null = null;
+    let dbPod: string | null = null;
+    let dbSupplier: string | null = null;
+    let dbBuyer: string | null = null;
+
+    if (!bk && isSupabaseConfigured && (extractedMov || targetBkId)) {
+      try {
+        const candidateKeys = [
+          extractedMov,
+          targetBkId,
+          extractedMov?.replace(/^NASH-/, ""),
+        ].filter(Boolean) as string[];
+        const candidateUuids = candidateKeys.map((k) => safeUuid(k)).filter(Boolean) as string[];
+
+        let bQuery = supabase.from("bookings").select("*");
+        if (candidateUuids.length > 0 && candidateKeys.length > 0) {
+          bQuery = bQuery.or(
+            `id.in.(${candidateUuids.join(",")}),movement_number.in.(${candidateKeys.join(",")}),booking_reference.in.(${candidateKeys.join(",")})`,
+          );
+        } else if (candidateUuids.length > 0) {
+          bQuery = bQuery.in("id", candidateUuids);
+        } else if (candidateKeys.length > 0) {
+          bQuery = bQuery.or(
+            `movement_number.in.(${candidateKeys.join(",")}),booking_reference.in.(${candidateKeys.join(",")})`,
+          );
+        }
+
+        const { data: dbBks } = await bQuery.limit(1);
+        if (dbBks && dbBks.length > 0) {
+          const dbB = dbBks[0];
+          dbBkId = dbB.id;
+          dbMov = dbB.movement_number || dbB.booking_reference;
+          dbPol = dbB.pol_code || dbB.origin;
+          dbPod = dbB.pod_code || dbB.destination;
+          dbSupplier = dbB.supplier_name;
+          dbBuyer = dbB.buyer_name;
+        }
+      } catch (err) {
+        console.warn("[MultiForwarderService] Notice resolving booking from DB:", err);
+      }
+    }
+
+    if (!bk && !dbBkId && !extractedMov && !input.movementNumber && !input.bookingId) {
       return {
         processed: false,
         request: null,
@@ -1704,43 +1856,98 @@ export async function processIncomingForwarderEmailReply(input: IncomingEmailMat
     }
 
     const movNo =
-      bk?.movement_number || input.movementNumber || bk?.booking_reference || "MOV-2026-00001";
+      bk?.movement_number ||
+      dbMov ||
+      extractedMov ||
+      input.movementNumber ||
+      bk?.booking_reference ||
+      "MOV-2026-00001";
     const senderEmail = (input.senderEmail || "").trim().toLowerCase();
     const allFwds = getLocalForwarders();
-    const matchedFwd = allFwds.find(
-      (f) =>
-        (senderEmail && f.email && f.email.toLowerCase() === senderEmail) ||
-        (senderEmail && f.contactEmail && f.contactEmail.toLowerCase() === senderEmail) ||
-        (senderEmail && senderEmail.includes(f.name.toLowerCase().replace(/\s+/g, ""))) ||
-        (input.senderName && input.senderName.toLowerCase().includes(f.name.toLowerCase())),
-    );
+    let fwdMasterList = allFwds.map((f) => ({
+      id: f.id,
+      name: f.name || f.company_name,
+      company_name: f.company_name || f.name,
+      email: f.email,
+      contactEmail: f.contactEmail,
+      contactPerson: f.contactPerson,
+      notes: f.notes,
+    }));
 
-    const fwdName =
-      matchedFwd?.name || input.senderName || senderEmail.split("@")[0] || "Forwarder";
-    const fwdId = matchedFwd?.id || `fwd-${Date.now()}`;
-    const fwdEmail = matchedFwd?.email || senderEmail;
+    if (isSupabaseConfigured) {
+      try {
+        const { data: dbFwds } = await supabase.from("forwarders").select("*");
+        if (dbFwds && dbFwds.length > 0) {
+          const dbMasterList = dbFwds.map((f) => ({
+            id: f.id,
+            name: f.company_name || f.name || f.contact_person,
+            company_name: f.company_name || f.name || f.contact_person,
+            email: f.email,
+            contactEmail: f.contact_email || f.email,
+            contactPerson: f.contact_person,
+            notes: f.notes,
+          }));
+          fwdMasterList = [...dbMasterList, ...fwdMasterList];
+        }
+      } catch (err) {
+        console.warn("[MultiForwarderService] Error querying forwarders table:", err);
+      }
+    }
+
+    const matchFwdResult = matchSenderWithForwarderMaster(senderEmail, fwdMasterList, {
+      senderDisplayName: input.senderName,
+    });
+
+    let fwdName = matchFwdResult.forwarderName;
+    let fwdId = matchFwdResult.forwarderId || `fwd-${Date.now()}`;
+    let fwdEmail = matchFwdResult.forwarderEmail || senderEmail;
+
+    if ((!fwdName || fwdName === "Unknown Forwarder" || fwdName === "Forwarder") && isSupabaseConfigured) {
+      try {
+        const { data: existingFwdReqs } = await supabase
+          .from("forwarder_requests")
+          .select("forwarder_id, forwarder_name, forwarder_email")
+          .or(`movement_number.eq.${movNo},booking_reference.eq.${movNo}`)
+          .ilike("forwarder_email", senderEmail)
+          .limit(1);
+        if (existingFwdReqs && existingFwdReqs.length > 0 && existingFwdReqs[0].forwarder_name) {
+          fwdName = existingFwdReqs[0].forwarder_name;
+          fwdId = existingFwdReqs[0].forwarder_id || fwdId;
+          fwdEmail = existingFwdReqs[0].forwarder_email || fwdEmail;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    if (!fwdName || fwdName === "Unknown Forwarder") {
+      const emailUser = senderEmail.split("@")[0] || "Forwarder";
+      fwdName = input.senderName?.trim() || emailUser.charAt(0).toUpperCase() + emailUser.slice(1);
+    }
+
+    const initialStatus = "OFFER_RECEIVED";
 
     const newReqId = `MFR-${Date.now().toString(36).slice(-6).toUpperCase()}`;
     const newReq: ForwarderQuoteRequestRecord = {
       id: newReqId,
-      bookingId: bk?.id || input.bookingId || movNo,
+      bookingId: bk?.id || dbBkId || input.bookingId || movNo,
       bookingReference: movNo,
       movementNumber: movNo,
       forwarderId: fwdId,
       forwarderName: fwdName,
       forwarderEmail: fwdEmail,
-      status: "AWAITING_OFFER",
+      status: initialStatus,
       gmailThreadId: input.gmailThreadId || undefined,
       gmailMessageId: input.gmailMessageId || undefined,
       sentAt: new Date().toISOString(),
-      origin: bk?.origin || "POL",
-      destination: bk?.destination || "POD",
-      polCode: bk?.pol_code || "POL",
+      origin: bk?.origin || dbPol || "POL",
+      destination: bk?.destination || dbPod || "POD",
+      polCode: bk?.pol_code || dbPol || "POL",
       polName: bk?.pol_name || "Port of Loading",
-      podCode: bk?.pod_code || "POD",
+      podCode: bk?.pod_code || dbPod || "POD",
       podName: bk?.pod_name || "Destination Port",
-      supplierName: bk?.supplier_name || "Shipper",
-      buyerName: bk?.buyer_name || "Consignee",
+      supplierName: bk?.supplier_name || dbSupplier || "Shipper",
+      buyerName: bk?.buyer_name || dbBuyer || "Consignee",
       containerType: bk?.container_type || "40HC",
       containerCount: bk?.container_count || 1,
       cargoDescription: bk?.cargo_description || "Commercial Cargo",
@@ -1796,8 +2003,20 @@ export async function processIncomingForwarderEmailReply(input: IncomingEmailMat
     forwarderId: existing.forwarderId,
   });
 
+  // Extract deterministic fields for all 16 commercial and routing specifications
+  const detQuotationFields = extractQuotationFieldsDeterministic(
+    input.subject || "",
+    input.body || input.snippet || "",
+  );
+
+  const hasExtractedRate =
+    (detQuotationFields.oceanFreight !== null && detQuotationFields.oceanFreight > 0) ||
+    (detQuotationFields.totalAmount !== null && detQuotationFields.totalAmount > 0) ||
+    (extracted.rate !== null && extracted.rate > 0) ||
+    (extracted.totalCost !== null && extracted.totalCost > 0);
+
   let newStatus: ForwarderQuoteStatus = existing.status;
-  let offerExtracted = false;
+  let offerExtracted = hasExtractedRate;
 
   if (unverifiedSender) {
     newStatus = "NEEDS_REVIEW";
@@ -1806,6 +2025,8 @@ export async function processIncomingForwarderEmailReply(input: IncomingEmailMat
     if (newStatus === "OFFER_RECEIVED") {
       offerExtracted = true;
     }
+  } else if (hasExtractedRate) {
+    newStatus = "OFFER_RECEIVED";
   } else if (!validation.allowed && validation.requiresReview) {
     newStatus = "NEEDS_REVIEW";
   } else {
@@ -1829,29 +2050,111 @@ export async function processIncomingForwarderEmailReply(input: IncomingEmailMat
   const mergedOfferData: ForwarderOfferData = {
     ...(existing.offerData || {}),
     ratePerContainer:
-      extracted.rate !== null ? extracted.rate : existing.offerData?.ratePerContainer,
-    totalFreight:
-      extracted.totalCost !== null
-        ? extracted.totalCost
+      detQuotationFields.oceanFreight !== null
+        ? detQuotationFields.oceanFreight
         : extracted.rate !== null
-          ? extracted.rate * (existing.containerCount || 1)
-          : existing.offerData?.totalFreight,
-    currency: extracted.currency || existing.offerData?.currency || undefined,
-    containerType: extracted.containerType || existing.offerData?.containerType || undefined,
-    quantity: extracted.containerQuantity || existing.offerData?.quantity || undefined,
+          ? extracted.rate
+          : existing.offerData?.ratePerContainer,
+    totalFreight:
+      detQuotationFields.totalAmount !== null
+        ? detQuotationFields.totalAmount
+        : extracted.totalCost !== null
+          ? extracted.totalCost
+          : detQuotationFields.oceanFreight || extracted.rate
+            ? ((detQuotationFields.oceanFreight || extracted.rate) as number) *
+              (existing.containerCount || 1)
+            : existing.offerData?.totalFreight,
+    currency:
+      detQuotationFields.currency || extracted.currency || existing.offerData?.currency || "USD",
+    containerType:
+      detQuotationFields.containerType ||
+      extracted.containerType ||
+      existing.offerData?.containerType ||
+      undefined,
+    quantity:
+      detQuotationFields.containerQuantity ||
+      extracted.containerQuantity ||
+      existing.offerData?.quantity ||
+      undefined,
     availability: extracted.availability || existing.offerData?.availability || undefined,
-    etd: extracted.etd || existing.offerData?.etd || undefined,
+    etd: detQuotationFields.sailingDate || extracted.etd || existing.offerData?.etd || undefined,
     eta: extracted.eta || existing.offerData?.eta || undefined,
-    transitDays: extracted.transitTime || existing.offerData?.transitDays || undefined,
-    freeDays: extracted.freeDays || existing.offerData?.freeDays || undefined,
-    carrier: extracted.carrier || existing.offerData?.carrier || undefined,
-    vesselName: extracted.vesselName || existing.offerData?.vesselName || undefined,
+    transitDays:
+      detQuotationFields.transitTime ||
+      extracted.transitTime ||
+      existing.offerData?.transitDays ||
+      undefined,
+    freeDays:
+      detQuotationFields.freeDays ||
+      extracted.freeDays ||
+      existing.offerData?.freeDays ||
+      undefined,
+    carrier:
+      detQuotationFields.carrier || extracted.carrier || existing.offerData?.carrier || undefined,
+    vesselName:
+      detQuotationFields.vesselName ||
+      extracted.vesselName ||
+      existing.offerData?.vesselName ||
+      undefined,
     voyageNumber: extracted.voyageNumber || existing.offerData?.voyageNumber || undefined,
-    validUntil: extracted.rateValidity || existing.offerData?.validUntil || undefined,
+    validUntil:
+      detQuotationFields.validityDate ||
+      extracted.rateValidity ||
+      existing.offerData?.validUntil ||
+      undefined,
     additionalCharges:
-      extracted.additionalCharges || existing.offerData?.additionalCharges || undefined,
-    totalCost: extracted.totalCost !== null ? extracted.totalCost : undefined,
-    notes: extracted.notes || existing.offerData?.notes || undefined,
+      detQuotationFields.otherCharges !== null
+        ? `$${detQuotationFields.otherCharges}`
+        : extracted.additionalCharges || existing.offerData?.additionalCharges || undefined,
+    totalCost:
+      detQuotationFields.totalAmount !== null
+        ? detQuotationFields.totalAmount
+        : extracted.totalCost !== null
+          ? extracted.totalCost
+          : undefined,
+
+    // 16 Standard Quotation Processing Fields
+    oceanFreight:
+      detQuotationFields.oceanFreight !== null
+        ? detQuotationFields.oceanFreight
+        : extracted.rate !== null
+          ? extracted.rate
+          : undefined,
+    originCharges:
+      detQuotationFields.originCharges !== null ? detQuotationFields.originCharges : undefined,
+    destinationCharges:
+      detQuotationFields.destinationCharges !== null
+        ? detQuotationFields.destinationCharges
+        : undefined,
+    thc:
+      detQuotationFields.thc !== null
+        ? detQuotationFields.thc
+        : typeof extracted.deterministicResult?.thc === "number"
+          ? extracted.deterministicResult.thc
+          : undefined,
+    documentationCharges:
+      detQuotationFields.documentationCharges !== null
+        ? detQuotationFields.documentationCharges
+        : typeof extracted.deterministicResult?.documentationCharges === "number"
+          ? extracted.deterministicResult.documentationCharges
+          : undefined,
+    customsCharges:
+      detQuotationFields.customsCharges !== null ? detQuotationFields.customsCharges : undefined,
+    truckingCharges:
+      detQuotationFields.truckingCharges !== null ? detQuotationFields.truckingCharges : undefined,
+    otherCharges:
+      detQuotationFields.otherCharges !== null ? detQuotationFields.otherCharges : undefined,
+    totalAmount:
+      detQuotationFields.totalAmount !== null
+        ? detQuotationFields.totalAmount
+        : extracted.totalCost !== null
+          ? extracted.totalCost
+          : undefined,
+    sailingDate: detQuotationFields.sailingDate || extracted.etd || undefined,
+    validityDate: detQuotationFields.validityDate || extracted.rateValidity || undefined,
+    routing: detQuotationFields.routing || undefined,
+
+    notes: detQuotationFields.notes || extracted.notes || existing.offerData?.notes || undefined,
     receivedAt: extracted.emailReceivedDate || new Date().toISOString(),
     sourceEmailId: input.emailMessageId || input.gmailMessageId || undefined,
     originalEmailSubject: input.subject || undefined,
@@ -1869,7 +2172,10 @@ export async function processIncomingForwarderEmailReply(input: IncomingEmailMat
       extracted.missingFields.length > 0
         ? `Extracted ${extracted.presentFields.length} fields (${Math.round(extracted.extractionConfidence * 100)}% confidence). Not provided: ${extracted.missingFields.slice(0, 4).join(", ")}.`
         : `Complete extraction (${Math.round(extracted.extractionConfidence * 100)}% confidence).`,
-    traceability: extracted.traceability || extracted.deterministicResult?.traceability,
+    traceability: {
+      ...(extracted.traceability || extracted.deterministicResult?.traceability || {}),
+      ...(detQuotationFields.fieldTraceability as Record<string, unknown>),
+    },
     reviewReasons,
     confidenceScore: extracted.extractionConfidence,
     hasConflicts: extracted.deterministicResult?.hasConflicts || false,
@@ -1999,6 +2305,10 @@ export interface BookingForwarderSummary {
   bestRate?: number;
   bestRateCurrency?: string;
   bestRateForwarder?: string;
+  bestEtd?: string;
+  bestTransitDays?: number;
+  bestCarrier?: string;
+  latestQuote?: ForwarderQuoteRequestRecord;
   overallStatus:
     | "OFFERS_RECEIVED"
     | "AWAITING_QUOTES"
@@ -2020,19 +2330,29 @@ export function getBookingForwarderSummary(
   const requests =
     allRequests && allRequests.length > 0 ? allRequests : getLocalForwarderRequests();
   const idLower = (bookingIdOrMov || "").trim().toLowerCase();
+  const cleanId = idLower.replace(/^nash-/, "").replace(/[-_/\s]/g, "");
 
   const linked = requests.filter((r) => {
     const bId = (r.bookingId || "").trim().toLowerCase();
     const mov = (r.movementNumber || "").trim().toLowerCase();
     const ref = (r.bookingReference || "").trim().toLowerCase();
     const rId = (r.id || "").trim().toLowerCase();
+
+    const cleanMov = mov.replace(/^nash-/, "").replace(/[-_/\s]/g, "");
+    const cleanRef = ref.replace(/^nash-/, "").replace(/[-_/\s]/g, "");
+
     return (
       bId === idLower ||
       mov === idLower ||
       ref === idLower ||
       rId === idLower ||
+      (cleanId.length > 3 && (cleanMov === cleanId || cleanRef === cleanId)) ||
       (idLower.length > 3 &&
-        (bId.includes(idLower) || mov.includes(idLower) || idLower.includes(mov)))
+        (bId.includes(idLower) ||
+          mov.includes(idLower) ||
+          idLower.includes(mov) ||
+          ref.includes(idLower) ||
+          idLower.includes(ref)))
     );
   });
 
@@ -2062,6 +2382,10 @@ export function getBookingForwarderSummary(
       rate: r.offerData?.ratePerContainer || r.ratePerContainer || 0,
       currency: r.offerData?.currency || r.currency || "USD",
       forwarder: r.forwarderName,
+      etd: r.offerData?.etd || (r as unknown as Record<string, unknown>).etd as string || undefined,
+      transitDays: r.offerData?.transitDays || undefined,
+      carrier: r.offerData?.carrier || undefined,
+      quote: r,
     }))
     .filter((x) => x.rate > 0);
 
@@ -2069,6 +2393,14 @@ export function getBookingForwarderSummary(
     validRates.length > 0
       ? validRates.reduce((min, curr) => (curr.rate < min.rate ? curr : min), validRates[0])
       : undefined;
+
+  // Most recent quotation received
+  const sortedByRecent = [...receivedQuotes].sort((a, b) => {
+    const timeA = new Date(a.offerData?.receivedAt || a.updatedAt || a.sentAt || 0).getTime();
+    const timeB = new Date(b.offerData?.receivedAt || b.updatedAt || b.sentAt || 0).getTime();
+    return timeB - timeA;
+  });
+  const latestQuote = sortedByRecent[0];
 
   const awarded = linked.find((r) => r.status === "AWARDED" || r.status === "ACCEPTED");
 
@@ -2097,6 +2429,10 @@ export function getBookingForwarderSummary(
     bestRate: bestRateObj?.rate,
     bestRateCurrency: bestRateObj?.currency,
     bestRateForwarder: bestRateObj?.forwarder,
+    bestEtd: bestRateObj?.etd || latestQuote?.offerData?.etd,
+    bestTransitDays: bestRateObj?.transitDays || latestQuote?.offerData?.transitDays,
+    bestCarrier: bestRateObj?.carrier || latestQuote?.offerData?.carrier,
+    latestQuote,
     overallStatus,
     lastResponseTime: dates[0],
     awardedForwarder: awarded?.forwarderName,

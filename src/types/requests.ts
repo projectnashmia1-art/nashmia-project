@@ -134,6 +134,20 @@ export interface RequestsStatsSummary {
 export type ForwarderResponseClassification =
   "OFFER_RECEIVED" | "AVAILABLE" | "NOT_AVAILABLE" | "DECLINED" | "NEEDS_REVIEW" | "CONFIRMED";
 
+/**
+ * Deterministic statuses mandated for rule-based quotation processing (Strictly NO AI confidence scores)
+ */
+export type DeterministicQuotationStatus =
+  | "confirmed"
+  | "amount_missing"
+  | "currency_missing"
+  | "range"
+  | "ambiguous"
+  | "conflict"
+  | "unreadable"
+  | "unmatched"
+  | "needs_review";
+
 export type CanonicalQuotationStatus =
   | "PENDING"
   | "OFFER_RECEIVED"
@@ -235,9 +249,26 @@ export interface ForwarderOfferData {
   manuallyCorrected?: boolean;
   correctedAt?: string;
   correctedBy?: string;
+
+  // 16 Standard Quotation Processing Fields
+  oceanFreight?: number;
+  originCharges?: number;
+  destinationCharges?: number;
+  thc?: number;
+  documentationCharges?: number;
+  customsCharges?: number;
+  truckingCharges?: number;
+  otherCharges?: number;
+  totalAmount?: number;
+  sailingDate?: string;
+  validityDate?: string;
+  routing?: string;
+
   // Traceability & rule-based engine metadata
   traceability?: Record<string, unknown>;
   reviewReasons?: string[];
+  deterministicStatus?: DeterministicQuotationStatus;
+  deterministicStatuses?: DeterministicQuotationStatus[];
   confidenceScore?: number;
   hasConflicts?: boolean;
   needsReview?: boolean;

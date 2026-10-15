@@ -49,7 +49,7 @@ interface TrackingAlertsModalProps {
 export function TrackingAlertsModal({
   open,
   onOpenChange,
-  movementRef = "STWLS26123730",
+  movementRef = "",
   booking,
   initialTab = "alerts",
   onSubscribedChange,
@@ -144,7 +144,7 @@ export function TrackingAlertsModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[95vw] max-w-[620px] p-0 overflow-hidden rounded-[26px] border border-slate-200 bg-white shadow-2xl focus:outline-none">
+      <DialogContent className="w-full sm:max-w-[620px] max-h-[92vh] flex flex-col p-0 overflow-hidden sm:rounded-[26px] bg-white shadow-2xl focus:outline-none">
         {/* Modal Header */}
         <div className="p-5 sm:p-6 pb-4 border-b border-slate-100 flex items-start justify-between bg-slate-50/60">
           <div>

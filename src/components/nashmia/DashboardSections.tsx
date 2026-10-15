@@ -453,8 +453,8 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
     queryKey: ["dashboard-bookings", userId],
     queryFn: () => fetchBookingsFromSupabase(userId),
     enabled: true,
-    staleTime: 1000 * 5, // 5s cache freshness to ensure instant UI reactivity
-    gcTime: 1000 * 60 * 10,
+    staleTime: 1000 * 60 * 5, // 5m cache freshness ensures instant UI rendering on navigation
+    gcTime: 1000 * 60 * 60,
   });
 
   const {

@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useCallback, useEffect, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useSupabaseRealtime } from "@/hooks/use-supabase-realtime";
 import { isSupabaseConfigured } from "@/lib/supabase";
@@ -14,100 +14,92 @@ export function GlobalRealtimeProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
 
   // Helper to invalidate queries on change
-  const handleRealtimeChange = (tableName: string) => {
-    console.info(
-      `[Global Realtime] Postgres change on "${tableName}", invalidating query caches...`,
-    );
+  const handleRealtimeChange = useCallback(
+    (tableName: string) => {
+      console.info(
+        `[Global Realtime] Postgres change on "${tableName}", invalidating query caches...`,
+      );
 
-    if (
-      tableName === "bookings" ||
-      tableName === "booking_containers" ||
-      tableName === "booking_events"
-    ) {
-      void queryClient.invalidateQueries({ queryKey: ["dashboard-bookings"] });
-      void queryClient.invalidateQueries({ queryKey: ["dashboard-requests"] });
-      void queryClient.invalidateQueries({ queryKey: ["dashboard-metrics"] });
-      void queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
-    }
+      if (
+        tableName === "bookings" ||
+        tableName === "booking_containers" ||
+        tableName === "booking_events"
+      ) {
+        void queryClient.invalidateQueries({ queryKey: ["dashboard-bookings"] });
+        void queryClient.invalidateQueries({ queryKey: ["dashboard-requests"] });
+        void queryClient.invalidateQueries({ queryKey: ["dashboard-metrics"] });
+        void queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
+      }
 
-    if (tableName === "buyers") {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.buyers() });
-    }
+      if (tableName === "buyers") {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.buyers() });
+      }
 
-    if (tableName === "suppliers") {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.suppliers() });
-    }
+      if (tableName === "suppliers") {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.suppliers() });
+      }
 
-    if (tableName === "forwarders" || tableName === "rate_cards") {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.forwarders() });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.rateCards() });
-    }
+      if (tableName === "forwarders" || tableName === "rate_cards") {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.forwarders() });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.rateCards() });
+      }
 
-    if (tableName === "shipping_lines") {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.shippingLines() });
-    }
+      if (tableName === "shipping_lines") {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.shippingLines() });
+      }
 
-    if (tableName === "email_messages" || tableName === "email_threads") {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.emails() });
-    }
+      if (tableName === "email_messages" || tableName === "email_threads") {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.emails() });
+      }
 
-    if (
-      tableName === "forwarder_requests" ||
-      tableName === "quotations" ||
-      tableName === "quotation_versions"
-    ) {
-      void queryClient.invalidateQueries({ queryKey: ["all-forwarder-requests"] });
-      void queryClient.invalidateQueries({ queryKey: ["dashboard-requests"] });
-      void queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.requests() });
-    }
+      if (
+        tableName === "forwarder_requests" ||
+        tableName === "quotations" ||
+        tableName === "quotation_versions"
+      ) {
+        void queryClient.invalidateQueries({ queryKey: ["all-forwarder-requests"] });
+        void queryClient.invalidateQueries({ queryKey: ["dashboard-requests"] });
+        void queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.requests() });
+      }
 
-    if (tableName === "notifications") {
-      void queryClient.invalidateQueries({ queryKey: ["notifications"] });
-    }
-  };
+      if (tableName === "notifications") {
+        void queryClient.invalidateQueries({ queryKey: ["notifications"] });
+      }
+    },
+    [queryClient],
+  );
+
+  const onBookingsChange = useCallback(() => handleRealtimeChange("bookings"), [handleRealtimeChange]);
+  const onContainersChange = useCallback(() => handleRealtimeChange("booking_containers"), [handleRealtimeChange]);
+  const onEventsChange = useCallback(() => handleRealtimeChange("booking_events"), [handleRealtimeChange]);
+  const onBuyersChange = useCallback(() => handleRealtimeChange("buyers"), [handleRealtimeChange]);
+  const onSuppliersChange = useCallback(() => handleRealtimeChange("suppliers"), [handleRealtimeChange]);
+  const onForwardersChange = useCallback(() => handleRealtimeChange("forwarders"), [handleRealtimeChange]);
+  const onShippingLinesChange = useCallback(() => handleRealtimeChange("shipping_lines"), [handleRealtimeChange]);
+  const onRateCardsChange = useCallback(() => handleRealtimeChange("rate_cards"), [handleRealtimeChange]);
+  const onEmailMessagesChange = useCallback(() => handleRealtimeChange("email_messages"), [handleRealtimeChange]);
+  const onNotificationsChange = useCallback(() => handleRealtimeChange("notifications"), [handleRealtimeChange]);
+  const onForwarderRequestsChange = useCallback(() => handleRealtimeChange("forwarder_requests"), [handleRealtimeChange]);
+  const onQuotationsChange = useCallback(() => handleRealtimeChange("quotations"), [handleRealtimeChange]);
 
   // 1. Core Bookings & Containers Realtime
-  useSupabaseRealtime("bookings", () => handleRealtimeChange("bookings"), isSupabaseConfigured);
-  useSupabaseRealtime(
-    "booking_containers",
-    () => handleRealtimeChange("booking_containers"),
-    isSupabaseConfigured,
-  );
-  useSupabaseRealtime(
-    "booking_events",
-    () => handleRealtimeChange("booking_events"),
-    isSupabaseConfigured,
-  );
+  useSupabaseRealtime("bookings", onBookingsChange, isSupabaseConfigured);
+  useSupabaseRealtime("booking_containers", onContainersChange, isSupabaseConfigured);
+  useSupabaseRealtime("booking_events", onEventsChange, isSupabaseConfigured);
 
   // 2. Master Directories Realtime
-  useSupabaseRealtime("buyers", () => handleRealtimeChange("buyers"), isSupabaseConfigured);
-  useSupabaseRealtime("suppliers", () => handleRealtimeChange("suppliers"), isSupabaseConfigured);
-  useSupabaseRealtime("forwarders", () => handleRealtimeChange("forwarders"), isSupabaseConfigured);
-  useSupabaseRealtime(
-    "shipping_lines",
-    () => handleRealtimeChange("shipping_lines"),
-    isSupabaseConfigured,
-  );
-  useSupabaseRealtime("rate_cards", () => handleRealtimeChange("rate_cards"), isSupabaseConfigured);
+  useSupabaseRealtime("buyers", onBuyersChange, isSupabaseConfigured);
+  useSupabaseRealtime("suppliers", onSuppliersChange, isSupabaseConfigured);
+  useSupabaseRealtime("forwarders", onForwardersChange, isSupabaseConfigured);
+  useSupabaseRealtime("shipping_lines", onShippingLinesChange, isSupabaseConfigured);
+  useSupabaseRealtime("rate_cards", onRateCardsChange, isSupabaseConfigured);
 
   // 3. Communications & Quotations Realtime
-  useSupabaseRealtime(
-    "email_messages",
-    () => handleRealtimeChange("email_messages"),
-    isSupabaseConfigured,
-  );
-  useSupabaseRealtime(
-    "notifications",
-    () => handleRealtimeChange("notifications"),
-    isSupabaseConfigured,
-  );
-  useSupabaseRealtime(
-    "forwarder_requests",
-    () => handleRealtimeChange("forwarder_requests"),
-    isSupabaseConfigured,
-  );
-  useSupabaseRealtime("quotations", () => handleRealtimeChange("quotations"), isSupabaseConfigured);
+  useSupabaseRealtime("email_messages", onEmailMessagesChange, isSupabaseConfigured);
+  useSupabaseRealtime("notifications", onNotificationsChange, isSupabaseConfigured);
+  useSupabaseRealtime("forwarder_requests", onForwarderRequestsChange, isSupabaseConfigured);
+  useSupabaseRealtime("quotations", onQuotationsChange, isSupabaseConfigured);
 
   // 4. Listen for cross-tab and in-window custom events with debounced targeted invalidation
   useEffect(() => {

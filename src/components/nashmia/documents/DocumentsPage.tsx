@@ -25,6 +25,7 @@ import {
   Link as LinkIcon,
   Check,
   Plus,
+  ExternalLink,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -45,10 +46,10 @@ import { ManualReviewLinkModal } from "./ManualReviewLinkModal";
 import { FileThumbnailIcon } from "./FileThumbnailIcon";
 import { useSupabaseRealtime } from "@/hooks/use-supabase-realtime";
 import { isSupabaseConfigured } from "@/lib/supabase";
+import { useAuth } from "@/lib/auth-context";
 import {
   INITIAL_FOLDERS,
   INITIAL_FILES,
-  INITIAL_OWNERS,
   getSavedDocuments,
   saveDriveDocument,
   removeDriveDocument,
@@ -65,6 +66,8 @@ type SortField = "document" | "movement" | "documentType" | "forwarder" | "recei
 type SortOrder = "asc" | "desc";
 
 export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
+  const { organizationId } = useAuth();
+
   // State
   const [folders, setFolders] = useState<DriveFolder[]>(INITIAL_FOLDERS);
   const [files, setFiles] = useState<DriveFile[]>(INITIAL_FILES);
@@ -125,6 +128,7 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
   const blCount = useMemo(() => {
     return files.filter(
       (f) =>
+        f.metadata?.typeTag === "BL" ||
         f.metadata?.typeTag === "Bill of Lading" ||
         f.metadata?.category === "Bill of Lading" ||
         f.metadata?.documentType?.toLowerCase().includes("bill of lading") ||
@@ -142,7 +146,8 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
   const availableMovements = useMemo(() => {
     const set = new Set<string>();
     files.forEach((f) => {
-      if (f.metadata?.movementNumber) set.add(f.metadata.movementNumber);
+      const mov = f.metadata?.movementNumber || f.metadata?.movementReferenceNumber;
+      if (mov && mov !== "—") set.add(mov);
     });
     return Array.from(set).sort();
   }, [files]);
@@ -150,7 +155,8 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
   const availableForwarders = useMemo(() => {
     const set = new Set<string>();
     files.forEach((f) => {
-      if (f.metadata?.forwarderName) set.add(f.metadata.forwarderName);
+      const fwd = f.metadata?.forwarderName || f.metadata?.forwarder;
+      if (fwd) set.add(fwd);
     });
     return Array.from(set).sort();
   }, [files]);
@@ -168,6 +174,7 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
         if (!isCutoff) return false;
       } else if (activeStatFilter === "bl") {
         const isBL =
+          file.metadata?.typeTag === "BL" ||
           file.metadata?.typeTag === "Bill of Lading" ||
           file.metadata?.category === "Bill of Lading" ||
           file.name.toLowerCase().includes("bl_") ||
@@ -181,6 +188,7 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
           file.name.toLowerCase().includes("cutoff") ||
           file.name.toLowerCase().includes("cut-off");
         const isBL =
+          file.metadata?.typeTag === "BL" ||
           file.metadata?.typeTag === "Bill of Lading" ||
           file.metadata?.category === "Bill of Lading" ||
           file.name.toLowerCase().includes("bl_") ||
@@ -189,39 +197,79 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
         if (isCutoff || isBL) return false;
       }
 
-      // 2. Search query
+      // 2. Search query (Locate by Document Name, Movement Number, Original Filename, Forwarder, Source Email, Doc Type)
       if (searchQuery.trim()) {
         const query = searchQuery.toLowerCase().trim();
         const matchesName = file.name.toLowerCase().includes(query);
-        const matchesMov = Boolean(file.metadata?.movementNumber?.toLowerCase().includes(query));
+        const matchesOriginalName = Boolean(
+          file.metadata?.originalFilename?.toLowerCase().includes(query),
+        );
+        const matchesMov = Boolean(
+          file.metadata?.movementNumber?.toLowerCase().includes(query) ||
+          file.metadata?.movementReferenceNumber?.toLowerCase().includes(query) ||
+          file.metadata?.bookingId?.toLowerCase().includes(query),
+        );
         const matchesVessel = Boolean(file.metadata?.vesselName?.toLowerCase().includes(query));
-        const matchesFwd = Boolean(file.metadata?.forwarderName?.toLowerCase().includes(query));
-        const matchesDocType = Boolean(file.metadata?.documentType?.toLowerCase().includes(query));
-        if (!matchesName && !matchesMov && !matchesVessel && !matchesFwd && !matchesDocType) {
+        const matchesFwd = Boolean(
+          file.metadata?.forwarderName?.toLowerCase().includes(query) ||
+          file.metadata?.forwarder?.toLowerCase().includes(query) ||
+          file.metadata?.senderEmail?.toLowerCase().includes(query) ||
+          file.metadata?.sourceEmail?.toLowerCase().includes(query),
+        );
+        const matchesDocType = Boolean(
+          file.metadata?.documentType?.toLowerCase().includes(query) ||
+          file.metadata?.displayDocumentType?.toLowerCase().includes(query) ||
+          file.metadata?.typeTag?.toLowerCase().includes(query) ||
+          file.metadata?.category?.toLowerCase().includes(query),
+        );
+        if (
+          !matchesName &&
+          !matchesOriginalName &&
+          !matchesMov &&
+          !matchesVessel &&
+          !matchesFwd &&
+          !matchesDocType
+        ) {
           return false;
         }
       }
 
-      // 3. Movement filter
+      // 3. Movement filter (Locate documents by Movement Number)
       if (selectedMovement !== "all") {
-        if (file.metadata?.movementNumber !== selectedMovement) return false;
+        const fileMov = file.metadata?.movementNumber || file.metadata?.movementReferenceNumber;
+        if (fileMov !== selectedMovement) return false;
       }
 
       // 4. Document Type filter
       if (selectedDocType !== "all") {
-        const tag = (file.metadata?.typeTag || file.metadata?.documentType || "").toLowerCase();
+        const tag = (
+          file.metadata?.typeTag ||
+          file.metadata?.documentType ||
+          file.metadata?.displayDocumentType ||
+          file.metadata?.category ||
+          ""
+        ).toLowerCase();
         if (!tag.includes(selectedDocType.toLowerCase())) return false;
       }
 
       // 5. Forwarder filter
       if (selectedForwarder !== "all") {
-        if (file.metadata?.forwarderName !== selectedForwarder) return false;
+        const fileFwd = (
+          file.metadata?.forwarderName ||
+          file.metadata?.forwarder ||
+          ""
+        ).toLowerCase();
+        if (fileFwd !== selectedForwarder.toLowerCase()) return false;
       }
 
       // 6. Status filter
       if (selectedStatus !== "all") {
-        const status = (file.metadata?.status || "Processed").toLowerCase();
-        if (status !== selectedStatus.toLowerCase()) return false;
+        const status = (
+          file.metadata?.uploadStatus ||
+          file.metadata?.status ||
+          "Processed"
+        ).toLowerCase();
+        if (!status.includes(selectedStatus.toLowerCase())) return false;
       }
 
       return true;
@@ -325,18 +373,71 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
     setPreviewDialogOpen(true);
   };
 
+  const handleOpenStoredDocument = (file: DriveFile) => {
+    const targetUrl = file.url || file.metadata?.fileUrl;
+    if (targetUrl && targetUrl !== "#") {
+      window.open(targetUrl, "_blank", "noopener,noreferrer");
+      toast.info(`Opening stored document: "${file.name}"`);
+    } else {
+      handlePreviewFile(file);
+    }
+  };
+
   const handleDownloadFile = (file: DriveFile) => {
-    if (file.metadata?.isMetadataOnly || file.metadata?.status === "Metadata Saved") {
-      toast.info(
-        `Metadata record for "${file.name}" is saved. Original file binary is not stored.`,
-      );
+    // 1. If file has a storagePath in Supabase Storage, use secure authorized download proxy
+    if (file.metadata?.storagePath) {
+      const a = document.createElement("a");
+      const orgParam = organizationId ? `&organizationId=${encodeURIComponent(organizationId)}` : "";
+      a.href = `/api/documents/download?path=${encodeURIComponent(file.metadata.storagePath)}${orgParam}`;
+      a.download = file.metadata?.originalFilename || file.metadata?.fileName || file.name;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      toast.success(`Downloading ${file.name}`);
       return;
     }
-    const dummy = document.createElement("a");
-    dummy.href = "#";
-    dummy.download = file.name;
-    dummy.click();
-    toast.success(`Downloading ${file.name}`);
+
+    // 2. If it's a Gmail attachment with messageId and attachmentId, download directly from Gmail attachment API
+    const msgId = file.metadata?.gmailMessageId || file.metadata?.emailMessageId;
+    const attId = (file.metadata as Record<string, unknown>)?.attachmentId as string | undefined;
+    if (msgId && attId) {
+      const filename = file.metadata?.originalFilename || file.metadata?.fileName || file.name;
+      const downloadEndpoint = `/api/gmail/attachment?messageId=${encodeURIComponent(msgId)}&attachmentId=${encodeURIComponent(attId)}&filename=${encodeURIComponent(filename)}&mimeType=${encodeURIComponent(file.metadata?.fileFormat || "application/octet-stream")}`;
+      const a = document.createElement("a");
+      a.href = downloadEndpoint;
+      a.download = filename;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      toast.success(`Downloading ${file.name}`);
+      return;
+    }
+
+    // 3. If file has a valid direct URL
+    const downloadUrl = file.url || file.metadata?.fileUrl || file.sharedLink;
+    if (
+      downloadUrl &&
+      downloadUrl !== "#" &&
+      !downloadUrl.startsWith("https://drive.nashmia.com")
+    ) {
+      const a = document.createElement("a");
+      a.href = downloadUrl;
+      a.download = file.metadata?.originalFilename || file.metadata?.fileName || file.name;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      toast.success(`Downloading ${file.name}`);
+      return;
+    }
+
+    // 4. If attachment has not completed synchronization yet, display actual processing status instead of fake data
+    toast.info(`Document "${file.name}" is synchronizing from forwarder email. File content will be ready once retrieved.`);
   };
 
   const handleShareItem = (item: DriveFile | DriveFolder) => {
@@ -394,13 +495,13 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
             name: `Cut-Off_${movNumber}.pdf`,
             type: "pdf",
             extension: "pdf",
-            owners: [INITIAL_OWNERS.alex],
+            owners: [],
             lastModified: "Just now",
             lastModifiedTimestamp: new Date().toISOString(),
             fileSize: "410 KB",
             folderId: "folder-design",
             starred: true,
-            sharedLink: `https://drive.nashmia.com/f/cutoff-${movNumber.toLowerCase()}`,
+            sharedLink: `/documents?movement=${encodeURIComponent(movNumber)}`,
             metadata: {
               category: "Cut-Off Notice",
               documentType: "Cut-Off",
@@ -435,6 +536,7 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
       const parsed = typeof rawPayload === "string" ? JSON.parse(rawPayload) : rawPayload;
       if (parsed?.document && parsed.document.id) {
         const doc = parsed.document as DriveFile;
+        saveDriveDocument(doc);
         setFiles((prev) => {
           const filtered = prev.filter((f) => f.id !== doc.id);
           return [doc, ...filtered];
@@ -453,25 +555,59 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
     const initialDocs = getSavedDocuments();
     setFiles(initialDocs);
 
-    fetch("/api/documents")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (data && Array.isArray(data.files) && data.files.length > 0) {
-          const initialMap = new Map(INITIAL_FILES.map((f) => [f.id, f]));
-          const currentLocal = getSavedDocuments();
-          const currentMap = new Map(currentLocal.map((f) => [f.id, f]));
+    const syncFromServer = () => {
+      const headers: Record<string, string> = {};
+      if (organizationId) {
+        headers["x-organization-id"] = organizationId;
+      }
+      const fetchUrl = organizationId
+        ? `/api/documents?organizationId=${encodeURIComponent(organizationId)}`
+        : "/api/documents";
 
-          for (const serverFile of data.files) {
-            if (!initialMap.has(serverFile.id) && !currentMap.has(serverFile.id)) {
-              saveDriveDocument(serverFile);
+      fetch(fetchUrl, { headers })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data && Array.isArray(data.files) && data.files.length > 0) {
+            const currentLocal = getSavedDocuments();
+            const currentMap = new Map(currentLocal.map((f) => [f.id, f]));
+            let hasNewOrUpdated = false;
+
+            for (const serverFile of data.files) {
+              const existing = currentMap.get(serverFile.id);
+              if (!existing) {
+                saveDriveDocument(serverFile);
+                hasNewOrUpdated = true;
+              } else if (
+                (!existing.url && serverFile.url) ||
+                (!existing.metadata?.fileUrl && serverFile.metadata?.fileUrl) ||
+                (serverFile.metadata?.uploadStatus &&
+                  serverFile.metadata?.uploadStatus !== existing.metadata?.uploadStatus)
+              ) {
+                const merged: DriveFile = {
+                  ...existing,
+                  ...serverFile,
+                  metadata: {
+                    ...existing.metadata,
+                    ...serverFile.metadata,
+                  },
+                };
+                saveDriveDocument(merged);
+                hasNewOrUpdated = true;
+              }
+            }
+            if (hasNewOrUpdated) {
+              setFiles(getSavedDocuments());
             }
           }
-          setFiles(getSavedDocuments());
-        }
-      })
-      .catch(() => {
-        // Silently use client documents
-      });
+        })
+        .catch(() => {
+          // Silently use client documents
+        });
+    };
+
+    syncFromServer();
+    // Continuous background sync interval so incoming documents appear without requiring manual page refresh
+    const pollInterval = setInterval(syncFromServer, 4000);
 
     const handleDocumentSaved = (e: Event) => {
       const customEvent = e as CustomEvent<DriveFile>;
@@ -495,14 +631,25 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
       setFiles(current);
     };
 
+    const handleStorageUpdate = (e: StorageEvent) => {
+      if (e.key === DOCUMENTS_STORAGE_KEY) {
+        setFiles(getSavedDocuments());
+      }
+    };
+
     window.addEventListener("nashmia:document-saved", handleDocumentSaved);
+    window.addEventListener("nashmia:attachment-saved", handleDocumentSaved);
     window.addEventListener("nashmia:document-deleted", handleDocumentDeleted);
     window.addEventListener("nashmia_movement_cutoff_updated", handleCutoffUpdated);
+    window.addEventListener("storage", handleStorageUpdate);
 
     return () => {
+      clearInterval(pollInterval);
       window.removeEventListener("nashmia:document-saved", handleDocumentSaved);
+      window.removeEventListener("nashmia:attachment-saved", handleDocumentSaved);
       window.removeEventListener("nashmia:document-deleted", handleDocumentDeleted);
       window.removeEventListener("nashmia_movement_cutoff_updated", handleCutoffUpdated);
+      window.removeEventListener("storage", handleStorageUpdate);
     };
   }, []);
 
@@ -525,6 +672,20 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
       return (
         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-[#F4EFFE] text-[#9333EA]">
           BL
+        </span>
+      );
+    }
+    if (val === "Booking Confirmation") {
+      return (
+        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-[#E0F2FE] text-[#0284C7]">
+          Booking Confirmation
+        </span>
+      );
+    }
+    if (val === "Shipping Instructions") {
+      return (
+        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-[#FEF3C7] text-[#D97706]">
+          Shipping Instructions
         </span>
       );
     }
@@ -658,11 +819,12 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
               }}
               options={[
                 { value: "all", label: "All Types" },
-                { value: "Cut-Off", label: "Cut-Off" },
+                { value: "Booking Confirmation", label: "Booking Confirmation" },
                 { value: "Bill of Lading", label: "Bill of Lading" },
+                { value: "Shipping Instructions", label: "Shipping Instructions" },
+                { value: "Cut-Off", label: "Cut-Off Notice" },
                 { value: "Invoice", label: "Commercial Invoice" },
                 { value: "Packing List", label: "Packing List" },
-                { value: "Instructions", label: "Shipping Instructions" },
                 { value: "Other", label: "Other" },
               ]}
               placeholder="All Types"
@@ -1001,12 +1163,26 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
                         <div className="flex items-center gap-3">
                           {renderDocumentBadge(file)}
                           <div className="flex flex-col min-w-0">
-                            <span
-                              className="font-medium text-[13.5px] text-slate-900 truncate max-w-[220px] group-hover:text-blue-600 transition-colors"
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handlePreviewFile(file);
+                              }}
+                              className="font-medium text-[13.5px] text-slate-900 truncate max-w-[220px] hover:text-blue-600 transition-colors text-left cursor-pointer"
                               title={file.name}
                             >
                               {file.name}
-                            </span>
+                            </button>
+                            {file.metadata?.originalFilename &&
+                            file.metadata.originalFilename !== file.name ? (
+                              <span
+                                className="text-[10.5px] text-slate-400 font-mono truncate max-w-[220px]"
+                                title={`Original filename: ${file.metadata.originalFilename}`}
+                              >
+                                Orig: {file.metadata.originalFilename}
+                              </span>
+                            ) : null}
                             <span className="text-[11.5px] text-slate-400 font-normal">
                               {fileFormat} &bull; {file.fileSize}
                             </span>
@@ -1017,9 +1193,25 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
                       {/* Movement Reference Number */}
                       <td className="px-4 py-4.5">
                         <div className="flex flex-col">
-                          <span className="font-medium text-[13px] text-slate-900 font-mono">
-                            {movement}
-                          </span>
+                          {movement !== "—" ? (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedMovement(movement);
+                                setCurrentPage(1);
+                                toast.info(`Filtered documents for Movement ${movement}`);
+                              }}
+                              className="text-left font-medium text-[13px] text-slate-900 hover:text-blue-600 font-mono transition-colors cursor-pointer"
+                              title={`Filter by Movement ${movement}`}
+                            >
+                              {movement}
+                            </button>
+                          ) : (
+                            <span className="font-medium text-[13px] text-slate-400 font-mono">
+                              —
+                            </span>
+                          )}
                           <span className="text-[11.5px] text-slate-500 font-normal">{vessel}</span>
                         </div>
                       </td>
@@ -1044,7 +1236,10 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
                             <span className="font-medium text-[13px] text-slate-900 truncate max-w-[150px]">
                               {forwarder}
                             </span>
-                            <span className="text-[11.5px] text-slate-500 font-normal truncate max-w-[150px]">
+                            <span
+                              className="text-[11.5px] text-slate-500 font-normal truncate max-w-[150px]"
+                              title={email}
+                            >
                               {email}
                             </span>
                           </div>
@@ -1066,7 +1261,12 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
 
                       {/* Status */}
                       <td className="px-4 py-4.5">
-                        {status === "Metadata Saved" ? (
+                        {status === "Saved to Supabase Storage" ||
+                        status === "Stored in Supabase" ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11.5px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/60">
+                            <Check className="size-3 text-emerald-600" /> Stored in Supabase
+                          </span>
+                        ) : status === "Metadata Saved" ? (
                           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11.5px] font-semibold bg-blue-50 text-blue-700 border border-blue-200/60">
                             Metadata Saved
                           </span>
@@ -1091,10 +1291,20 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
                         onClick={(e) => e.stopPropagation()}
                       >
                         <div className="flex items-center justify-end gap-1">
+                          {(file.url || file.metadata?.fileUrl) && (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenStoredDocument(file)}
+                              title="Open Stored Document"
+                              className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
+                            >
+                              <ExternalLink className="size-4" />
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => handlePreviewFile(file)}
-                            title="Preview Document"
+                            title="Preview Document & Details"
                             className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
                           >
                             <Eye className="size-4" />
@@ -1117,7 +1327,23 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
                                 <MoreVertical className="size-4" />
                               </button>
                             </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end" className="w-48 text-xs">
+                            <DropdownMenuContent align="end" className="w-52 text-xs">
+                              {(file.url || file.metadata?.fileUrl) && (
+                                <DropdownMenuItem
+                                  onClick={() => handleOpenStoredDocument(file)}
+                                  className="gap-2 cursor-pointer font-medium text-blue-700"
+                                >
+                                  <ExternalLink className="size-3.5 text-blue-600" />
+                                  Open Stored Document
+                                </DropdownMenuItem>
+                              )}
+                              <DropdownMenuItem
+                                onClick={() => handleDownloadFile(file)}
+                                className="gap-2 cursor-pointer"
+                              >
+                                <Download className="size-3.5 text-slate-500" />
+                                Download File
+                              </DropdownMenuItem>
                               <DropdownMenuItem
                                 onClick={() => handlePreviewFile(file)}
                                 className="gap-2 cursor-pointer"
@@ -1126,11 +1352,14 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
                                 Preview Document
                               </DropdownMenuItem>
                               <DropdownMenuItem
-                                onClick={() => handleDownloadFile(file)}
+                                onClick={() => {
+                                  setActiveItemForDetails({ file, folder: null });
+                                  setDetailsDrawerOpen(true);
+                                }}
                                 className="gap-2 cursor-pointer"
                               >
-                                <Download className="size-3.5 text-slate-500" />
-                                Download File
+                                <FileText className="size-3.5 text-slate-500" />
+                                View Document Details
                               </DropdownMenuItem>
                               <DropdownMenuItem
                                 onClick={() => handleShareItem(file)}
@@ -1142,7 +1371,7 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
                               <DropdownMenuItem
                                 onClick={() => {
                                   navigator.clipboard.writeText(
-                                    file.sharedLink || window.location.href,
+                                    file.sharedLink || file.url || window.location.href,
                                   );
                                   toast.success("Link copied to clipboard");
                                 }}

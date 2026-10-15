@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -26,6 +26,7 @@ import { ForwarderAccount } from "@/lib/forwarders-data";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { Link } from "@tanstack/react-router";
+import { useSwipeToDismiss } from "@/hooks/use-swipe-to-dismiss";
 
 interface ForwarderDetailDrawerProps {
   open: boolean;
@@ -52,6 +53,22 @@ export function ForwarderDetailDrawer({
 }: ForwarderDetailDrawerProps) {
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"overview" | "rates" | "bookings">("overview");
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(typeof window !== "undefined" ? window.innerWidth < 640 : false);
+    };
+    checkMobile();
+    window.addEventListener("resize", checkMobile);
+    return () => window.removeEventListener("resize", checkMobile);
+  }, []);
+
+  const { elementRef, handleRef } = useSwipeToDismiss<HTMLDivElement>({
+    direction: "down",
+    onDismiss: () => onOpenChange(false),
+    enabled: isMobile && open,
+  });
 
   // Lock body scroll and handle Escape key when drawer is open
   useEffect(() => {
@@ -95,14 +112,23 @@ export function ForwarderDetailDrawer({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-3 sm:p-4 backdrop-blur-sm animate-in fade-in"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 p-0 sm:p-4 backdrop-blur-sm animate-in fade-in"
       onClick={(e) => {
         if (e.target === e.currentTarget) {
           onOpenChange(false);
         }
       }}
     >
-      <div className="glass-card-strong relative flex max-h-[92vh] w-full max-w-3xl flex-col rounded-[28px] border border-white/90 bg-white p-0 shadow-2xl animate-in zoom-in-95 overflow-hidden">
+      <div className="glass-card-strong relative flex max-h-[92vh] w-full max-w-3xl flex-col rounded-t-[28px] rounded-b-none sm:rounded-[28px] border-t sm:border border-white/90 bg-white p-0 shadow-2xl animate-in slide-in-from-bottom sm:slide-in-from-bottom-0 sm:zoom-in-95 duration-240 ease-[cubic-bezier(0.16,1,0.3,1)] overflow-hidden outline-none">
+        {/* Mobile Tactile Drag Handle */}
+        <div
+          data-swipe-handle="true"
+          className="mx-auto pt-2 pb-1 flex h-6 w-full max-w-[140px] cursor-grab touch-none items-center justify-center sm:hidden select-none shrink-0 bg-gradient-to-r from-slate-50/90 via-white to-[#E8F1F3]/40"
+          aria-label="Drag down to dismiss"
+        >
+          <div className="h-1.5 w-12 rounded-full bg-slate-300" />
+        </div>
+
         {/* HEADER SECTION */}
         <div className="relative border-b border-slate-100/90 bg-gradient-to-r from-slate-50/90 via-white to-[#E8F1F3]/40 p-5 sm:p-6 pb-4 shrink-0">
           <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">

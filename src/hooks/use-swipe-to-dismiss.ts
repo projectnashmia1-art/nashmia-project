@@ -1,4 +1,9 @@
 import { useEffect, useRef, useCallback } from "react";
+export {
+  useVerticalSwipeGesture,
+  type VerticalSwipeGestureOptions,
+  type VerticalSwipeGestureResult,
+} from "./use-vertical-swipe-gesture";
 
 export interface SwipeToDismissOptions {
   onDismiss: () => void;
@@ -7,6 +12,36 @@ export interface SwipeToDismissOptions {
   velocityThreshold?: number; // Minimum velocity in px/ms to trigger dismiss (default: 0.35)
   enabled?: boolean;
   onDragProgress?: (progress: number) => void;
+  onlyHandle?: boolean; // When true, only dragging via the drag handle triggers dismiss
+}
+
+function isScrollableNode(node: HTMLElement): boolean {
+  if (!node || node === document.body || node === document.documentElement) {
+    return false;
+  }
+  try {
+    const style = window.getComputedStyle(node);
+    const overflowY = style.overflowY;
+    const isScrollableType =
+      overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay";
+    return isScrollableType && node.scrollHeight > node.clientHeight + 1;
+  } catch {
+    return false;
+  }
+}
+
+function hasScrolledParent(target: HTMLElement, boundary: HTMLElement): boolean {
+  let curr: HTMLElement | null = target;
+  while (curr && curr !== boundary && curr !== document.body) {
+    if (isScrollableNode(curr) && curr.scrollTop > 1) {
+      return true;
+    }
+    curr = curr.parentElement;
+  }
+  if (boundary && isScrollableNode(boundary) && boundary.scrollTop > 1) {
+    return true;
+  }
+  return false;
 }
 
 export function useSwipeToDismiss<T extends HTMLElement = HTMLElement>({
@@ -16,6 +51,7 @@ export function useSwipeToDismiss<T extends HTMLElement = HTMLElement>({
   velocityThreshold = 0.35,
   enabled = true,
   onDragProgress,
+  onlyHandle = false,
 }: SwipeToDismissOptions) {
   const elementRef = useRef<T | null>(null);
   const handleRef = useRef<HTMLElement | null>(null);
@@ -113,10 +149,34 @@ export function useSwipeToDismiss<T extends HTMLElement = HTMLElement>({
         Boolean(target.closest("[data-swipe-handle]")) ||
         Boolean(target.getAttribute("data-swipe-handle"));
 
-      const isScrolledToTop = el.scrollTop <= 2;
+      // Prevent accidental dismissal when users interact with form inputs, buttons, sliders, or comboboxes
+      const isInteractiveInput = Boolean(
+        target.closest(
+          "input, textarea, select, [contenteditable='true'], [role='combobox'], [role='slider'], button, a, [data-prevent-swipe]",
+        ),
+      );
+
+      // If user is interacting with an input or form control and did not touch the drag handle, ignore swipe
+      if (isInteractiveInput && !isHandle) {
+        isEligibleForDragRef.current = false;
+        return;
+      }
+
+      // If onlyHandle mode is enabled, only direct handle touches trigger dismiss
+      if (onlyHandle && !isHandle) {
+        isEligibleForDragRef.current = false;
+        return;
+      }
+
+      // If scrolled down inside any inner scrollable container or modal, forbid drag
+      const isScrolledDown = hasScrolledParent(target, el);
+      if (isScrolledDown && !isHandle) {
+        isEligibleForDragRef.current = false;
+        return;
+      }
 
       isDirectHandleTouchRef.current = Boolean(isHandle);
-      isEligibleForDragRef.current = Boolean(isHandle || isScrolledToTop);
+      isEligibleForDragRef.current = Boolean(isHandle || !isScrolledDown);
       startPosRef.current = { x: clientX, y: clientY, time: Date.now() };
       lastPosRef.current = { x: clientX, y: clientY, time: Date.now() };
       isDraggingRef.current = false;
@@ -276,6 +336,7 @@ export function useSwipeToDismiss<T extends HTMLElement = HTMLElement>({
     applyTransform,
     resetTransform,
     triggerDismissAnimation,
+    onlyHandle,
   ]);
 
   return {

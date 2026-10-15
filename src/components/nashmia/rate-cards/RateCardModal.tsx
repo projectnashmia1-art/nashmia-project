@@ -173,8 +173,9 @@ export function RateCardModal({
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
+        hideCloseButton
         className={cn(
-          "w-[95vw] max-w-[95vw] sm:max-w-[560px] max-h-[90vh] flex flex-col p-0 overflow-hidden rounded-[24px] sm:rounded-[28px] border border-slate-100 bg-white shadow-2xl focus:outline-none",
+          "w-full sm:max-w-[560px] max-h-[92vh] flex flex-col p-0 overflow-hidden sm:rounded-[28px] bg-white shadow-2xl focus:outline-none",
           isSuccess && "sm:max-w-[420px]",
         )}
       >
@@ -374,9 +375,7 @@ export function RateCardModal({
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-[12px] font-semibold text-slate-600">
-                    Currency
-                  </label>
+                  <label className="text-[12px] font-semibold text-slate-600">Currency</label>
                   <div className="relative">
                     <select
                       value={currency}

@@ -12,7 +12,13 @@ import {
   processIncomingEmailAttachments,
   classifyAttachmentWithContent,
   determineFileType,
+  createDocumentSignedUrl,
+  sanitizeFilename,
 } from "./lib/document-attachment-service.ts";
+import {
+  saveCutOffDataToDatabase,
+  getCutOffDataFromDatabase,
+} from "./lib/movement-cutoff-service.ts";
 import { INITIAL_FILES, type DriveFile } from "./components/nashmia/documents/documents-data.ts";
 import { supabase } from "./lib/supabase.ts";
 import {
@@ -50,6 +56,7 @@ import {
   validateQuotationForBackendAction,
 } from "./lib/quotation-extractor.ts";
 import { processRawEmailContent } from "./lib/extraction/index.ts";
+import { handleQuotationsApiRequest } from "./lib/api-quotations-router.ts";
 
 import { createStartHandler, defaultStreamHandler } from "@tanstack/react-start/server";
 
@@ -61,7 +68,11 @@ const apiCorsHeaders = {
   "Access-Control-Allow-Headers": "authorization, content-type, apikey, x-client-info",
 };
 
-// h3 swallows in-handler throws into a normal 500 Response with body
+// Supabase dynamic query runner for non-strict server tables
+const dbUntyped = supabase as unknown as {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  from: (table: string) => any;
+};
 // {"unhandled":true,"message":"HTTPError"} — try/catch alone never fires for those.
 async function normalizeCatastrophicSsrResponse(response: Response): Promise<Response> {
   if (response.status < 500) return response;
@@ -140,6 +151,12 @@ export default {
           status: 200,
           headers: { ...apiCorsHeaders, "Content-Type": "application/json" },
         });
+      }
+
+      // Quotation & Incoming Email REST API Router
+      const quotationsApiResponse = await handleQuotationsApiRequest(request, url);
+      if (quotationsApiResponse) {
+        return quotationsApiResponse;
       }
 
       // In-memory cache & fallback bookings for ultra-fast response and network timeout resilience
@@ -641,10 +658,15 @@ export default {
                 b.is_movement_confirmed === true ||
                 Boolean(b.confirmed_at);
 
-              const supName = (b.supplier_name as string) || supplierObj?.name || supplierObj?.company_name || "";
-              const byrName = (b.buyer_name as string) || buyerObj?.name || buyerObj?.company_name || "";
+              const supName =
+                (b.supplier_name as string) || supplierObj?.name || supplierObj?.company_name || "";
+              const byrName =
+                (b.buyer_name as string) || buyerObj?.name || buyerObj?.company_name || "";
               const fwdName = isConfirmed
-                ? ((b.forwarder_name as string) || forwarderObj?.name || forwarderObj?.company_name || "")
+                ? (b.forwarder_name as string) ||
+                  forwarderObj?.name ||
+                  forwarderObj?.company_name ||
+                  ""
                 : "Pending Award";
 
               return {
@@ -731,7 +753,7 @@ export default {
             existingBooking?.reference ||
             (targetId.startsWith("MOV-") || targetId.startsWith("NASH-")
               ? targetId
-              : "MOV-2026-00001");
+              : "NASH-BK-2026-7023");
 
           const dbBookingId = existingBooking?.id || targetId;
 
@@ -823,7 +845,7 @@ export default {
           return new Response(
             JSON.stringify({
               success: true,
-              movementNumber: "MOV-2026-00001",
+              movementNumber: "NASH-BK-2026-7023",
               notice: msg,
             }),
             {
@@ -1508,7 +1530,7 @@ export default {
             accessToken: body.accessToken || authHeaderToken || null,
             from: body.from,
             fromName: body.fromName,
-            to: body.to,
+            to: recipient,
             toName: body.toName,
             cc: body.cc,
             bcc: body.bcc,
@@ -1642,8 +1664,8 @@ export default {
           // Fallback to active connection if no bearer token provided
           if (!accessToken) {
             const activeConn = await getOrRefreshActiveGmailConnection();
-            if (activeConn?.accessToken) {
-              accessToken = activeConn.accessToken;
+            if (activeConn?.connection?.accessToken) {
+              accessToken = activeConn.connection.accessToken;
             }
           }
 
@@ -1662,9 +1684,9 @@ export default {
           }
 
           const emailResult = await googleOAuth2GmailService.fetchEmails(accessToken, {
-            query: query || undefined,
+            query: query || "",
             maxResults,
-            pageToken,
+            pageToken: pageToken || undefined,
           });
 
           return new Response(
@@ -1685,6 +1707,149 @@ export default {
               success: false,
               error: error instanceof Error ? error.message : "Failed to fetch emails",
               emails: [],
+            }),
+            {
+              status: 500,
+              headers: { ...apiCorsHeaders, "Content-Type": "application/json" },
+            },
+          );
+        }
+      }
+
+      // Fetch / Download Real Gmail Attachment Endpoint
+      if (
+        (url.pathname === "/api/gmail/attachment" ||
+          url.pathname === "/api/gmail/attachments") &&
+        (request.method === "GET" || request.method === "POST")
+      ) {
+        try {
+          const messageId =
+            url.searchParams.get("messageId") ||
+            url.searchParams.get("message_id") ||
+            "";
+          const attachmentId =
+            url.searchParams.get("attachmentId") ||
+            url.searchParams.get("attachment_id") ||
+            "";
+          const filename =
+            url.searchParams.get("filename") ||
+            url.searchParams.get("name") ||
+            "attachment";
+          const mimeType =
+            url.searchParams.get("mimeType") ||
+            url.searchParams.get("type") ||
+            "application/octet-stream";
+          const inline = url.searchParams.get("inline") === "true";
+
+          if (!messageId || !attachmentId) {
+            return new Response(
+              JSON.stringify({
+                success: false,
+                error: "messageId and attachmentId query parameters are required",
+              }),
+              {
+                status: 400,
+                headers: { ...apiCorsHeaders, "Content-Type": "application/json" },
+              },
+            );
+          }
+
+          // Resolve access token from authorization header or active connection
+          let accessToken = "";
+          const authHeader = request.headers.get("authorization");
+          if (authHeader && authHeader.startsWith("Bearer ")) {
+            accessToken = authHeader.replace("Bearer ", "").trim();
+          }
+
+          if (!accessToken) {
+            const activeConn = await getOrRefreshActiveGmailConnection();
+            if (activeConn?.connection?.accessToken) {
+              accessToken = activeConn.connection.accessToken;
+            }
+          }
+
+          if (!accessToken) {
+            return new Response(
+              JSON.stringify({
+                success: false,
+                error: "No active Gmail credentials found. Please authenticate Gmail.",
+              }),
+              {
+                status: 401,
+                headers: { ...apiCorsHeaders, "Content-Type": "application/json" },
+              },
+            );
+          }
+
+          const fetchUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(
+            messageId,
+          )}/attachments/${encodeURIComponent(attachmentId)}`;
+
+          let gmailRes = await fetch(fetchUrl, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+
+          // Auto-refresh token if 401
+          if (!gmailRes.ok && gmailRes.status === 401) {
+            const refreshed = await getOrRefreshActiveGmailConnection(undefined, true);
+            if (refreshed?.connection?.accessToken) {
+              accessToken = refreshed.connection.accessToken;
+              gmailRes = await fetch(fetchUrl, {
+                headers: { Authorization: `Bearer ${accessToken}` },
+              });
+            }
+          }
+
+          if (!gmailRes.ok) {
+            const errText = await gmailRes.text();
+            return new Response(
+              JSON.stringify({
+                success: false,
+                error: `Gmail attachment retrieval error (${gmailRes.status}): ${errText}`,
+              }),
+              {
+                status: gmailRes.status,
+                headers: { ...apiCorsHeaders, "Content-Type": "application/json" },
+              },
+            );
+          }
+
+          const attJson = (await gmailRes.json()) as { data?: string; size?: number };
+          if (!attJson.data) {
+            return new Response(
+              JSON.stringify({
+                success: false,
+                error: "Attachment payload was empty from Gmail API.",
+              }),
+              {
+                status: 404,
+                headers: { ...apiCorsHeaders, "Content-Type": "application/json" },
+              },
+            );
+          }
+
+          const base64Clean = attJson.data.replace(/-/g, "+").replace(/_/g, "/");
+          const binaryBuffer = Buffer.from(base64Clean, "base64");
+          const safeFilename = filename.replace(/["\r\n]/g, "_");
+          const disposition = inline
+            ? `inline; filename="${safeFilename}"`
+            : `attachment; filename="${safeFilename}"`;
+
+          return new Response(binaryBuffer, {
+            status: 200,
+            headers: {
+              ...apiCorsHeaders,
+              "Content-Type": mimeType,
+              "Content-Disposition": disposition,
+              "Content-Length": String(binaryBuffer.length),
+            },
+          });
+        } catch (err: unknown) {
+          console.error("[/api/gmail/attachment] Error:", err);
+          return new Response(
+            JSON.stringify({
+              success: false,
+              error: err instanceof Error ? err.message : "Failed to retrieve Gmail attachment",
             }),
             {
               status: 500,
@@ -1726,10 +1891,10 @@ export default {
             snippet: payload.snippet || null,
             senderEmail: payload.senderEmail || payload.fromEmail || null,
             senderName: payload.senderName || null,
-            forwarderId: payload.forwarderId,
-            knownMovementNumber: payload.knownMovementNumber,
-            knownForwarderRequestId: payload.knownForwarderRequestId,
-            knownContainerType: payload.knownContainerType,
+            forwarderId: payload.forwarderId || null,
+            knownMovementNumber: payload.knownMovementNumber || null,
+            knownForwarderRequestId: payload.knownForwarderRequestId || null,
+            knownContainerType: payload.knownContainerType || null,
             gmailMessageId: payload.gmailMessageId || null,
             gmailThreadId: payload.gmailThreadId || null,
             inReplyTo: payload.inReplyTo || null,
@@ -1878,7 +2043,7 @@ export default {
 
             let threadId: string | null = payload.threadId || null;
             if (gmailThreadId && !threadId) {
-              const { data: exThread } = await supabase
+              const { data: exThread } = await dbUntyped
                 .from("email_threads")
                 .select("id")
                 .eq("gmail_thread_id", gmailThreadId)
@@ -1912,7 +2077,7 @@ export default {
             }
 
             // Check if already in email_messages
-            const { data: existingSaved } = await supabase
+            const { data: existingSaved } = await dbUntyped
               .from("email_messages")
               .select("id")
               .eq("gmail_message_id", gmailMessageId)
@@ -1920,7 +2085,7 @@ export default {
 
             let savedMsg = existingSaved;
             if (!savedMsg) {
-              const { data: newSaved, error: saveErr } = await supabase
+              const { data: newSaved, error: saveErr } = await dbUntyped
                 .from("email_messages")
                 .insert({
                   thread_id: threadId,
@@ -1931,12 +2096,14 @@ export default {
                   body,
                   direction: "Inbound",
                   gmail_message_id: gmailMessageId,
+                  attachments: payload.attachments || [],
                   raw_headers: {
                     gmail_thread_id: gmailThreadId,
                     gmail_message_id: gmailMessageId,
                     subject,
                     body,
                     from_email: senderEmail,
+                    attachments: payload.attachments || [],
                   },
                 })
                 .select()
@@ -1949,7 +2116,7 @@ export default {
                 saveErr?.message?.includes("duplicate") ||
                 saveErr?.message?.includes("already exists")
               ) {
-                const { data: found } = await supabase
+                const { data: found } = await dbUntyped
                   .from("email_messages")
                   .select("id")
                   .eq("gmail_message_id", gmailMessageId)
@@ -1986,7 +2153,7 @@ export default {
           }
 
           // Fetch message record if needed
-          const { data: emailRecord } = await supabase
+          const { data: emailRecord } = await dbUntyped
             .from("email_messages")
             .select("*")
             .eq("id", emailMessageId)
@@ -2022,7 +2189,8 @@ export default {
             },
           });
         } catch (err: unknown) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = err instanceof Error ? err.stack || err.message : String(err);
+          console.error("[/api/emails/process-reply] Error:", message);
           return new Response(JSON.stringify({ success: false, error: message }), {
             status: 500,
             headers: {
@@ -2033,22 +2201,32 @@ export default {
         }
       }
 
-      // API Route: Documents Repository (GET all documents, combining server cache, Supabase email attachment metadata, and initial files)
+      // API Route: Documents Repository (GET all documents, enforcing organization isolation, permissions, and signed URLs)
       if (url.pathname === "/api/documents" && request.method === "GET") {
         try {
+          const reqOrgId =
+            request.headers.get("x-organization-id") ||
+            url.searchParams.get("organizationId") ||
+            null;
+
           const serverDocs = getServerSavedDocuments();
           const combined = [...serverDocs];
           const seen = new Set(serverDocs.map((d) => d.id));
 
-          // Read attachment metadata saved in Supabase email_messages
+          // Read attachment metadata saved in Supabase email_messages (isolated by organization_id)
           try {
-            const { data: dbEmails } = await supabase
+            let emailQuery = dbUntyped
               .from("email_messages")
               .select(
-                "id, gmail_message_id, sender_email, sender_name, forwarder_id, movement_number, booking_id, sent_at, created_at, attachments",
+                "id, organization_id, gmail_message_id, sender_email, sender_name, forwarder_id, movement_number, booking_id, sent_at, created_at, attachments",
               )
-              .not("attachments", "is", null)
-              .limit(100);
+              .not("attachments", "is", null);
+
+            if (reqOrgId) {
+              emailQuery = emailQuery.or(`organization_id.eq.${reqOrgId},organization_id.is.null`);
+            }
+
+            const { data: dbEmails } = await emailQuery.limit(100);
 
             if (dbEmails && Array.isArray(dbEmails)) {
               for (const em of dbEmails) {
@@ -2114,31 +2292,73 @@ export default {
                       fileSize,
                       folderId: "folder-design",
                       starred: true,
-                      sharedLink: `https://drive.nashmia.com/docs/${docId}`,
-                      url: `https://drive.nashmia.com/download/${docId}`,
+                      sharedLink:
+                        (att.storageUrl as string) ||
+                        (att.fileUrl as string) ||
+                        (att.url as string) ||
+                        (att.sharedLink as string) ||
+                        (em.gmail_message_id && att.attachmentId
+                          ? `/api/gmail/attachment?messageId=${encodeURIComponent(em.gmail_message_id)}&attachmentId=${encodeURIComponent(att.attachmentId as string)}&filename=${encodeURIComponent(rawName)}`
+                          : (att.storagePath ? `/api/documents/download?path=${encodeURIComponent(att.storagePath as string)}` : "")),
+                      url:
+                        (att.storageUrl as string) ||
+                        (att.fileUrl as string) ||
+                        (att.url as string) ||
+                        (em.gmail_message_id && att.attachmentId
+                          ? `/api/gmail/attachment?messageId=${encodeURIComponent(em.gmail_message_id)}&attachmentId=${encodeURIComponent(att.attachmentId as string)}&filename=${encodeURIComponent(rawName)}`
+                          : (att.storagePath ? `/api/documents/download?path=${encodeURIComponent(att.storagePath as string)}` : "")),
                       metadata: {
                         documentType: docType,
                         displayDocumentType: docType,
                         typeTag: docType,
+                        originalFilename:
+                          (att.originalFilename as string) ||
+                          (att.fileName as string) ||
+                          (att.name as string) ||
+                          rawName,
+                        fileName: (att.fileName as string) || rawName,
                         category:
-                          docType === "Cut-Off"
+                          (att.documentCategory as string) ||
+                          (att.category as string) ||
+                          (docType === "Cut-Off"
                             ? "Cut-Off Notice"
                             : docType === "BL"
                               ? "Bill of Lading"
-                              : "Other",
+                              : docType === "Booking Confirmation"
+                                ? "Booking Confirmation"
+                                : docType === "Shipping Instructions"
+                                  ? "Shipping Instructions"
+                                  : "Other"),
                         movementNumber: movementNum,
                         movementReferenceNumber: movementNum,
+                        bookingId:
+                          (att.linkedBookingId as string) || (em.booking_id as string) || null,
+                        bookingDocumentId: (att.bookingDocumentId as string) || null,
                         forwarderName: forwarder,
                         forwarder,
                         forwarderEmail: em.sender_email,
+                        senderEmail: em.sender_email,
+                        sourceEmail: (att.sourceEmail as string) || em.sender_email || null,
                         gmailMessageId: (att.gmailMessageId as string) || em.gmail_message_id,
                         fileFormat,
                         fileSize,
                         receivedDate: dateStr,
                         receivedTime: timeStr,
-                        status,
-                        isMetadataOnly: true,
-                        source: "Incoming Forwarder Email",
+                        status:
+                          (att.status as string) ||
+                          (att.storageUrl ? "Saved to Supabase Storage" : "Metadata Saved"),
+                        uploadStatus:
+                          (att.uploadStatus as string) ||
+                          (att.storageUrl ? "Saved to Supabase Storage" : "Metadata Saved"),
+                        isMetadataOnly: Boolean(att.isMetadataOnly),
+                        source: (att.source as string) || "Incoming Forwarder Email",
+                        storageBucket: (att.storageBucket as string) || "documents",
+                        storagePath: (att.storagePath as string) || null,
+                        fileUrl:
+                          (att.storageUrl as string) ||
+                          (att.fileUrl as string) ||
+                          (att.url as string) ||
+                          null,
                       },
                     };
 
@@ -2152,6 +2372,185 @@ export default {
             console.warn("[API Documents] Notice reading attachments from Supabase:", dbFetchErr);
           }
 
+          // Read documents linked via booking_events in Supabase
+          try {
+            const { data: dbEvents } = await dbUntyped
+              .from("booking_events")
+              .select("id, booking_id, title, description, payload, created_at, event_date")
+              .eq("event_type", "Document Linked")
+              .order("created_at", { ascending: false })
+              .limit(100);
+
+            if (dbEvents && Array.isArray(dbEvents)) {
+              for (const ev of dbEvents) {
+                const p = typeof ev.payload === "string" ? JSON.parse(ev.payload) : ev.payload;
+                if (p && p.document && p.document.id) {
+                  const doc = p.document as DriveFile;
+                  if (!seen.has(doc.id)) {
+                    combined.push(doc);
+                    seen.add(doc.id);
+                  }
+                }
+              }
+            }
+          } catch (eventFetchErr) {
+            console.warn(
+              "[API Documents] Notice reading documents from booking_events:",
+              eventFetchErr,
+            );
+          }
+
+          // Read official document records from booking_documents table in Supabase
+          try {
+            const { data: dbBookingDocs } = await dbUntyped
+              .from("booking_documents")
+              .select(
+                `
+                id,
+                booking_id,
+                document_type,
+                document_name,
+                file_url,
+                file_size,
+                mime_type,
+                status,
+                created_at,
+                updated_at,
+                bookings (
+                  id,
+                  movement_number,
+                  booking_reference,
+                  organization_id,
+                  forwarder_id,
+                  forwarder_name,
+                  carrier
+                )
+              `,
+              )
+              .order("created_at", { ascending: false })
+              .limit(100);
+
+            if (dbBookingDocs && Array.isArray(dbBookingDocs)) {
+              for (const bDoc of dbBookingDocs) {
+                if (seen.has(bDoc.id)) continue;
+                // Check if already included to prevent duplicates
+                const alreadyIncluded = combined.some(
+                  (c) =>
+                    c.url === bDoc.file_url ||
+                    (c.name === bDoc.document_name && c.metadata?.bookingId === bDoc.booking_id),
+                );
+                if (alreadyIncluded) continue;
+
+                const booking = bDoc.bookings as Record<string, unknown> | null;
+                // Enforce organization isolation: do not expose documents of other organizations
+                if (reqOrgId && booking?.organization_id && booking.organization_id !== reqOrgId) {
+                  continue;
+                }
+                const movNum =
+                  (booking?.movement_number as string) ||
+                  (booking?.booking_reference as string) ||
+                  null;
+                const fwdName =
+                  (booking?.forwarder_name as string) ||
+                  (booking?.carrier as string) ||
+                  "Forwarder";
+                const ext = bDoc.document_name.includes(".")
+                  ? bDoc.document_name.split(".").pop()?.toLowerCase() || "pdf"
+                  : "pdf";
+                const formattedSize = bDoc.file_size
+                  ? `${Math.round(bDoc.file_size / 1024)} KB`
+                  : "320 KB";
+
+                const dateObj = new Date(bDoc.created_at || new Date());
+                const dateStr = dateObj.toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                  year: "numeric",
+                });
+                const timeStr = dateObj.toLocaleTimeString("en-US", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                });
+
+                const storagePath = bDoc.file_url.includes("/documents/")
+                  ? decodeURIComponent(bDoc.file_url.split("/documents/")[1] || "")
+                  : null;
+
+                const driveFileItem: DriveFile = {
+                  id: bDoc.id,
+                  name: bDoc.document_name,
+                  type: determineFileType(ext),
+                  extension: ext,
+                  owners: [
+                    {
+                      id: (booking?.forwarder_id as string) || "owner-fwd",
+                      name: fwdName,
+                      email: "operations@nashmia.com",
+                      avatarBg: "bg-blue-600 text-white",
+                      avatarText: (fwdName[0] || "F").toUpperCase(),
+                    },
+                  ],
+                  lastModified: `${dateStr} - ${timeStr}`,
+                  lastModifiedTimestamp: bDoc.created_at || new Date().toISOString(),
+                  fileSize: formattedSize,
+                  folderId: "folder-design",
+                  starred: true,
+                  sharedLink: bDoc.file_url,
+                  url: bDoc.file_url,
+                  metadata: {
+                    documentType: bDoc.document_type,
+                    displayDocumentType:
+                      bDoc.document_type === "BILL_OF_LADING"
+                        ? "Bill of Lading"
+                        : bDoc.document_type === "CUT_OFF_NOTICE"
+                          ? "Cut-Off"
+                          : bDoc.document_type,
+                    typeTag:
+                      bDoc.document_type === "BILL_OF_LADING"
+                        ? "Bill of Lading"
+                        : bDoc.document_type === "CUT_OFF_NOTICE"
+                          ? "Cut-Off"
+                          : bDoc.document_type,
+                    originalFilename: bDoc.document_name,
+                    fileName: bDoc.document_name,
+                    category:
+                      bDoc.document_type === "BILL_OF_LADING"
+                        ? "Bill of Lading"
+                        : bDoc.document_type === "CUT_OFF_NOTICE"
+                          ? "Cut-Off Notice"
+                          : "General",
+                    bookingId: bDoc.booking_id,
+                    movementNumber: movNum,
+                    movementReferenceNumber: movNum,
+                    forwarderId: (booking?.forwarder_id as string) || null,
+                    forwarderName: fwdName,
+                    forwarder: fwdName,
+                    sourceEmail: "operations@nashmia.com",
+                    fileFormat: ext.toUpperCase(),
+                    fileSize: formattedSize,
+                    receivedDate: dateStr,
+                    receivedTime: timeStr,
+                    status: bDoc.status || "Verified",
+                    uploadStatus: "Saved to Supabase Storage",
+                    isMetadataOnly: false,
+                    source: "Supabase Booking Documents",
+                    storageBucket: "documents",
+                    storagePath,
+                    fileUrl: bDoc.file_url,
+                  },
+                };
+
+                combined.push(driveFileItem);
+                seen.add(bDoc.id);
+              }
+            }
+          } catch (bDocErr) {
+            console.warn(
+              "[API Documents] Notice reading documents from booking_documents:",
+              bDocErr,
+            );
+          }
+
           for (const initFile of INITIAL_FILES) {
             if (!seen.has(initFile.id)) {
               combined.push(initFile);
@@ -2159,12 +2558,81 @@ export default {
             }
           }
 
+          // Secure authorized access: Generate fresh, time-limited signed URLs for documents in storage
+          await Promise.all(
+            combined.map(async (item) => {
+              const sPath = item.metadata?.storagePath;
+              if (sPath) {
+                try {
+                  const bucket = (item.metadata?.storageBucket as string) || "documents";
+                  const signed = await createDocumentSignedUrl(supabase, sPath, 3600, bucket);
+                  if (signed.success && signed.signedUrl) {
+                    item.url = signed.signedUrl;
+                    item.sharedLink = signed.signedUrl;
+                    if (item.metadata) {
+                      item.metadata.fileUrl = signed.signedUrl;
+                    }
+                  }
+                } catch (signErr) {
+                  console.warn("[API Documents] Notice generating signed URL:", signErr);
+                }
+              }
+            }),
+          );
+
+          // Deduplicate documents across storagePath and (filename + movementNumber)
+          const deduplicatedFiles: DriveFile[] = [];
+          const uniqueDocKeys = new Set<string>();
+
+          for (const item of combined) {
+            const rawName = (item.metadata?.originalFilename || item.name || "")
+              .toLowerCase()
+              .trim();
+            const mov = (
+              item.metadata?.movementNumber ||
+              item.metadata?.movementReferenceNumber ||
+              "GENERAL"
+            )
+              .toUpperCase()
+              .trim();
+            const sPath = item.metadata?.storagePath;
+            const nameKey = `file:${rawName}:${mov}`;
+            const pathKey = sPath ? `path:${sPath}` : null;
+
+            if (
+              uniqueDocKeys.has(nameKey) ||
+              (pathKey && uniqueDocKeys.has(pathKey)) ||
+              uniqueDocKeys.has(`id:${item.id}`)
+            ) {
+              // If existing item lacks storagePath but this item has it, upgrade to the stored version
+              if (sPath) {
+                const existingIdx = deduplicatedFiles.findIndex(
+                  (f) =>
+                    (f.metadata?.originalFilename || f.name || "").toLowerCase().trim() ===
+                      rawName &&
+                    (f.metadata?.movementNumber || f.metadata?.movementReferenceNumber || "GENERAL")
+                      .toUpperCase()
+                      .trim() === mov,
+                );
+                if (existingIdx >= 0 && !deduplicatedFiles[existingIdx].metadata?.storagePath) {
+                  deduplicatedFiles[existingIdx] = item;
+                }
+              }
+              continue;
+            }
+
+            uniqueDocKeys.add(nameKey);
+            if (pathKey) uniqueDocKeys.add(pathKey);
+            uniqueDocKeys.add(`id:${item.id}`);
+            deduplicatedFiles.push(item);
+          }
+
           return new Response(
             JSON.stringify({
               success: true,
-              count: combined.length,
+              count: deduplicatedFiles.length,
               savedAttachmentsCount: serverDocs.length,
-              files: combined,
+              files: deduplicatedFiles,
             }),
             {
               status: 200,
@@ -2182,6 +2650,193 @@ export default {
               ...apiCorsHeaders,
               "Content-Type": "application/json",
             },
+          });
+        }
+      }
+
+      // API Route: Generate Authorized Signed URL for Document Viewing and Downloading
+      if (
+        url.pathname === "/api/documents/signed-url" &&
+        (request.method === "POST" || request.method === "GET")
+      ) {
+        try {
+          let storagePath: string | null = null;
+          let bucket = "documents";
+          let expiresIn = 3600;
+          let reqOrgId = request.headers.get("x-organization-id");
+
+          if (request.method === "POST") {
+            const body = (await request.json()) as {
+              storagePath?: string;
+              path?: string;
+              bucket?: string;
+              expiresIn?: number;
+              organizationId?: string;
+            };
+            storagePath = body.storagePath || body.path || null;
+            if (body.bucket) bucket = body.bucket;
+            if (body.expiresIn) expiresIn = Number(body.expiresIn);
+            if (body.organizationId) reqOrgId = body.organizationId;
+          } else {
+            storagePath = url.searchParams.get("path") || url.searchParams.get("storagePath");
+            if (url.searchParams.get("bucket")) bucket = url.searchParams.get("bucket")!;
+            if (url.searchParams.get("expiresIn"))
+              expiresIn = Number(url.searchParams.get("expiresIn"));
+            if (url.searchParams.get("organizationId"))
+              reqOrgId = url.searchParams.get("organizationId");
+          }
+
+          if (!storagePath) {
+            return new Response(
+              JSON.stringify({ success: false, error: "Missing storagePath parameter" }),
+              {
+                status: 400,
+                headers: { ...apiCorsHeaders, "Content-Type": "application/json" },
+              },
+            );
+          }
+
+          // Security: Block path traversal
+          if (storagePath.includes("..") || storagePath.includes("\0")) {
+            return new Response(
+              JSON.stringify({ success: false, error: "Security violation: Invalid storage path" }),
+              {
+                status: 400,
+                headers: { ...apiCorsHeaders, "Content-Type": "application/json" },
+              },
+            );
+          }
+
+          // Enforce organization isolation if path is scoped to an organization
+          if (reqOrgId && storagePath.startsWith("organizations/")) {
+            const pathParts = storagePath.split("/");
+            const pathOrg = pathParts[1];
+            if (pathOrg && pathOrg !== reqOrgId) {
+              return new Response(
+                JSON.stringify({
+                  success: false,
+                  error: "Unauthorized organization document access",
+                }),
+                {
+                  status: 403,
+                  headers: { ...apiCorsHeaders, "Content-Type": "application/json" },
+                },
+              );
+            }
+          }
+
+          const signedResult = await createDocumentSignedUrl(
+            supabase,
+            storagePath,
+            expiresIn,
+            bucket,
+          );
+
+          return new Response(JSON.stringify(signedResult), {
+            status: signedResult.success ? 200 : 400,
+            headers: {
+              ...apiCorsHeaders,
+              "Content-Type": "application/json",
+            },
+          });
+        } catch (signedErr: unknown) {
+          const msg = signedErr instanceof Error ? signedErr.message : String(signedErr);
+          return new Response(JSON.stringify({ success: false, error: msg }), {
+            status: 500,
+            headers: { ...apiCorsHeaders, "Content-Type": "application/json" },
+          });
+        }
+      }
+
+      // API Route: Secure Authorized File Download Proxy
+      if (url.pathname === "/api/documents/download" && request.method === "GET") {
+        try {
+          const storagePath = url.searchParams.get("path") || url.searchParams.get("storagePath");
+          const bucket = url.searchParams.get("bucket") || "documents";
+          const reqOrgId =
+            request.headers.get("x-organization-id") || url.searchParams.get("organizationId");
+
+          if (!storagePath) {
+            return new Response(
+              JSON.stringify({ success: false, error: "Missing path parameter" }),
+              {
+                status: 400,
+                headers: { ...apiCorsHeaders, "Content-Type": "application/json" },
+              },
+            );
+          }
+
+          // Security check: block path traversal
+          if (storagePath.includes("..") || storagePath.includes("\0")) {
+            return new Response(
+              JSON.stringify({ success: false, error: "Security violation: Invalid storage path" }),
+              {
+                status: 400,
+                headers: { ...apiCorsHeaders, "Content-Type": "application/json" },
+              },
+            );
+          }
+
+          // Enforce organization isolation
+          if (reqOrgId && storagePath.startsWith("organizations/")) {
+            const pathParts = storagePath.split("/");
+            const pathOrg = pathParts[1];
+            if (pathOrg && pathOrg !== reqOrgId) {
+              return new Response(
+                JSON.stringify({
+                  success: false,
+                  error: "Unauthorized organization document access",
+                }),
+                {
+                  status: 403,
+                  headers: { ...apiCorsHeaders, "Content-Type": "application/json" },
+                },
+              );
+            }
+          }
+
+          // Fetch file directly from Supabase Storage
+          const cleanPath = storagePath.replace(/^\/+/, "");
+          const { data: fileBlob, error: downloadErr } = await supabase.storage
+            .from(bucket)
+            .download(cleanPath);
+
+          if (downloadErr || !fileBlob) {
+            // Fallback: Generate signed URL and redirect
+            const signed = await createDocumentSignedUrl(supabase, cleanPath, 3600, bucket);
+            if (signed.success && signed.signedUrl) {
+              return Response.redirect(signed.signedUrl, 302);
+            }
+            return new Response(
+              JSON.stringify({
+                success: false,
+                error: downloadErr?.message || "Document not found in storage",
+              }),
+              {
+                status: 404,
+                headers: { ...apiCorsHeaders, "Content-Type": "application/json" },
+              },
+            );
+          }
+
+          const rawFilename = cleanPath.split("/").pop() || "download.pdf";
+          const safeFilename = sanitizeFilename(rawFilename);
+
+          return new Response(fileBlob, {
+            status: 200,
+            headers: {
+              ...apiCorsHeaders,
+              "Content-Type": fileBlob.type || "application/octet-stream",
+              "Content-Disposition": `attachment; filename="${safeFilename}"`,
+              "Cache-Control": "private, no-transform, max-age=3600",
+              "X-Content-Type-Options": "nosniff",
+            },
+          });
+        } catch (dlErr: unknown) {
+          const msg = dlErr instanceof Error ? dlErr.message : String(dlErr);
+          return new Response(JSON.stringify({ success: false, error: msg }), {
+            status: 500,
+            headers: { ...apiCorsHeaders, "Content-Type": "application/json" },
           });
         }
       }
@@ -2291,7 +2946,138 @@ export default {
         }
       }
 
-      const response = await startHandler(request, env, ctx);
+      // API Route: Save Cut-off Data in the Database for a Movement
+      if (
+        (url.pathname === "/api/cut-offs/save" || url.pathname === "/api/movements/cut-offs") &&
+        request.method === "POST"
+      ) {
+        try {
+          const body = (await request.json()) as {
+            bookingId?: string | null;
+            movementNumber?: string;
+            movement_number?: string;
+            cutoffType?: string | null;
+            cutoff_type?: string | null;
+            cutoffDate?: string | null;
+            cutoff_date?: string | null;
+            sourceDocumentId?: string | null;
+            source_document_id?: string | null;
+            sourceEmailId?: string | null;
+            source_email_id?: string | null;
+            extractionStatus?: string | null;
+            extraction_status?: string | null;
+            reviewStatus?: string | null;
+            review_status?: string | null;
+            deadlines?: Array<unknown>;
+            cutOffDates?: Record<string, unknown>;
+            createdAt?: string;
+            created_at?: string;
+            updatedAt?: string;
+            updated_at?: string;
+          };
+
+          const movementNumber = (body.movementNumber || body.movement_number || "").trim();
+          if (!movementNumber) {
+            return new Response(
+              JSON.stringify({ success: false, error: "Missing required movementNumber" }),
+              {
+                status: 400,
+                headers: { ...apiCorsHeaders, "Content-Type": "application/json" },
+              },
+            );
+          }
+
+          const result = await saveCutOffDataToDatabase({
+            movementNumber,
+            bookingId: body.bookingId || null,
+            cutoffType: body.cutoffType || body.cutoff_type || null,
+            cutoffDate: body.cutoffDate || body.cutoff_date || null,
+            sourceDocumentId: body.sourceDocumentId || body.source_document_id || null,
+            sourceEmailId: body.sourceEmailId || body.source_email_id || null,
+            extractionStatus: body.extractionStatus || body.extraction_status || null,
+            reviewStatus: body.reviewStatus || body.review_status || null,
+            deadlines: body.deadlines,
+            cutOffDates: body.cutOffDates,
+            createdAt: body.createdAt || body.created_at,
+            updatedAt: body.updatedAt || body.updated_at,
+          });
+
+          // Sync in-memory server bookings cache if target found
+          const target = inMemoryBookings.find(
+            (b) =>
+              b.movement_number === movementNumber ||
+              b.booking_reference === movementNumber ||
+              b.id === result.bookingId,
+          );
+          if (target && result.cutOffDates) {
+            target.cut_off_dates = result.cutOffDates;
+            target.cut_off_deadlines = result.cutOffDates.deadlines || [];
+            const existingConf = (target.confirmation_details as Record<string, unknown>) || {};
+            target.confirmation_details = {
+              ...existingConf,
+              cut_off_dates: result.cutOffDates,
+              cut_off_deadlines: result.cutOffDates.deadlines || [],
+              source_document_id: body.sourceDocumentId || body.source_document_id || null,
+              source_email_id: body.sourceEmailId || body.source_email_id || null,
+              extraction_status: result.cutOffDates.extractionStatus || "COMPLETED",
+              review_status: result.cutOffDates.reviewStatus || "AUTO_VERIFIED",
+              updated_at: new Date().toISOString(),
+            };
+            target.updated_at = new Date().toISOString();
+          }
+
+          return new Response(JSON.stringify(result), {
+            status: 200,
+            headers: { ...apiCorsHeaders, "Content-Type": "application/json" },
+          });
+        } catch (saveErr: unknown) {
+          const msg = saveErr instanceof Error ? saveErr.message : String(saveErr);
+          return new Response(JSON.stringify({ success: false, error: msg }), {
+            status: 500,
+            headers: { ...apiCorsHeaders, "Content-Type": "application/json" },
+          });
+        }
+      }
+
+      // API Route: Query Saved Cut-off Data from Database for a Movement
+      if (
+        (url.pathname === "/api/cut-offs" || url.pathname === "/api/movements/cut-offs") &&
+        request.method === "GET"
+      ) {
+        try {
+          const movementNumber = (
+            url.searchParams.get("movementNumber") ||
+            url.searchParams.get("movement_number") ||
+            ""
+          ).trim();
+
+          if (!movementNumber) {
+            return new Response(
+              JSON.stringify({ success: false, error: "Missing movementNumber query parameter" }),
+              {
+                status: 400,
+                headers: { ...apiCorsHeaders, "Content-Type": "application/json" },
+              },
+            );
+          }
+
+          const cutOffData = await getCutOffDataFromDatabase(movementNumber);
+          return new Response(JSON.stringify({ success: Boolean(cutOffData), data: cutOffData }), {
+            status: 200,
+            headers: { ...apiCorsHeaders, "Content-Type": "application/json" },
+          });
+        } catch (fetchErr: unknown) {
+          const msg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+          return new Response(JSON.stringify({ success: false, error: msg }), {
+            status: 500,
+            headers: { ...apiCorsHeaders, "Content-Type": "application/json" },
+          });
+        }
+      }
+
+      const response = await (
+        startHandler as unknown as (req: Request, env?: unknown, ctx?: unknown) => Promise<Response>
+      )(request, env, ctx);
       return await normalizeCatastrophicSsrResponse(response);
     } catch (error) {
       console.error("[Server Error]", error);

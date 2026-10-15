@@ -10,9 +10,14 @@ export type EmailFolderId =
 
 export interface EmailAttachment {
   name: string;
+  filename?: string;
   size: string;
   url?: string;
   type?: string;
+  mimeType?: string;
+  attachmentId?: string;
+  gmailMessageId?: string;
+  data?: string;
 }
 
 export interface EmailTimelineEvent {
@@ -24,8 +29,9 @@ export interface EmailTimelineEvent {
   type: "created" | "queued" | "sending" | "sent" | "failed" | "gmail_id_received";
 }
 
+export type EmailRecord = EmailMessageRecord;
+
 export interface EmailMessageRecord {
-  id: string;
   threadId: string;
   userId?: string;
   organizationId?: string;

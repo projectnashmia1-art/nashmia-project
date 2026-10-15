@@ -10,6 +10,7 @@ import {
   type FieldTraceability,
   type QuotationEngineInput,
 } from "./rule-based-quotation-engine";
+import { extractQuotationWithAiFallback } from "./ai-quotation-fallback";
 
 export interface ExtractedQuotation {
   // 1. Movement Number
@@ -57,7 +58,7 @@ export interface ExtractedQuotation {
   // Metadata & Audit
   isDeclined: boolean;
   isConfirmed: boolean;
-  extractionMethod: "RULE_BASED_DETERMINISTIC";
+  extractionMethod: "RULE_BASED_DETERMINISTIC" | "AI_FALLBACK_VALIDATED";
   presentFields: string[];
   missingFields: string[];
   traceability?: Record<string, FieldTraceability>;
@@ -67,12 +68,59 @@ export interface ExtractedQuotation {
 export type QuotationExtractionInput = QuotationEngineInput;
 
 /**
- * Main Rule-Based Extraction Function (100% Deterministic, Zero AI)
+ * Main Quotation Extraction Function
+ * Priority 1: 100% Deterministic Rule-Based Parser
+ * Priority 2: AI Fallback strictly for unstructured text when deterministic rules cannot extract rate
  */
 export async function extractQuotationFromEmail(
   input: QuotationExtractionInput,
 ): Promise<ExtractedQuotation> {
   const result = extractQuotationDeterministic(input);
+
+  // Check if deterministic parser extracted a solid quotation offer
+  const hasDeterministicOffer =
+    result.rate !== null || result.totalCost !== null || result.freightCharges !== null;
+
+  let finalRate = result.rate;
+  let finalCurrency = result.currency;
+  let finalTotalCost = result.totalCost;
+  let finalEtd = result.etd;
+  let finalEta = result.eta;
+  let finalTransitTime = result.transitTime;
+  let finalFreeDays = result.freeDays;
+  let finalCarrier = result.carrier;
+  let finalVesselName = result.vesselName;
+  let finalVoyageNumber = result.voyageNumber;
+  let finalRateValidity = result.rateValidity;
+  let finalNotes = result.notes;
+  let extractionConfidence = result.confidenceScore;
+  let extractionMethod: "RULE_BASED_DETERMINISTIC" | "AI_FALLBACK_VALIDATED" =
+    "RULE_BASED_DETERMINISTIC";
+
+  // AI Fallback ONLY when deterministic parser cannot find rate numbers
+  if (!hasDeterministicOffer && !result.isDeclined && !result.isConfirmed) {
+    try {
+      const aiResult = await extractQuotationWithAiFallback(input);
+      if (aiResult && (aiResult.rate !== null || aiResult.totalCost !== null)) {
+        finalRate = aiResult.rate ?? finalRate;
+        finalCurrency = aiResult.currency ?? finalCurrency ?? "USD";
+        finalTotalCost = aiResult.totalCost ?? finalTotalCost;
+        finalEtd = aiResult.etd ?? finalEtd;
+        finalEta = aiResult.eta ?? finalEta;
+        finalTransitTime = aiResult.transitTime ?? finalTransitTime;
+        finalFreeDays = aiResult.freeDays ?? finalFreeDays;
+        finalCarrier = aiResult.carrier ?? finalCarrier;
+        finalVesselName = aiResult.vesselName ?? finalVesselName;
+        finalVoyageNumber = aiResult.voyageNumber ?? finalVoyageNumber;
+        finalRateValidity = aiResult.rateValidity ?? finalRateValidity;
+        finalNotes = aiResult.notes ?? finalNotes;
+        extractionConfidence = Math.max(0.65, aiResult.confidenceScore);
+        extractionMethod = "AI_FALLBACK_VALIDATED";
+      }
+    } catch (aiErr) {
+      console.warn("[QuotationExtractor] Notice during AI fallback:", aiErr);
+    }
+  }
 
   const presentFields: string[] = [];
   const missingFields: string[] = [];
@@ -87,52 +135,52 @@ export async function extractQuotationFromEmail(
 
   checkField("Movement Number", result.movementNumber);
   checkField("Forwarder", result.forwarderName);
-  checkField("Rate", result.rate);
-  checkField("Currency", result.currency);
+  checkField("Rate", finalRate);
+  checkField("Currency", finalCurrency);
   checkField("Container type and quantity", result.containerType || result.containerQuantity);
   checkField("Availability", result.availability);
-  checkField("ETD", result.etd);
-  checkField("ETA", result.eta);
-  checkField("Transit time", result.transitTime);
+  checkField("ETD", finalEtd);
+  checkField("ETA", finalEta);
+  checkField("Transit time", finalTransitTime);
   checkField("Freight charges", result.freightCharges);
   checkField("Additional charges", result.additionalCharges);
-  checkField("Total cost when explicitly provided", result.totalCost);
-  checkField("Free days", result.freeDays);
-  checkField("Sailing/vessel/voyage", result.vesselName || result.voyageNumber);
-  checkField("Rate validity", result.rateValidity);
-  checkField("Notes", result.notes);
+  checkField("Total cost when explicitly provided", finalTotalCost);
+  checkField("Free days", finalFreeDays);
+  checkField("Sailing/vessel/voyage", finalVesselName || finalVoyageNumber);
+  checkField("Rate validity", finalRateValidity);
+  checkField("Notes", finalNotes);
   checkField("Email received date", result.receivedTimestamp);
 
   const sailingVesselVoyage =
-    [result.carrier, result.vesselName, result.voyageNumber].filter(Boolean).join(" ") || null;
+    [finalCarrier, finalVesselName, finalVoyageNumber].filter(Boolean).join(" ") || null;
 
   return {
     movementNumber: result.movementNumber,
     forwarder: result.forwarderName,
     forwarderEmail: result.senderEmail,
-    rate: result.rate,
-    currency: result.currency,
+    rate: finalRate,
+    currency: finalCurrency,
     containerType: result.containerType,
     containerQuantity: result.containerQuantity,
     availability: result.availability,
-    etd: result.etd,
-    eta: result.eta,
-    transitTime: result.transitTime,
+    etd: finalEtd,
+    eta: finalEta,
+    transitTime: finalTransitTime,
     freightCharges: result.freightCharges,
     additionalCharges: result.additionalCharges,
-    totalCost: result.totalCost,
-    freeDays: result.freeDays,
+    totalCost: finalTotalCost,
+    freeDays: finalFreeDays,
     sailingVesselVoyage,
-    carrier: result.carrier || null,
-    vesselName: result.vesselName,
-    voyageNumber: result.voyageNumber,
-    rateValidity: result.rateValidity,
-    notes: result.notes,
+    carrier: finalCarrier || null,
+    vesselName: finalVesselName,
+    voyageNumber: finalVoyageNumber,
+    rateValidity: finalRateValidity,
+    notes: finalNotes,
     emailReceivedDate: result.receivedTimestamp,
-    extractionConfidence: result.confidenceScore,
+    extractionConfidence,
     isDeclined: result.isDeclined,
     isConfirmed: result.isConfirmed,
-    extractionMethod: "RULE_BASED_DETERMINISTIC",
+    extractionMethod,
     presentFields,
     missingFields,
     traceability: result.traceability,

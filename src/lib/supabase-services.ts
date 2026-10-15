@@ -939,10 +939,11 @@ export async function deleteSupplierFromSupabase(id: string): Promise<void> {
 
 const LOCAL_FORWARDERS_KEY = "nashmia_custom_forwarders_v1";
 
-function getLocalForwarders(): ForwarderAccount[] {
-  if (typeof window === "undefined") return [];
+export function getLocalForwarders(): ForwarderAccount[] {
+  if (typeof window === "undefined" && typeof localStorage === "undefined") return [];
   try {
-    const raw = localStorage.getItem(LOCAL_FORWARDERS_KEY);
+    const raw =
+      typeof localStorage !== "undefined" ? localStorage.getItem(LOCAL_FORWARDERS_KEY) : null;
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
@@ -2156,11 +2157,9 @@ export function reconcileBookingWithConfirmations(b: FullBookingRecord): FullBoo
   // If not confirmed/awarded yet, display "Pending Award" instead of defaulting to a random forwarder!
   const hasExplicitAward = Boolean(
     award?.awardedForwarderName ||
-      b.confirmed_by ||
-      (isExplicitlyConfirmed &&
-        ((b.forwarder as { name?: string })?.name ||
-          b.forwarder?.company_name ||
-          b.forwarder_name)),
+    b.confirmed_by ||
+    (isExplicitlyConfirmed &&
+      ((b.forwarder as { name?: string })?.name || b.forwarder?.company_name || b.forwarder_name)),
   );
 
   const forwarderName = hasExplicitAward
@@ -2532,7 +2531,7 @@ export interface CreateBookingPayload {
 
 export async function createBookingInSupabase(
   arg1?: string | null | CreateBookingPayload,
-  arg2?: Partial<CreateBookingPayload>,
+  arg2?: Partial<CreateBookingPayload> | string | null,
 ): Promise<FullBookingRecord> {
   // Normalize parameters safely without crashing on null/undefined
   let userId: string | null | undefined = null;
@@ -2540,13 +2539,15 @@ export async function createBookingInSupabase(
 
   if (typeof arg1 === "string") {
     userId = arg1;
-    payload = arg2 ? { ...arg2, userId } : { userId };
+    payload = arg2 && typeof arg2 === "object" ? { ...arg2, userId } : { userId };
   } else if (arg1 && typeof arg1 === "object") {
     payload = { ...arg1 };
-    userId = payload.userId || null;
+    userId = typeof arg2 === "string" ? arg2 : payload.userId || null;
   } else if (arg2 && typeof arg2 === "object") {
     payload = { ...arg2 };
     userId = payload.userId || null;
+  } else if (typeof arg2 === "string") {
+    userId = arg2;
   }
 
   // If userId is still missing, try resolving from active auth session
@@ -2802,13 +2803,14 @@ export async function createBookingInSupabase(
             city: payload.supplierCity || payload.supplier?.city || "",
             country: payload.supplierCountry || payload.supplier?.country || "United Kingdom",
           },
-          forwarder: isConfirmedBooking && forwarderId
-            ? {
-                id: forwarderId,
-                name: forwarderDisplayName,
-                company_name: forwarderDisplayName,
-              }
-            : null,
+          forwarder:
+            isConfirmedBooking && forwarderId
+              ? {
+                  id: forwarderId,
+                  name: forwarderDisplayName,
+                  company_name: forwarderDisplayName,
+                }
+              : null,
           containers: containerRows.map((c) => ({ ...c, booking_id: booking.id })),
           events: [{ ...initialEvent, booking_id: booking.id }],
         } as FullBookingRecord;
@@ -2870,13 +2872,14 @@ export async function createBookingInSupabase(
         city: payload.supplierCity || payload.supplier?.city || "",
         country: payload.supplierCountry || payload.supplier?.country || "United Kingdom",
       },
-      forwarder: isConfirmedBooking && forwarderId
-        ? {
-            id: forwarderId,
-            name: forwarderDisplayName,
-            company_name: forwarderDisplayName,
-          }
-        : null,
+      forwarder:
+        isConfirmedBooking && forwarderId
+          ? {
+              id: forwarderId,
+              name: forwarderDisplayName,
+              company_name: forwarderDisplayName,
+            }
+          : null,
       origin,
       destination,
       vessel_name: bookingInsert.vessel_name || null,
@@ -3983,9 +3986,7 @@ export async function recordBookingEmailInSupabase(
   }
 
   if (!movementNumber) {
-    movementNumber = payload.bookingId
-      ? `MOV-2026-${payload.bookingId.replace(/-/g, "").slice(0, 5).toUpperCase()}`
-      : generateMovementNumber();
+    movementNumber = generateMovementNumber();
   }
 
   const movementId = payload.movementId || payload.bookingId;
@@ -4242,19 +4243,10 @@ export async function submitBookingRequestWorkflow(
   let movementNumber =
     bookingData.movementNumber ||
     bookingData.movement_number ||
-    extractMovementNumber(emailData.subject) ||
-    extractMovementNumber(emailData.body) ||
-    (bookingData.reference && bookingData.reference.startsWith("MOV-")
-      ? bookingData.reference
-      : null) ||
-    (bookingData.bookingReference && bookingData.bookingReference.startsWith("MOV-")
-      ? bookingData.bookingReference
-      : null) ||
     bookingData.bookingReference ||
     bookingData.reference ||
-    (bookingData.id
-      ? `MOV-2026-${bookingData.id.replace(/-/g, "").slice(0, 5).toUpperCase()}`
-      : null);
+    extractMovementNumber(emailData.subject) ||
+    extractMovementNumber(emailData.body);
 
   if (!movementNumber) {
     movementNumber = generateMovementNumber();

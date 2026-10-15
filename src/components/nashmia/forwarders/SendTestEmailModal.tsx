@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import { CheckCircle2, Mail, Send, Sparkles, X } from "lucide-react";
 import { ForwarderAccount } from "@/lib/forwarders-data";
 import { toast } from "sonner";
+import { useSwipeToDismiss } from "@/hooks/use-swipe-to-dismiss";
+import { cn } from "@/lib/utils";
 
 interface SendTestEmailModalProps {
   open: boolean;
@@ -15,6 +17,22 @@ export function SendTestEmailModal({ open, onOpenChange, forwarder }: SendTestEm
   );
   const [message, setMessage] = useState("");
   const [isSending, setIsSending] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(typeof window !== "undefined" ? window.innerWidth < 640 : false);
+    };
+    checkMobile();
+    window.addEventListener("resize", checkMobile);
+    return () => window.removeEventListener("resize", checkMobile);
+  }, []);
+
+  const { elementRef, handleRef } = useSwipeToDismiss<HTMLDivElement>({
+    direction: "down",
+    onDismiss: () => onOpenChange(false),
+    enabled: isMobile && open,
+  });
 
   useEffect(() => {
     if (forwarder) {
@@ -59,14 +77,33 @@ export function SendTestEmailModal({ open, onOpenChange, forwarder }: SendTestEm
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-3 sm:p-4 backdrop-blur-sm animate-in fade-in"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 p-0 sm:p-4 backdrop-blur-xs animate-in fade-in duration-150 overflow-y-auto"
       onClick={(e) => {
         if (e.target === e.currentTarget) {
           onOpenChange(false);
         }
       }}
     >
-      <div className="glass-card-strong relative flex max-h-[92vh] w-full max-w-xl flex-col rounded-[28px] border border-white/90 bg-white p-0 shadow-2xl animate-in zoom-in-95 overflow-hidden">
+      <div
+        ref={elementRef}
+        className={cn(
+          "glass-card-strong relative flex w-full max-w-xl flex-col bg-white text-slate-900 shadow-2xl transition-all overflow-hidden outline-none",
+          // Mobile: Bottom sheet
+          "max-h-[92vh] rounded-t-[28px] rounded-b-none border-t sm:border border-white/90 p-0 pb-[max(1.5rem,env(safe-area-inset-bottom))] animate-in slide-in-from-bottom duration-240 ease-[cubic-bezier(0.16,1,0.3,1)]",
+          // Desktop: Centered dialog
+          "sm:rounded-[28px] sm:max-h-[92vh] sm:slide-in-from-bottom-0 sm:zoom-in-95 sm:duration-150",
+        )}
+      >
+        {/* Mobile Drag Handle */}
+        <div
+          ref={handleRef}
+          data-swipe-handle="true"
+          className="group mx-auto pt-2.5 pb-1 flex h-7 w-full max-w-[180px] cursor-grab touch-none items-center justify-center sm:hidden active:cursor-grabbing select-none"
+          aria-label="Drag down to dismiss"
+        >
+          <div className="h-1.5 w-12 rounded-full bg-slate-300 transition-all duration-150 group-hover:bg-slate-400 group-active:scale-x-110 group-active:bg-slate-500" />
+        </div>
+
         {/* Modal Header */}
         <div className="flex items-center justify-between border-b border-slate-100/90 px-6 py-4.5 bg-[#F8FAFC]/90 shrink-0">
           <div className="flex items-center gap-3">

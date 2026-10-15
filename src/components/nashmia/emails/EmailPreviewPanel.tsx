@@ -28,6 +28,11 @@ import {
   MessageSquare,
   ChevronDown,
   ChevronUp,
+  DollarSign,
+  Layers,
+  Calendar,
+  Anchor,
+  ExternalLink,
 } from "lucide-react";
 import type { EmailMessageRecord } from "@/types/email.types";
 import { cn } from "@/lib/utils";
@@ -37,6 +42,7 @@ import { updateLocalBooking, getLocalBookings } from "@/lib/supabase-services";
 import { getSenderAvatar, formatCardTimestamp } from "./EmailListPanel";
 import { MovementLifecycleDrawer } from "../movements/MovementLifecycleDrawer";
 import { classifyConfirmationDeterministic } from "@/lib/forwarder-confirmation-detector";
+import { extractQuotationFieldsDeterministic } from "@/lib/forwarder-quotation-processor";
 import {
   processAutomaticMovementConfirmation,
   type MovementConfirmationResult,
@@ -123,6 +129,14 @@ export function EmailPreviewPanel({
     return idx >= 0 ? idx : 0;
   }, [allEmails, email]);
 
+  // Extracted quotation metrics (Computed directly without hook overhead)
+  const extractedQuote = email
+    ? extractQuotationFieldsDeterministic(
+        email.subject || "",
+        email.body || email.snippet || "",
+      )
+    : null;
+
   const totalCount = allEmails.length > 0 ? allEmails.length : 1;
 
   const handlePrev = () => {
@@ -162,9 +176,13 @@ export function EmailPreviewPanel({
   const senderName =
     email.direction === "outbound"
       ? email.toName || email.forwarderName || "Recipient"
-      : email.fromName || "Smith";
+      : email.fromName ||
+        email.forwarderName ||
+        (email.fromEmail
+          ? email.fromEmail.split("@")[0].replace(/[._-]/g, " ")
+          : "Freight Forwarder");
   const senderEmail =
-    email.direction === "outbound" ? email.toEmail : email.fromEmail || "smith@gmail.com";
+    email.direction === "outbound" ? email.toEmail : email.fromEmail || "operations@forwarder.com";
   const senderAvatar = getSenderAvatar(senderName, senderEmail);
 
   const currentUserName =
@@ -173,20 +191,15 @@ export function EmailPreviewPanel({
 
   const formattedTime = formatCardTimestamp(email.sentAt || email.createdAt);
 
-  // Attachments fallback if none provided
+  const hasQuotationOffer = Boolean(
+    extractedQuote &&
+    ((extractedQuote.oceanFreight !== null && extractedQuote.oceanFreight > 0) ||
+      (extractedQuote.totalAmount !== null && extractedQuote.totalAmount > 0)),
+  );
+
+  // Real attachments only — no fake demo fallbacks
   const attachments =
-    email.attachments && email.attachments.length > 0
-      ? email.attachments
-      : email.subject.toLowerCase().includes("wireframe") ||
-          email.subject.toLowerCase().includes("portfolio") ||
-          email.emailType === "BOOKING_REQUEST"
-        ? [
-            { name: "Wireframe_v1.fig", size: "2.4 MB" },
-            { name: "Landing_page_concept.png", size: "1.8 MB" },
-            { name: "Spec_sheet_final.pdf", size: "940 KB" },
-            { name: "Asset_components.zip", size: "4.1 MB" },
-          ]
-        : [];
+    email.attachments && email.attachments.length > 0 ? email.attachments : [];
 
   // Confirmation state
   const activeConfStatus = localConfirmation?.status || email.confirmationStatus || "NEEDS_REVIEW";
@@ -591,6 +604,74 @@ export function EmailPreviewPanel({
         </div>
       </div>
 
+      {/* Quotation Offer Banner */}
+      {hasQuotationOffer && (
+        <div className="mx-6 mt-3 p-4 rounded-xl bg-gradient-to-r from-sky-50 via-teal-50/50 to-emerald-50/40 border border-[#0FA3B1]/40 shadow-2xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div className="flex items-start gap-3 min-w-0">
+            <div className="size-10 rounded-xl bg-[#0FA3B1] text-white flex items-center justify-center shrink-0 shadow-xs font-bold font-mono">
+              <DollarSign className="size-5 stroke-[2.5]" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center flex-wrap gap-2">
+                <span className="text-sm font-bold text-slate-900">
+                  Freight Quotation Offer Received
+                </span>
+                {movementRef && (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-white border border-[#0FA3B1]/30 text-[#0FA3B1] text-xs font-mono font-bold shadow-2xs">
+                    {movementRef}
+                  </span>
+                )}
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[11px] font-bold border border-emerald-300">
+                  Offer Received
+                </span>
+              </div>
+              <div className="flex items-center flex-wrap gap-x-3 gap-y-1 text-xs text-slate-600 mt-1 font-medium">
+                {extractedQuote?.oceanFreight !== null && (
+                  <span>
+                    Rate:{" "}
+                    <strong className="text-slate-900 font-mono text-sm">
+                      ${extractedQuote?.oceanFreight?.toLocaleString()}{" "}
+                      {extractedQuote?.currency || "USD"}
+                    </strong>{" "}
+                    / cntr
+                  </span>
+                )}
+                {extractedQuote?.totalAmount !== null && (
+                  <span>
+                    Total:{" "}
+                    <strong className="text-slate-900 font-mono text-sm">
+                      ${extractedQuote?.totalAmount?.toLocaleString()}{" "}
+                      {extractedQuote?.currency || "USD"}
+                    </strong>
+                  </span>
+                )}
+                {extractedQuote?.sailingDate && (
+                  <span>
+                    ETD: <strong className="text-slate-800">{extractedQuote.sailingDate}</strong>
+                  </span>
+                )}
+                {extractedQuote?.freeDays !== null && extractedQuote?.freeDays !== undefined && (
+                  <span>{extractedQuote.freeDays}d Free</span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+            {movementRef && (
+              <button
+                type="button"
+                onClick={() => setIsDrawerOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0FA3B1] hover:bg-[#0D919E] text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+              >
+                <ExternalLink className="size-3.5" />
+                <span>View Movement</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Confirmed Booking Banner */}
       {isConfirmed && (
         <div className="mx-6 mt-3 p-4 rounded-xl bg-gradient-to-r from-emerald-50 via-emerald-50/70 to-teal-50/50 border border-emerald-300 shadow-2xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
@@ -651,10 +732,8 @@ export function EmailPreviewPanel({
       {/* 4. Scrollable Message Body & Attachments */}
       <div className="flex-1 overflow-y-auto px-6 py-3 space-y-6 scrollbar-thin scrollbar-thumb-slate-200">
         {/* Email Body Paragraphs */}
-        <div className="text-[14px] text-slate-600 leading-relaxed font-normal whitespace-pre-wrap space-y-4">
-          {email.body ||
-            "Hi Mike,\n\nHere is wireframe of landing page which we discuss in previous meeting. Please check it and let me know your thoughts.\n\nBest regards,\n" +
-              senderName}
+        <div className="text-[14px] text-slate-700 leading-relaxed font-normal whitespace-pre-wrap space-y-4">
+          {email.body || email.snippet || "(No message body content provided)"}
         </div>
 
         {/* Attachments Section */}
@@ -667,7 +746,59 @@ export function EmailPreviewPanel({
               </span>
               <button
                 type="button"
-                onClick={() => toast.success("Downloading all attachments...")}
+                onClick={() => {
+                  attachments.forEach((att) => {
+                    const filename = att.filename || att.name || "attachment";
+                    if (att.data) {
+                      try {
+                        const cleanBase64 = att.data.replace(/-/g, "+").replace(/_/g, "/");
+                        const binary = atob(cleanBase64);
+                        const bytes = new Uint8Array(binary.length);
+                        for (let i = 0; i < binary.length; i++) {
+                          bytes[i] = binary.charCodeAt(i);
+                        }
+                        const blob = new Blob([bytes], {
+                          type: att.mimeType || "application/octet-stream",
+                        });
+                        const blobUrl = URL.createObjectURL(blob);
+                        const a = document.createElement("a");
+                        a.href = blobUrl;
+                        a.download = filename;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(blobUrl);
+                        return;
+                      } catch {
+                        // ignore
+                      }
+                    }
+                    if (att.url && att.url !== "#") {
+                      const a = document.createElement("a");
+                      a.href = att.url;
+                      a.download = filename;
+                      a.target = "_blank";
+                      a.rel = "noopener noreferrer";
+                      document.body.appendChild(a);
+                      a.click();
+                      document.body.removeChild(a);
+                      return;
+                    }
+                    const msgId = att.gmailMessageId || email.gmailMessageId;
+                    if (att.attachmentId && msgId) {
+                      const downloadEndpoint = `/api/gmail/attachment?messageId=${encodeURIComponent(msgId)}&attachmentId=${encodeURIComponent(att.attachmentId)}&filename=${encodeURIComponent(filename)}&mimeType=${encodeURIComponent(att.mimeType || "application/octet-stream")}`;
+                      const a = document.createElement("a");
+                      a.href = downloadEndpoint;
+                      a.download = filename;
+                      a.target = "_blank";
+                      a.rel = "noopener noreferrer";
+                      document.body.appendChild(a);
+                      a.click();
+                      document.body.removeChild(a);
+                    }
+                  });
+                  toast.success(`Downloading ${attachments.length} attachment(s)...`);
+                }}
                 className="text-xs font-semibold text-blue-600 hover:underline cursor-pointer"
               >
                 Download All
@@ -691,7 +822,62 @@ export function EmailPreviewPanel({
                   </div>
                   <button
                     type="button"
-                    onClick={() => toast.success(`Downloading ${att.name}`)}
+                    onClick={() => {
+                      const filename = att.filename || att.name || "attachment";
+                      if (att.data) {
+                        try {
+                          const cleanBase64 = att.data.replace(/-/g, "+").replace(/_/g, "/");
+                          const binary = atob(cleanBase64);
+                          const bytes = new Uint8Array(binary.length);
+                          for (let i = 0; i < binary.length; i++) {
+                            bytes[i] = binary.charCodeAt(i);
+                          }
+                          const blob = new Blob([bytes], {
+                            type: att.mimeType || "application/octet-stream",
+                          });
+                          const blobUrl = URL.createObjectURL(blob);
+                          const a = document.createElement("a");
+                          a.href = blobUrl;
+                          a.download = filename;
+                          document.body.appendChild(a);
+                          a.click();
+                          document.body.removeChild(a);
+                          URL.revokeObjectURL(blobUrl);
+                          toast.success(`Downloaded ${filename}`);
+                          return;
+                        } catch {
+                          // ignore
+                        }
+                      }
+                      if (att.url && att.url !== "#") {
+                        const a = document.createElement("a");
+                        a.href = att.url;
+                        a.download = filename;
+                        a.target = "_blank";
+                        a.rel = "noopener noreferrer";
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        toast.success(`Downloading ${filename}...`);
+                        return;
+                      }
+                      const msgId = att.gmailMessageId || email.gmailMessageId;
+                      if (att.attachmentId && msgId) {
+                        const downloadEndpoint = `/api/gmail/attachment?messageId=${encodeURIComponent(msgId)}&attachmentId=${encodeURIComponent(att.attachmentId)}&filename=${encodeURIComponent(filename)}&mimeType=${encodeURIComponent(att.mimeType || "application/octet-stream")}`;
+                        const a = document.createElement("a");
+                        a.href = downloadEndpoint;
+                        a.download = filename;
+                        a.target = "_blank";
+                        a.rel = "noopener noreferrer";
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        toast.success(`Downloading ${filename}...`);
+                        return;
+                      }
+                      toast.info(`Attachment "${filename}" is being synchronized from Gmail.`);
+                    }}
+                    title={`Download ${att.name}`}
                     className="p-1.5 rounded-lg text-slate-400 hover:text-slate-800 hover:bg-white transition-colors cursor-pointer"
                   >
                     <Download className="size-4" />

@@ -191,8 +191,9 @@ export function AddForwarderModal({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        hideCloseButton
         className={cn(
-          "w-[95vw] max-w-[95vw] sm:max-w-[580px] max-h-[90vh] flex flex-col p-0 overflow-hidden rounded-[24px] sm:rounded-[28px] border border-slate-100 bg-white shadow-2xl focus:outline-none",
+          "w-full sm:max-w-[580px] max-h-[92vh] flex flex-col p-0 overflow-hidden sm:rounded-[28px] bg-white shadow-2xl focus:outline-none",
           isSuccess && "sm:max-w-[420px]",
         )}
       >
@@ -299,7 +300,8 @@ export function AddForwarderModal({
                     value={contactPerson}
                     onChange={(e) => {
                       setContactPerson(e.target.value);
-                      if (errors.contactPerson) setErrors((prev) => ({ ...prev, contactPerson: "" }));
+                      if (errors.contactPerson)
+                        setErrors((prev) => ({ ...prev, contactPerson: "" }));
                     }}
                     placeholder="e.g. David Sterling"
                     className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50/60 px-3.5 text-sm sm:text-[13px] font-medium text-slate-900 placeholder:text-slate-400 transition-all duration-150 hover:bg-white focus:bg-white focus:border-[#009EE2] focus:ring-4 focus:ring-[#009EE2]/10 focus:outline-none"

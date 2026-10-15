@@ -368,7 +368,11 @@ export function EmailListPanel({
             const senderName =
               item.direction === "outbound"
                 ? item.toName || item.forwarderName || item.toEmail
-                : item.fromName || item.fromEmail;
+                : item.fromName ||
+                  item.forwarderName ||
+                  (item.fromEmail
+                    ? item.fromEmail.split("@")[0].replace(/[._-]/g, " ")
+                    : "Freight Forwarder");
             const avatarUrl = getSenderAvatar(senderName, item.fromEmail);
             const timeText = formatCardTimestamp(item.sentAt || item.createdAt);
             const previewText = item.snippet || item.body || "No preview available";
@@ -377,11 +381,7 @@ export function EmailListPanel({
             const attachmentCount =
               item.attachments && item.attachments.length > 0
                 ? item.attachments.length
-                : item.subject.toLowerCase().includes("portfolio")
-                  ? 4
-                  : item.emailType === "BOOKING_REQUEST"
-                    ? 2
-                    : 0;
+                : 0;
 
             const movementRef =
               item.movementNumber ||

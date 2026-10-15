@@ -21,14 +21,21 @@ export type FileType = "doc" | "sheet" | "pdf" | "image" | "slides" | "archive";
 export interface CutOffDeadlineItem {
   type: string;
   dateTime: string | null;
+  normalizedDate?: string | null;
+  originalExtractedText?: string;
   rawText?: string;
+  time?: string | null;
+  isAmbiguous?: boolean;
+  requiresManualReview?: boolean;
+  reviewReason?: string | null;
 }
 
 export interface DriveFileMetadata {
-  category?: "Cut-Off Notice" | "Bill of Lading" | "General" | "Other" | string;
+  category?: "Cut-Off Notice" | "Bill of Lading" | "Booking Confirmation" | "Shipping Instructions" | "Invoices & Receipts" | "Customs & Clearance" | "General" | "Other" | string;
   documentType?:
     | "BILL_OF_LADING"
     | "CUT_OFF_NOTICE"
+    | "BOOKING_CONFIRMATION"
     | "COMMERCIAL_INVOICE"
     | "PACKING_LIST"
     | "CERTIFICATE_OF_ORIGIN"
@@ -37,6 +44,8 @@ export interface DriveFileMetadata {
     | "GENERAL"
     | "OTHER"
     | string;
+  originalFilename?: string | null;
+  fileName?: string | null;
   bookingId?: string | null;
   movementNumber?: string | null;
   movementReferenceNumber?: string | null;
@@ -45,16 +54,22 @@ export interface DriveFileMetadata {
   forwarderName?: string | null;
   forwarder?: string | null;
   senderEmail?: string | null;
+  sourceEmail?: string | null;
   emailMessageId?: string | null;
   gmailMessageId?: string | null;
   fileFormat?: string;
   isMetadataOnly?: boolean;
-  displayDocumentType?: "Cut-Off" | "BL" | "Other" | string;
+  displayDocumentType?: "Cut-Off" | "BL" | "Booking Confirmation" | "Shipping Instructions" | "Invoice" | "Packing List" | "Other" | string;
   source?: string;
+  uploadStatus?: string | null;
   savedAt?: string;
+  storageBucket?: string | null;
+  storagePath?: string | null;
   classificationSource?: string;
   classificationReason?: string;
   cutOffDeadlines?: CutOffDeadlineItem[];
+  hasCutOffDate?: boolean;
+  detectedCutOffDate?: string | null;
   cutOffDates?: {
     portCutoff?: string | null;
     siCutoff?: string | null;
@@ -76,9 +91,15 @@ export interface DriveFileMetadata {
   forwarderEmail?: string | null;
   forwarderAvatarText?: string | null;
   typeTag?: "Cut-Off" | "Bill of Lading" | "Invoice" | "Packing List" | "Other" | string | null;
+  fileSize?: string | null;
   receivedDate?: string | null;
   receivedTime?: string | null;
-  status?: "Processed" | "Pending" | "Needs Review" | string | null;
+  status?: "Processed" | "Pending" | "Needs Review" | "Saved to Supabase Storage" | "Metadata Saved" | string | null;
+  uploadStatus?: "Saved to Supabase Storage" | "Metadata Saved" | "Needs Review" | string | null;
+  sourceEmail?: string | null;
+  storageBucket?: string | null;
+  storagePath?: string | null;
+  organizationId?: string | null;
   // NEEDS_REVIEW tracking fields
   reviewStatus?: "NEEDS_REVIEW" | "CONFIRMED" | "REVIEWED";
   needsReview?: boolean;
@@ -105,71 +126,7 @@ export interface DriveFile {
   metadata?: DriveFileMetadata;
 }
 
-export const INITIAL_OWNERS: Record<string, DocumentOwner> = {
-  alex: {
-    id: "user-1",
-    name: "Alex Rivera",
-    email: "alex.r@nashmia.com",
-    avatarBg: "bg-emerald-500 text-white",
-    avatarText: "AR",
-    avatarImage:
-      "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80",
-  },
-  sarah: {
-    id: "user-2",
-    name: "Sarah Chen",
-    email: "sarah.c@nashmia.com",
-    avatarBg: "bg-rose-500 text-white",
-    avatarText: "SC",
-    avatarImage:
-      "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&auto=format&fit=crop&q=80",
-  },
-  marcus: {
-    id: "user-3",
-    name: "Marcus Vance",
-    email: "marcus.v@nashmia.com",
-    avatarBg: "bg-amber-500 text-white",
-    avatarText: "MV",
-    avatarImage:
-      "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&auto=format&fit=crop&q=80",
-  },
-  elena: {
-    id: "user-4",
-    name: "Elena Rostova",
-    email: "elena.r@nashmia.com",
-    avatarBg: "bg-blue-600 text-white",
-    avatarText: "ER",
-    avatarImage:
-      "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=100&auto=format&fit=crop&q=80",
-  },
-  david: {
-    id: "user-5",
-    name: "David Kim",
-    email: "david.k@nashmia.com",
-    avatarBg: "bg-teal-600 text-white",
-    avatarText: "DK",
-    avatarImage:
-      "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=100&auto=format&fit=crop&q=80",
-  },
-  jessica: {
-    id: "user-6",
-    name: "Jessica Cipriano",
-    email: "jessica.c@nashmia.com",
-    avatarBg: "bg-amber-600 text-white",
-    avatarText: "JC",
-    avatarImage:
-      "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=100&auto=format&fit=crop&q=80",
-  },
-  james: {
-    id: "user-7",
-    name: "James Bennett",
-    email: "james.b@nashmia.com",
-    avatarBg: "bg-cyan-600 text-white",
-    avatarText: "JB",
-    avatarImage:
-      "https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?w=100&auto=format&fit=crop&q=80",
-  },
-};
+export const INITIAL_OWNERS: Record<string, DocumentOwner> = {};
 
 export const INITIAL_FOLDERS: DriveFolder[] = [
   {
@@ -177,7 +134,7 @@ export const INITIAL_FOLDERS: DriveFolder[] = [
     name: "Shipment Notices",
     fileCount: 0,
     totalSize: "0 KB",
-    sharedWith: [INITIAL_OWNERS.alex, INITIAL_OWNERS.sarah],
+    sharedWith: [],
     isActive: true,
   },
   {
@@ -185,7 +142,7 @@ export const INITIAL_FOLDERS: DriveFolder[] = [
     name: "Customs & Clearance",
     fileCount: 0,
     totalSize: "0 KB",
-    sharedWith: [INITIAL_OWNERS.alex, INITIAL_OWNERS.sarah],
+    sharedWith: [],
     isActive: false,
   },
   {
@@ -193,7 +150,7 @@ export const INITIAL_FOLDERS: DriveFolder[] = [
     name: "Bills of Lading",
     fileCount: 0,
     totalSize: "0 KB",
-    sharedWith: [INITIAL_OWNERS.alex, INITIAL_OWNERS.sarah],
+    sharedWith: [],
     isActive: false,
   },
   {
@@ -201,7 +158,7 @@ export const INITIAL_FOLDERS: DriveFolder[] = [
     name: "Invoices & Receipts",
     fileCount: 0,
     totalSize: "0 KB",
-    sharedWith: [INITIAL_OWNERS.alex, INITIAL_OWNERS.sarah],
+    sharedWith: [],
     isActive: false,
   },
 ];

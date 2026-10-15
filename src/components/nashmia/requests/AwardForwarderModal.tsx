@@ -152,7 +152,7 @@ export const AwardForwarderModal = memo(function AwardForwarderModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && !isSubmitting && onClose()}>
-      <DialogContent className="sm:max-w-[600px] w-[95vw] max-h-[90vh] flex flex-col p-0 overflow-hidden border border-slate-200 shadow-2xl rounded-2xl bg-white text-slate-900 antialiased">
+      <DialogContent className="w-full sm:max-w-[600px] max-h-[92vh] flex flex-col p-0 overflow-hidden sm:rounded-2xl bg-white text-slate-900 antialiased shadow-2xl">
         {/* Header - Crisp and Authoritative */}
         <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white px-6 py-4.5 border-b border-slate-800 relative shrink-0">
           <div className="flex items-center gap-3">

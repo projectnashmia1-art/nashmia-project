@@ -1,8 +1,8 @@
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import {
-  ChevronsLeft,
-  ChevronsRight,
+  ChevronLeft,
+  ChevronRight,
   ClipboardList,
   Container,
   FileText,
@@ -19,235 +19,339 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
+import { useNotifications } from "@/lib/notifications-context";
 import { useSidebarCollapsed } from "@/hooks/use-sidebar-collapsed";
 
-type NavItem = {
+export type NavItem = {
   label: string;
   icon: LucideIcon;
-  badge?: string;
-  href?: string;
+  badge?: string | number;
+  href: string;
+  exact?: boolean;
+  roles?: string[];
+  description?: string;
 };
 
-type NavSection = { title: string; items: NavItem[] };
+export type NavSection = {
+  title: string;
+  items: NavItem[];
+};
 
-const sections: NavSection[] = [
+export const NAVIGATION_SECTIONS: NavSection[] = [
   {
     title: "Overview",
-    items: [{ label: "Dashboard", icon: LayoutDashboard, href: "/" }],
+    items: [
+      {
+        label: "Dashboard",
+        icon: LayoutDashboard,
+        href: "/",
+        exact: true,
+        description: "Operations metrics & activity",
+      },
+    ],
   },
   {
     title: "Operations",
     items: [
-      { label: "New Booking", icon: Plus, href: "/new-booking" },
-      { label: "Bookings", icon: Container, href: "/" },
+      {
+        label: "New Booking",
+        icon: Plus,
+        href: "/new-booking",
+        description: "Create export/import container booking",
+      },
+      {
+        label: "Bookings",
+        icon: Container,
+        href: "/",
+        exact: false,
+        description: "Active container movements & cut-offs",
+      },
       {
         label: "Requests",
         icon: ClipboardList,
         href: "/requests",
         badge: "6",
+        description: "Forwarder quotation inquiries",
       },
     ],
   },
   {
     title: "Directory",
     items: [
-      { label: "Buyers", icon: Users, href: "/buyers" },
-      { label: "Suppliers", icon: Warehouse, href: "/suppliers" },
-      { label: "Forwarders", icon: Send, href: "/forwarders" },
+      {
+        label: "Buyers",
+        icon: Users,
+        href: "/buyers",
+        description: "Buyer consignees & accounts",
+      },
+      {
+        label: "Suppliers",
+        icon: Warehouse,
+        href: "/suppliers",
+        description: "Shippers & cargo suppliers",
+      },
+      {
+        label: "Forwarders",
+        icon: Send,
+        href: "/forwarders",
+        description: "Ocean carriers & freight forwarders",
+      },
     ],
   },
   {
     title: "Commercial",
-    items: [{ label: "Rate Cards", icon: Receipt, href: "/rate-cards" }],
+    items: [
+      {
+        label: "Rate Cards",
+        icon: Receipt,
+        href: "/rate-cards",
+        description: "Contracted freight tariff sheets",
+      },
+    ],
   },
   {
     title: "Records",
     items: [
-      { label: "Documents", icon: FileText, href: "/documents" },
-      { label: "Emails", icon: Mail, href: "/emails" },
+      {
+        label: "Documents",
+        icon: FileText,
+        href: "/documents",
+        description: "Bills of lading, invoices & OCR records",
+      },
+      {
+        label: "Emails",
+        icon: Mail,
+        href: "/emails",
+        description: "Automated quotation inbox & threads",
+      },
     ],
   },
   {
     title: "System",
-    items: [{ label: "Settings", icon: Settings, href: "/settings" }],
+    items: [
+      {
+        label: "Settings",
+        icon: Settings,
+        href: "/settings",
+        description: "Organization & workflow preferences",
+      },
+    ],
   },
 ];
 
-function BrandMark({ className }: { className?: string }) {
+/**
+ * Brand Logo Mark - Circular Pill Container matching reference aesthetic
+ */
+function BrandMark({ collapsed }: { collapsed?: boolean }) {
   return (
-    <span
-      className={cn(
-        "grid size-10 shrink-0 place-items-center rounded-full bg-white shadow-[0_4px_16px_rgba(0,0,0,0.10)] ring-2 ring-white/60 transition-transform duration-200 hover:scale-105",
-        className,
-      )}
-      aria-hidden
-    >
-      <svg viewBox="0 0 24 24" className="size-5 text-[#0FA3B1]" fill="none" strokeWidth="2.2">
-        <rect
-          x="3"
-          y="7"
-          width="11"
-          height="10"
-          rx="2"
-          stroke="currentColor"
-          className="opacity-95"
-        />
-        <path d="M7 7v10M10.5 7v10" stroke="currentColor" className="opacity-60" />
-        <path
-          d="M16 12h5M18.5 9.5 21 12l-2.5 2.5"
+    <div className="relative flex items-center gap-3 select-none">
+      <div
+        className={cn(
+          "relative grid size-9.5 shrink-0 place-items-center rounded-full bg-white text-slate-900 border border-slate-200/80 shadow-[0_2px_8px_rgba(0,0,0,0.04)] transition-transform duration-200 group-hover:scale-105",
+          collapsed && "mx-auto",
+        )}
+      >
+        {/* Minimal Geometric / Maritime Brand Symbol */}
+        <svg
+          viewBox="0 0 24 24"
+          className="size-4.5 text-slate-900"
+          fill="none"
+          strokeWidth="2.2"
           stroke="currentColor"
           strokeLinecap="round"
           strokeLinejoin="round"
-        />
-      </svg>
-    </span>
+          aria-hidden="true"
+        >
+          <rect x="3" y="3" width="8" height="8" rx="2" />
+          <rect x="13" y="13" width="8" height="8" rx="2" />
+          <path d="M7 11v6a2 2 0 0 0 2 2h6" />
+        </svg>
+        <span className="absolute bottom-0.5 right-0.5 size-2 rounded-full border-2 border-white bg-emerald-500 shadow-2xs" />
+      </div>
+
+      {!collapsed && (
+        <div className="flex min-w-0 flex-col overflow-hidden text-left transition-opacity duration-200">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[13.5px] font-extrabold tracking-[0.06em] text-slate-900">
+              NASHMIA
+            </span>
+            <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[8.5px] font-bold tracking-wider text-slate-600">
+              LOGISTICS
+            </span>
+          </div>
+          <span className="text-[10.5px] font-medium text-slate-400 truncate">
+            Container Operations
+          </span>
+        </div>
+      )}
+    </div>
   );
 }
 
+/**
+ * Determines whether a navigation item is active based on exact or nested path
+ */
+function isItemActive(item: NavItem, currentPath: string): boolean {
+  if (!item.href) return false;
+
+  // Root Dashboard vs Bookings disambiguation
+  if (item.href === "/") {
+    if (item.label === "Dashboard") {
+      return currentPath === "/" && !window.location.hash.includes("booking");
+    }
+    if (item.label === "Bookings") {
+      return currentPath === "/" && window.location.hash.includes("booking");
+    }
+    return currentPath === "/";
+  }
+
+  if (item.exact) {
+    return currentPath === item.href;
+  }
+
+  // Nested routes, dynamic child routes (e.g. /requests/xyz, /documents/xyz)
+  return currentPath === item.href || currentPath.startsWith(`${item.href}/`);
+}
+
+/**
+ * Navigation Row Component - Smooth, Reference-Inspired Circular Icon Navigation
+ */
 function NavRow({
   item,
   collapsed,
   onNavigate,
+  dynamicBadge,
 }: {
   item: NavItem;
   collapsed: boolean;
   onNavigate?: () => void;
+  dynamicBadge?: string | number;
 }) {
   const Icon = item.icon;
   const location = useLocation();
+  const currentPath = location.pathname;
+  const isActive = isItemActive(item, currentPath);
 
-  // Exactly matching current active route
-  const isCurrentActive =
-    item.href !== undefined &&
-    (item.href === "/" ? location.pathname === "/" : location.pathname.startsWith(item.href));
+  const displayBadge = dynamicBadge ?? item.badge;
 
-  // Collapsed view: Self-contained icon + compact label, zero horizontal clipping, zero blocking
+  // Collapsed Mode: Perfectly Centered Circular Icon Rail
   if (collapsed) {
-    const collapsedContent = (
-      <div className="flex justify-center py-0.5">
-        {isCurrentActive ? (
-          <div className="relative flex flex-col items-center justify-center w-[54px] py-1.5 rounded-[20px] bg-white text-[#0FA3B1] shadow-[0_6px_20px_rgba(0,0,0,0.12),0_0_0_1px_rgba(255,255,255,0.9)] transition-all duration-200 ease-out">
-            <Icon className="size-[18px] stroke-[2.4] text-[#0FA3B1]" />
-            <span className="mt-1 text-[8.5px] font-bold tracking-tight text-[#0FA3B1] leading-none select-none">
-              {item.label.split(" ")[0]}
+    return (
+      <div className="relative group/nav flex justify-center py-0.5">
+        <Link
+          to={item.href}
+          onClick={onNavigate}
+          aria-label={item.label}
+          aria-current={isActive ? "page" : undefined}
+          className={cn(
+            "relative flex size-9.5 items-center justify-center rounded-full transition-all duration-200 outline-none focus-visible:ring-2 focus-visible:ring-slate-900 focus-visible:ring-offset-2",
+            isActive
+              ? "bg-slate-950 text-white shadow-[0_4px_12px_rgba(0,0,0,0.18)] scale-100 ring-1 ring-black/10"
+              : "bg-white text-slate-600 border border-slate-200/70 shadow-2xs hover:bg-slate-50 hover:text-slate-950 hover:border-slate-300 hover:shadow-xs hover:scale-105 active:scale-95",
+          )}
+        >
+          <Icon
+            className={cn(
+              "size-4 shrink-0 transition-transform duration-200 group-hover/nav:scale-105",
+              isActive ? "text-white" : "text-slate-600 group-hover/nav:text-slate-900",
+            )}
+            strokeWidth={isActive ? 2.2 : 1.9}
+          />
+
+          {/* Badge Dot for Collapsed Mode */}
+          {Boolean(displayBadge) && (
+            <span
+              className={cn(
+                "absolute -top-0.5 -right-0.5 flex size-3.5 items-center justify-center rounded-full text-[8.5px] font-bold shadow-xs ring-2 ring-white",
+                isActive ? "bg-amber-400 text-slate-950 font-extrabold" : "bg-slate-950 text-white",
+              )}
+            >
+              {displayBadge}
             </span>
-            {item.badge && (
-              <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#078A99] px-1 text-[9px] font-bold text-white shadow-xs">
-                {item.badge}
+          )}
+        </Link>
+
+        {/* Floating Tooltip positioned immediately to the right */}
+        <div
+          role="tooltip"
+          className="pointer-events-none fixed left-[78px] z-50 hidden rounded-2xl bg-slate-900 px-3 py-1.5 text-left text-white shadow-xl ring-1 ring-white/10 backdrop-blur-md transition-all duration-150 group-hover/nav:flex group-hover/nav:items-center group-hover/nav:gap-2 group-focus-within/nav:flex"
+        >
+          <div className="flex flex-col">
+            <span className="text-[12px] font-semibold text-white whitespace-nowrap">
+              {item.label}
+            </span>
+            {item.description && (
+              <span className="text-[10px] font-normal text-slate-300 whitespace-nowrap">
+                {item.description}
               </span>
             )}
           </div>
-        ) : (
-          <div className="relative flex flex-col items-center justify-center w-[54px] py-1.5 rounded-[20px] text-white/90 transition-all duration-150 ease-out hover:bg-white/20 hover:text-white hover:scale-105 active:scale-95">
-            <Icon className="size-[18px] stroke-[1.9] text-white/90 transition-colors duration-150" />
-            <span className="mt-1 text-[8px] font-medium tracking-tight text-white/80 leading-none select-none">
-              {item.label.split(" ")[0]}
+          {Boolean(displayBadge) && (
+            <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-[9px] font-bold text-white">
+              {displayBadge}
             </span>
-            {item.badge && (
-              <span className="absolute top-1 right-1 size-2 rounded-full bg-[#C7E8E8] ring-2 ring-[#0FA3B1] transition-all duration-150" />
-            )}
-          </div>
-        )}
+          )}
+        </div>
       </div>
     );
-
-    const innerNode = item.href ? (
-      <Link
-        to={item.href}
-        onClick={onNavigate}
-        title={item.label}
-        aria-label={item.label}
-        className="block outline-none focus-visible:ring-2 focus-visible:ring-white/60 rounded-[20px]"
-      >
-        {collapsedContent}
-      </Link>
-    ) : (
-      <button
-        type="button"
-        onClick={onNavigate}
-        title={item.label}
-        aria-label={item.label}
-        className="block w-full outline-none focus-visible:ring-2 focus-visible:ring-white/60 rounded-[20px] cursor-pointer"
-      >
-        {collapsedContent}
-      </button>
-    );
-
-    return <div className="relative flex justify-center">{innerNode}</div>;
   }
 
-  // Expanded View - active or hover converts smoothly into pure white pill with dark text & teal icon
-  const inner = (
-    <div
+  // Expanded Mode: Soft Pill Row with circular icon button on the left
+  return (
+    <Link
+      to={item.href}
+      onClick={onNavigate}
+      aria-current={isActive ? "page" : undefined}
       className={cn(
-        "group/nav relative flex h-10.5 items-center gap-3 rounded-[22px] px-3.5 transition-colors duration-150 ease-out cursor-pointer",
-        isCurrentActive
-          ? "bg-[#FFFFFF] text-[#000000] shadow-[0_8px_24px_rgba(0,0,0,0.10),0_0_0_1px_rgba(255,255,255,0.95)]"
-          : "text-white/90 hover:bg-[#FFFFFF] hover:text-[#000000] hover:shadow-[0_8px_24px_rgba(0,0,0,0.08),0_0_0_1px_rgba(255,255,255,0.9)] hover:translate-x-[2px]",
+        "group/nav relative flex h-10 items-center gap-2.5 rounded-2xl px-2 text-[13px] font-medium transition-all duration-200 outline-none focus-visible:ring-2 focus-visible:ring-slate-900 focus-visible:ring-offset-1 overflow-hidden",
+        isActive
+          ? "bg-slate-100/90 text-slate-950 font-semibold shadow-2xs ring-1 ring-slate-200/70"
+          : "text-slate-600 hover:bg-slate-50/80 hover:text-slate-950",
       )}
     >
-      <span
+      {/* Circular Icon Pill matching reference */}
+      <div
         className={cn(
-          "grid size-7 shrink-0 place-items-center transition-colors duration-150",
-          isCurrentActive ? "text-[#0FA3B1]" : "text-white/90 group-hover/nav:text-[#0FA3B1]",
+          "grid size-8 shrink-0 place-items-center rounded-full transition-all duration-200",
+          isActive
+            ? "bg-slate-950 text-white shadow-xs ring-1 ring-black/10 scale-100"
+            : "bg-white text-slate-600 border border-slate-200/80 shadow-2xs group-hover/nav:border-slate-300 group-hover/nav:text-slate-950 group-hover/nav:shadow-xs",
         )}
       >
-        <Icon className="size-[18px] stroke-[2.2]" />
-      </span>
+        <Icon
+          className={cn(
+            "size-3.5 shrink-0 transition-transform duration-200 group-hover/nav:scale-105",
+            isActive ? "text-white" : "text-slate-600 group-hover/nav:text-slate-900",
+          )}
+          strokeWidth={isActive ? 2.2 : 1.9}
+        />
+      </div>
 
-      <span
-        className={cn(
-          "min-w-0 flex-1 text-[13px] font-semibold tracking-tight transition-colors duration-150 truncate whitespace-nowrap",
-          isCurrentActive
-            ? "text-slate-900 font-bold"
-            : "text-white group-hover/nav:text-slate-900",
-        )}
-      >
-        {item.label}
-      </span>
+      <span className="min-w-0 flex-1 truncate whitespace-nowrap">{item.label}</span>
 
-      {item.badge && (
+      {Boolean(displayBadge) && (
         <span
           className={cn(
-            "ml-auto flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[10px] font-bold transition-colors duration-150",
-            isCurrentActive
-              ? "bg-[#0FA3B1] text-white"
-              : "bg-white/20 text-white group-hover/nav:bg-[#0FA3B1] group-hover/nav:text-white",
+            "ml-auto flex h-4 min-w-4 items-center justify-center rounded-full px-1.5 text-[9.5px] font-bold tracking-tight transition-colors duration-150 shrink-0",
+            isActive
+              ? "bg-slate-950 text-white shadow-2xs"
+              : "bg-slate-100 text-slate-600 ring-1 ring-slate-200/80 group-hover/nav:bg-slate-200 group-hover/nav:text-slate-900",
           )}
         >
-          {item.badge}
+          {displayBadge}
         </span>
       )}
-    </div>
-  );
-
-  if (item.href) {
-    return (
-      <Link
-        to={item.href}
-        onClick={onNavigate}
-        className="block outline-none focus-visible:ring-2 focus-visible:ring-white/60 rounded-[22px]"
-      >
-        {inner}
-      </Link>
-    );
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={onNavigate}
-      className="block w-full text-left outline-none focus-visible:ring-2 focus-visible:ring-white/60 rounded-[22px] cursor-pointer"
-    >
-      {inner}
-    </button>
+    </Link>
   );
 }
 
+/**
+ * Sidebar Body - Shared between Desktop Fixed and Mobile Drawer
+ */
 function SidebarBody({
   collapsed,
   onToggle,
@@ -261,12 +365,19 @@ function SidebarBody({
 }) {
   const navigate = useNavigate();
   const { profile, user, signOut } = useAuth();
+  const { unreadCount } = useNotifications();
+
   const displayName =
     profile?.full_name ||
     (user?.user_metadata?.full_name as string) ||
-    (user?.email ? user.email.split("@")[0] : "Nashmia Logistics");
-  const userRole = profile?.role || (user?.user_metadata?.role as string) || "Operations";
-  const initial = (displayName.charAt(0) || user?.email?.charAt(0) || "N").toUpperCase();
+    (user?.email ? user.email.split("@")[0] : "Operations");
+  const userRole = (
+    profile?.role ||
+    (user?.user_metadata?.role as string) ||
+    "OPERATIONS"
+  ).toUpperCase();
+  const userEmail = profile?.email || user?.email || "";
+  const initial = (displayName.charAt(0) || userEmail.charAt(0) || "N").toUpperCase();
 
   const handleLogout = async () => {
     try {
@@ -280,88 +391,83 @@ function SidebarBody({
   };
 
   return (
-    <div className="relative flex h-full flex-col overflow-hidden">
-      {/* Subtle Botanical / Fluid Ambient Shapes in Background */}
-      <div
-        className="pointer-events-none absolute -bottom-10 -left-10 size-48 rounded-full bg-white/5 blur-2xl"
-        aria-hidden
-      />
-      <div className="pointer-events-none absolute bottom-4 -left-2 opacity-15" aria-hidden>
-        <svg width="120" height="120" viewBox="0 0 100 100" fill="none">
-          <path d="M20 90C20 50 60 20 90 20C90 60 50 90 20 90Z" fill="#C7E8E8" />
-          <path d="M10 100C10 65 45 40 75 40C75 75 40 100 10 100Z" fill="#E8F5F6" />
-        </svg>
-      </div>
-
+    <div className="relative flex h-full flex-col overflow-hidden bg-white/95 rounded-[26px] border border-slate-200/80 shadow-[0_4px_24px_rgba(0,0,0,0.03)] text-slate-700 antialiased select-none backdrop-blur-md">
       {/* TOP BRAND AREA */}
       <div
         className={cn(
-          "relative z-10 flex items-center gap-3 px-4 pb-3.5 pt-4.5 select-none",
-          collapsed ? "justify-center px-0" : "justify-between",
+          "relative z-10 flex h-14 shrink-0 items-center px-3 border-b border-slate-100/80",
+          collapsed ? "justify-center px-1" : "justify-between",
         )}
       >
-        <div className="flex items-center gap-3">
-          <BrandMark />
-          {!collapsed && (
-            <div className="min-w-0 overflow-hidden whitespace-nowrap">
-              <p className="text-[14.5px] font-bold leading-none tracking-[0.14em] text-white drop-shadow-xs">
-                NASHMIA
-              </p>
-              <p className="mt-1 text-[9.5px] font-medium leading-none tracking-[0.22em] text-white/80">
-                INDUSTRIES
-              </p>
-              <p className="mt-1.5 text-[8.5px] font-bold leading-none tracking-[0.28em] text-[#C7E8E8]">
-                LOGISTICS
-              </p>
-            </div>
-          )}
-        </div>
+        <Link
+          to="/"
+          onClick={onNavigate}
+          aria-label="Nashmia Logistics Home"
+          className="group flex items-center gap-2.5 outline-none focus-visible:ring-2 focus-visible:ring-slate-900 rounded-2xl"
+        >
+          <BrandMark collapsed={collapsed} />
+        </Link>
 
         {!collapsed && showToggle && (
           <button
             type="button"
             onClick={onToggle}
             aria-label="Collapse sidebar"
-            className="grid size-7 place-items-center rounded-full text-white/80 transition-all hover:bg-white/15 hover:text-white cursor-pointer"
+            title="Collapse sidebar"
+            className="grid size-7.5 place-items-center rounded-full text-slate-400 transition-all hover:bg-slate-100 hover:text-slate-800 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-slate-900 border border-slate-100 hover:border-slate-200 shadow-2xs"
           >
-            <ChevronsLeft className="size-4" />
+            <ChevronLeft className="size-3.5" />
           </button>
         )}
       </div>
 
-      {/* EXPAND BUTTON IN COLLAPSED MODE */}
+      {/* COLLAPSED EXPAND TOGGLE */}
       {collapsed && showToggle && (
-        <div className="relative z-10 flex justify-center pb-2">
+        <div className="flex justify-center py-1.5 border-b border-slate-100/80 bg-slate-50/40">
           <button
             type="button"
             onClick={onToggle}
             aria-label="Expand sidebar"
-            className="grid size-7 place-items-center rounded-full text-white/80 transition-all hover:bg-white/20 hover:text-white cursor-pointer"
+            title="Expand sidebar"
+            className="grid size-7.5 place-items-center rounded-full text-slate-400 transition-all hover:bg-slate-950 hover:text-white cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-slate-900 border border-slate-200/70 shadow-2xs hover:scale-105"
           >
-            <ChevronsRight className="size-4" />
+            <ChevronRight className="size-3.5" />
           </button>
         </div>
       )}
 
-      {/* DIVIDER */}
-      <div className="mx-4 h-px bg-white/15" />
-
-      {/* NAVIGATION ITEMS: Buttery-Smooth, Non-Sticking, Contained Scroll */}
-      <nav className="relative z-10 flex-1 space-y-3.5 overflow-y-auto overscroll-contain px-3 py-3 scroll-smooth touch-pan-y [scrollbar-width:thin] [scrollbar-color:rgba(255,255,255,0.22)_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-white/20 hover:[&::-webkit-scrollbar-thumb]:bg-white/35">
-        {sections.map((section) => (
-          <div key={section.title} className="space-y-1">
+      {/* NAVIGATION SECTIONS: Vertical Icon Rail matching reference */}
+      <nav
+        aria-label="Primary Navigation"
+        className={cn(
+          "relative z-10 flex-1 overflow-y-auto overscroll-contain py-2 scroll-smooth [scrollbar-width:thin] [scrollbar-color:rgba(100,116,139,0.2)_transparent]",
+          collapsed ? "px-1.5 space-y-1" : "px-2.5 space-y-2.5",
+        )}
+      >
+        {NAVIGATION_SECTIONS.map((section) => (
+          <div key={section.title} className="space-y-0.5">
             {!collapsed && (
-              <p className="px-3 pb-1 text-[9.5px] font-bold uppercase tracking-[0.2em] text-white/60 select-none">
-                {section.title}
-              </p>
+              <div className="px-2 pb-0.5 pt-1">
+                <span className="text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400 select-none">
+                  {section.title}
+                </span>
+              </div>
             )}
-            <div className="space-y-1">
+
+            <div className="space-y-0.5">
               {section.items.map((item) => (
                 <NavRow
                   key={item.label}
                   item={item}
                   collapsed={collapsed}
                   onNavigate={onNavigate}
+                  dynamicBadge={
+                    item.label === "Requests"
+                      ? item.badge
+                      : item.label === "Emails" && unreadCount > 0
+                        ? unreadCount
+                        : item.badge
+                  }
                 />
               ))}
             </div>
@@ -369,51 +475,64 @@ function SidebarBody({
         ))}
       </nav>
 
-      {/* DIVIDER */}
-      <div className="mx-4 h-px bg-white/15" />
-
-      {/* BOTTOM SECTION: USER PROFILE & LOGOUT */}
-      <div className="relative z-10 p-3">
+      {/* BOTTOM USER AREA & SETTINGS MATCHING REFERENCE */}
+      <div className="relative z-10 p-2 border-t border-slate-100/80 bg-slate-50/30">
         {collapsed ? (
-          <div className="flex justify-center">
+          <div className="group/user relative flex flex-col items-center gap-1.5">
+            {/* Circular Profile Avatar matching reference portrait bottom pill */}
             <Link
               to="/settings"
               onClick={onNavigate}
-              aria-label="Account Settings"
-              title={`${displayName} (${userRole})`}
-              className="mx-auto flex size-10 items-center justify-center rounded-full bg-white text-[#0FA3B1] font-bold text-sm shadow-[0_4px_12px_rgba(0,0,0,0.12)] hover:scale-105 transition-transform outline-none focus-visible:ring-2 focus-visible:ring-white"
+              aria-label={`User Settings - ${displayName} (${userRole})`}
+              className="relative flex size-9 items-center justify-center rounded-full bg-slate-950 font-bold text-xs text-white shadow-[0_3px_10px_rgba(0,0,0,0.16)] transition-transform hover:scale-105 outline-none focus-visible:ring-2 focus-visible:ring-slate-900 border-2 border-white"
             >
               {initial}
+              <span className="absolute bottom-0 right-0 size-2 rounded-full border border-white bg-emerald-500 shadow-2xs" />
             </Link>
+
+            {/* User Tooltip for Collapsed Mode */}
+            <div
+              role="tooltip"
+              className="pointer-events-none fixed left-[78px] bottom-3.5 z-50 hidden rounded-2xl bg-slate-900 p-3 text-white shadow-2xl ring-1 ring-white/10 backdrop-blur-md transition-all group-hover/user:block"
+            >
+              <p className="text-[12px] font-bold text-white leading-tight">{displayName}</p>
+              <p className="text-[10px] font-medium text-slate-300">{userEmail}</p>
+              <span className="mt-1.5 inline-block rounded-full bg-white/15 px-2 py-0.5 text-[9px] font-bold text-slate-200">
+                {userRole}
+              </span>
+            </div>
           </div>
         ) : (
-          <div className="flex items-center gap-2 rounded-[20px] bg-white/10 p-2 border border-white/15 backdrop-blur-xs transition-colors hover:bg-white/15">
+          <div className="flex items-center gap-2 rounded-2xl bg-white p-1.5 border border-slate-200/70 shadow-2xs transition-all hover:border-slate-300">
             <Link
               to="/settings"
               onClick={onNavigate}
-              className="flex min-w-0 flex-1 items-center gap-2.5 text-left group/profile"
+              className="group/profile flex min-w-0 flex-1 items-center gap-2.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-slate-900 rounded-xl p-0.5"
             >
-              <span className="grid size-8 shrink-0 place-items-center rounded-full bg-white text-[12px] font-bold text-[#0FA3B1] shadow-xs group-hover/profile:scale-105 transition-transform">
+              <div className="relative grid size-7.5 shrink-0 place-items-center rounded-full bg-slate-950 text-[11px] font-bold text-white shadow-2xs">
                 {initial}
-              </span>
+                <span className="absolute -bottom-0.5 -right-0.5 size-2 rounded-full border border-white bg-emerald-500" />
+              </div>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-[12.5px] font-bold text-white leading-tight">
+                <p className="truncate text-[12px] font-semibold text-slate-900 leading-tight">
                   {displayName}
                 </p>
-                <p className="truncate text-[10.5px] font-medium text-white/75 capitalize leading-tight">
-                  {userRole}
-                </p>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[9.5px] font-medium text-slate-400 capitalize truncate">
+                    {userRole.toLowerCase()}
+                  </span>
+                </div>
               </div>
             </Link>
 
             <button
               type="button"
               onClick={handleLogout}
-              title="Log out"
-              aria-label="Log out"
-              className="grid size-7 shrink-0 place-items-center rounded-lg text-white/80 hover:bg-white/20 hover:text-white transition-colors cursor-pointer"
+              title="Sign out"
+              aria-label="Sign out"
+              className="grid size-7 shrink-0 place-items-center rounded-full text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-rose-500 border border-transparent hover:border-rose-100"
             >
-              <LogOut className="size-3.5 text-white" />
+              <LogOut className="size-3" />
             </button>
           </div>
         )}
@@ -422,6 +541,9 @@ function SidebarBody({
   );
 }
 
+/**
+ * Desktop AppSidebar (Fixed Full-Height Sticky Floating Card Layout)
+ */
 export function AppSidebar({
   collapsed: propCollapsed,
   onToggle: propOnToggle,
@@ -436,18 +558,23 @@ export function AppSidebar({
 
   return (
     <aside
+      aria-label="Main Navigation"
       style={{
-        width: collapsed ? 76 : 256,
+        width: collapsed ? 72 : 260,
         willChange: "width",
       }}
-      aria-label="Main Navigation"
-      className="fixed left-3.5 top-3.5 bottom-3.5 z-30 isolate hidden overflow-hidden rounded-[26px] bg-gradient-to-b from-[#0FA3B1] via-[#0D98A6] to-[#078A99] text-white shadow-[0_16px_44px_rgba(15,163,177,0.22),0_0_0_1px_rgba(255,255,255,0.18)] transition-[width] duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] lg:flex lg:flex-col"
+      className={cn(
+        "fixed inset-y-0 left-0 z-30 isolate hidden h-screen h-[100dvh] flex-col p-2 transition-[width] duration-300 ease-[cubic-bezier(0.2,0,0,1)] lg:flex",
+      )}
     >
       <SidebarBody collapsed={collapsed} onToggle={onToggle} />
     </aside>
   );
 }
 
+/**
+ * Mobile Sidebar Drawer (Off-Canvas Sheet)
+ */
 export function MobileSidebar({
   open: controlledOpen,
   onOpenChange,
@@ -458,13 +585,39 @@ export function MobileSidebar({
   const [internalOpen, setInternalOpen] = useState(false);
   const isControlled = controlledOpen !== undefined;
   const open = isControlled ? controlledOpen : internalOpen;
-  const setOpen = (val: boolean) => {
-    if (isControlled) {
-      onOpenChange?.(val);
-    } else {
-      setInternalOpen(val);
-    }
-  };
+
+  const setOpen = useCallback(
+    (val: boolean) => {
+      if (isControlled) {
+        onOpenChange?.(val);
+      } else {
+        setInternalOpen(val);
+      }
+    },
+    [isControlled, onOpenChange],
+  );
+
+  // Close mobile drawer on Escape key
+  useEffect(() => {
+    if (!open) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [open, setOpen]);
+
+  // Lock body scroll when mobile drawer is open
+  useEffect(() => {
+    if (!open) return;
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [open]);
 
   return (
     <>
@@ -472,41 +625,41 @@ export function MobileSidebar({
         <button
           type="button"
           onClick={() => setOpen(true)}
-          aria-label="Open navigation"
-          className="fixed bottom-5 left-5 z-40 grid size-12 place-items-center rounded-full bg-[#0FA3B1] text-white shadow-[0_12px_32px_rgba(15,163,177,0.35)] ring-2 ring-white/70 lg:hidden cursor-pointer"
+          aria-label="Open navigation menu"
+          className="fixed bottom-5 left-5 z-40 grid size-11 place-items-center rounded-full bg-slate-950 text-white shadow-lg ring-2 ring-white lg:hidden cursor-pointer active:scale-95 transition-transform"
         >
           <Menu className="size-5" />
         </button>
       )}
 
-      {/* Dim backdrop with blur - safely below modals (z-40) */}
+      {/* Backdrop overlay */}
       <div
         onClick={() => setOpen(false)}
         aria-hidden="true"
         className={cn(
-          "fixed inset-0 z-40 bg-slate-900/60 backdrop-blur-sm transition-opacity duration-250 lg:hidden",
+          "fixed inset-0 z-40 bg-slate-900/30 backdrop-blur-xs transition-opacity duration-250 lg:hidden",
           open ? "opacity-100" : "pointer-events-none opacity-0 invisible",
         )}
       />
 
-      {/* Mobile Drawer - isolated stacking context at z-40, below modals (z-50) */}
+      {/* Off-canvas mobile navigation drawer */}
       <aside
         aria-label="Mobile Navigation"
         className={cn(
-          "fixed left-3.5 top-3.5 bottom-3.5 z-40 isolate w-[268px] max-w-[calc(100vw-28px)] overflow-hidden rounded-[26px] bg-gradient-to-b from-[#0FA3B1] via-[#0D98A6] to-[#078A99] text-white shadow-[0_20px_50px_rgba(15,163,177,0.35)] ring-1 ring-white/20 transition-[transform,opacity] duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] lg:hidden flex flex-col",
-          open
-            ? "translate-x-0 opacity-100 visible"
-            : "-translate-x-[115%] opacity-0 invisible pointer-events-none",
+          "fixed inset-y-0 left-0 z-40 isolate flex h-full h-[100dvh] w-[270px] max-w-[85vw] flex-col p-2.5 transition-transform duration-300 ease-[cubic-bezier(0.2,0,0,1)] lg:hidden",
+          open ? "translate-x-0" : "-translate-x-full pointer-events-none",
         )}
       >
+        {/* Mobile close button */}
         <button
           type="button"
           onClick={() => setOpen(false)}
           aria-label="Close navigation"
-          className="absolute right-3.5 top-3.5 z-20 grid size-8 place-items-center rounded-full text-white/80 hover:bg-white/20 hover:text-white transition-colors cursor-pointer"
+          className="absolute right-5 top-5 z-20 grid size-7.5 place-items-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-800 transition-colors cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-slate-900 border border-slate-200/80 bg-white shadow-2xs"
         >
-          <X className="size-4" />
+          <X className="size-3.5" />
         </button>
+
         <SidebarBody collapsed={false} showToggle={false} onNavigate={() => setOpen(false)} />
       </aside>
     </>

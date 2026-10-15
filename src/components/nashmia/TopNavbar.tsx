@@ -25,7 +25,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { AINotificationCenter } from "@/components/nashmia/AINotificationCenter";
 import { NotificationCenterTrigger } from "@/components/nashmia/NotificationCenterTrigger";
 import { cn } from "@/lib/utils";
@@ -70,7 +69,7 @@ export function TopNavbar({ onOpenMobileMenu }: TopNavbarProps) {
   return (
     <header
       id="top-navigation-bar"
-      className="glass-apple fixed inset-x-0 top-0 z-30 flex h-16 items-center justify-between border-b border-white/80 px-4 sm:px-6 backdrop-blur-2xl transition-all"
+      className="fixed inset-x-0 top-0 z-30 flex h-16 items-center justify-between bg-transparent px-4 sm:px-6 transition-all"
     >
       {/* Left: App Title & Branding */}
       <div className="flex items-center gap-3 sm:gap-4">
@@ -79,30 +78,30 @@ export function TopNavbar({ onOpenMobileMenu }: TopNavbarProps) {
             type="button"
             onClick={onOpenMobileMenu}
             aria-label="Toggle navigation menu"
-            className="grid size-9 place-items-center rounded-[12px] border border-white/70 bg-white/50 text-ink transition-all hover:bg-white/80 lg:hidden"
+            className="grid size-8.5 place-items-center rounded-xl border border-slate-200/80 bg-white text-slate-700 shadow-2xs transition-all hover:bg-slate-100 lg:hidden cursor-pointer"
           >
             <Menu className="size-4" />
           </button>
         )}
 
-        <div className="flex items-center gap-3">
-          <div className="relative grid size-9 shrink-0 place-items-center rounded-[12px] bg-ink text-background shadow-[0_4px_14px_oklch(0_0_0/0.25)]">
-            <Ship className="size-4.5 text-white" />
-            <span className="absolute -bottom-0.5 -right-0.5 size-2 rounded-full border border-white bg-sage" />
+        <div className="flex items-center gap-2.5">
+          <div className="relative grid size-8 shrink-0 place-items-center rounded-xl bg-slate-900 text-white shadow-2xs">
+            <Ship className="size-4 text-white" />
+            <span className="absolute -bottom-0.5 -right-0.5 size-2 rounded-full border-2 border-white bg-emerald-500" />
           </div>
 
           <div className="flex flex-col">
             <div className="flex items-center gap-2">
-              <span className="text-[15px] font-bold tracking-[-0.01em] text-ink sm:text-[16px]">
-                Nashmia Operations Hub
+              <span className="text-[14.5px] font-bold tracking-tight text-slate-900 sm:text-[15.5px]">
+                Nashmia Operations
               </span>
-              <span className="hidden items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[10.5px] font-semibold text-primary sm:inline-flex">
-                <span className="size-1.5 animate-pulse rounded-full bg-primary" />
-                Live Hub
+              <span className="hidden items-center gap-1.5 rounded-full border border-slate-200/80 bg-slate-100/90 px-2 py-0.5 text-[10px] font-semibold text-slate-700 sm:inline-flex">
+                <span className="size-1.5 animate-pulse rounded-full bg-emerald-500" />
+                Live
               </span>
             </div>
-            <span className="hidden text-[11px] font-medium tracking-[0.06em] text-muted-foreground md:inline">
-              Global Container Logistics & Freight Command
+            <span className="hidden text-[11px] font-normal text-slate-400 md:inline">
+              Global Container Logistics &amp; Freight Command
             </span>
           </div>
         </div>
@@ -113,15 +112,15 @@ export function TopNavbar({ onOpenMobileMenu }: TopNavbarProps) {
         <GlobalSearch variant="navbar" />
       </div>
 
-      {/* Right: Actions & User Profile Placeholder */}
-      <div className="flex items-center gap-2 sm:gap-3">
+      {/* Right: Actions & User Profile */}
+      <div className="flex items-center gap-2 sm:gap-2.5">
         {/* Supabase Connection Status Indicator */}
         <SupabaseStatusIndicator />
 
         {/* Quick Booking Button */}
         <Link
           to="/new-booking"
-          className="hidden h-9 items-center gap-1.5 rounded-[12px] bg-ink px-3 text-[12.5px] font-semibold text-background shadow-[0_6px_20px_oklch(0_0_0/0.2)] transition-all duration-200 ease-glass hover:-translate-y-0.5 hover:shadow-[0_10px_24px_oklch(0_0_0/0.25)] sm:inline-flex"
+          className="hidden h-8.5 items-center gap-1.5 rounded-xl bg-slate-900 px-3 text-[12px] font-semibold text-white shadow-xs transition-all hover:bg-slate-800 active:scale-95 sm:inline-flex"
         >
           <Plus className="size-3.5" />
           <span>New Booking</span>
@@ -130,69 +129,71 @@ export function TopNavbar({ onOpenMobileMenu }: TopNavbarProps) {
         {/* Notifications Button */}
         <NotificationCenterTrigger
           id="top-notifications-button"
-          className="glass-apple-subtle grid size-9.5 place-items-center rounded-[12px] border border-white/80 text-foreground transition-all duration-200 ease-glass hover:-translate-y-0.5 hover:bg-white/80"
+          className="grid size-8.5 place-items-center rounded-xl border border-slate-200/80 bg-white text-slate-700 shadow-2xs transition-all hover:bg-slate-100 hover:text-slate-900"
           iconClassName="size-4"
         />
 
-        {/* User Profile Placeholder Dropdown */}
+        {/* User Profile Dropdown */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
               type="button"
               id="user-profile-button"
-              className="glass-apple-subtle flex h-9.5 items-center gap-2 rounded-[14px] border border-white/80 py-1 pl-1.5 pr-2.5 transition-all duration-200 ease-glass hover:-translate-y-0.5 hover:bg-white/80 focus:outline-none"
+              className="flex h-8.5 items-center gap-2 rounded-xl border border-slate-200/80 bg-white py-1 pl-1.5 pr-2.5 text-slate-800 shadow-2xs transition-all hover:bg-slate-50 focus:outline-none cursor-pointer"
             >
               <div className="relative">
-                <span className="grid size-7 place-items-center rounded-full border border-white/90 bg-primary/16 text-[12px] font-bold text-primary shadow-[inset_0_1px_1px_rgba(255,255,255,0.8)]">
+                <span className="grid size-6.5 place-items-center rounded-lg bg-slate-900 text-[11px] font-bold text-white shadow-2xs">
                   {avatarLetter}
                 </span>
-                <span className="absolute -bottom-0.5 -right-0.5 size-2 rounded-full border border-white bg-sage" />
+                <span className="absolute -bottom-0.5 -right-0.5 size-1.5 rounded-full border border-white bg-emerald-500" />
               </div>
 
               <div className="hidden text-left sm:block">
-                <p className="text-[12.5px] font-semibold leading-tight text-ink truncate max-w-[100px]">
+                <p className="text-[12px] font-semibold leading-tight text-slate-900 truncate max-w-[90px]">
                   {displayName.split(" ")[0]}
                 </p>
-                <p className="text-[10px] font-medium leading-none text-muted-foreground">
+                <p className="text-[9.5px] font-medium leading-none text-slate-400 uppercase">
                   {displayRole}
                 </p>
               </div>
 
-              <ChevronDown className="size-3.5 text-muted-foreground" />
+              <ChevronDown className="size-3 text-slate-400" />
             </button>
           </DropdownMenuTrigger>
 
           <DropdownMenuContent
             align="end"
-            className="glass-apple w-56 rounded-[18px] border border-white/80 p-1.5 shadow-xl"
+            className="w-56 rounded-2xl border border-slate-200/80 bg-white p-1.5 text-slate-700 shadow-xl"
           >
             <DropdownMenuLabel className="px-3 py-2">
               <div className="flex items-center gap-2.5">
-                <span className="grid size-8 place-items-center rounded-full border border-white/90 bg-primary/16 text-[13px] font-bold text-primary">
+                <span className="grid size-8 place-items-center rounded-lg bg-slate-900 text-[12px] font-bold text-white">
                   {avatarLetter}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="text-[13px] font-semibold text-ink truncate">{displayName}</p>
-                  <p className="text-[11px] text-muted-foreground truncate">{displayEmail}</p>
+                  <p className="text-[12.5px] font-semibold text-slate-900 truncate">
+                    {displayName}
+                  </p>
+                  <p className="text-[10.5px] text-slate-500 truncate">{displayEmail}</p>
                 </div>
               </div>
             </DropdownMenuLabel>
-            <DropdownMenuSeparator className="bg-white/80" />
+            <DropdownMenuSeparator className="bg-slate-100" />
             <DropdownMenuItem
               asChild
-              className="cursor-pointer gap-2.5 rounded-[10px] px-3 py-2 text-[12.5px] font-medium text-foreground transition-colors focus:bg-white/70"
+              className="cursor-pointer gap-2.5 rounded-xl px-3 py-2 text-[12.5px] font-medium text-slate-700 hover:bg-slate-100 transition-colors"
             >
               <Link to="/settings">
-                <User className="size-4 text-muted-foreground" />
-                <span>Profile & Account</span>
+                <User className="size-4 text-slate-400" />
+                <span>Profile &amp; Account</span>
               </Link>
             </DropdownMenuItem>
             <DropdownMenuItem
               asChild
-              className="cursor-pointer gap-2.5 rounded-[10px] px-3 py-2 text-[12.5px] font-medium text-foreground transition-colors focus:bg-white/70"
+              className="cursor-pointer gap-2.5 rounded-xl px-3 py-2 text-[12.5px] font-medium text-slate-700 hover:bg-slate-100 transition-colors"
             >
               <Link to="/settings">
-                <SlidersHorizontal className="size-4 text-muted-foreground" />
+                <SlidersHorizontal className="size-4 text-slate-400" />
                 <span>System Settings</span>
               </Link>
             </DropdownMenuItem>
@@ -205,15 +206,15 @@ export function TopNavbar({ onOpenMobileMenu }: TopNavbarProps) {
                   purgeAllDataAndReload();
                 }, 400);
               }}
-              className="cursor-pointer gap-2.5 rounded-[10px] px-3 py-2 text-[12.5px] font-medium text-amber-700 hover:text-amber-800 focus:bg-amber-50 transition-colors"
+              className="cursor-pointer gap-2.5 rounded-xl px-3 py-2 text-[12.5px] font-medium text-amber-700 hover:bg-amber-50 hover:text-amber-800 transition-colors"
             >
               <Sparkles className="size-4 text-amber-600" />
-              <span>Purge Cache & Reload</span>
+              <span>Purge Cache &amp; Reload</span>
             </DropdownMenuItem>
-            <DropdownMenuSeparator className="bg-white/80" />
+            <DropdownMenuSeparator className="bg-slate-100" />
             <DropdownMenuItem
               onClick={handleSignOut}
-              className="cursor-pointer gap-2.5 rounded-[10px] px-3 py-2 text-[12.5px] font-medium text-destructive focus:bg-destructive/10 focus:text-destructive transition-colors"
+              className="cursor-pointer gap-2.5 rounded-xl px-3 py-2 text-[12.5px] font-medium text-rose-600 hover:bg-rose-50 focus:bg-rose-50 transition-colors"
             >
               <LogOut className="size-4" />
               <span>Logout</span>
@@ -224,8 +225,11 @@ export function TopNavbar({ onOpenMobileMenu }: TopNavbarProps) {
 
       {/* User Profile Modal Dialog */}
       <Dialog open={isProfileModalOpen} onOpenChange={setIsProfileModalOpen}>
-        <DialogContent className="max-w-xl p-0 overflow-hidden border-0 bg-transparent shadow-none sm:rounded-[22px]">
-          <DialogTitle className="sr-only">User Profile & Supabase Authentication</DialogTitle>
+        <DialogContent
+          hideCloseButton
+          className="w-full sm:max-w-xl p-0 overflow-hidden border-0 bg-transparent shadow-none sm:rounded-2xl"
+        >
+          <DialogTitle className="sr-only">User Profile &amp; Supabase Authentication</DialogTitle>
           <UserProfile onClose={() => setIsProfileModalOpen(false)} />
         </DialogContent>
       </Dialog>

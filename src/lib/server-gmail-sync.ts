@@ -596,11 +596,34 @@ export async function executeServerGmailSync(
 
         const extracted = extractBodyFromPayload(fullMsg.payload);
 
-        // Detect attachments and extract ONLY metadata - do not download or store actual files
+        // Retrieve email attachments securely from Gmail
         if (extracted.attachments && extracted.attachments.length > 0) {
           console.log(
-            `[ServerGmailSync] 📎 Detected ${extracted.attachments.length} attachment(s) for message ${msgStub.id}. Saving metadata only (no file download/storage).`,
+            `[ServerGmailSync] 📎 Detected ${extracted.attachments.length} attachment(s) for message ${msgStub.id}. Securely retrieving attachment payload(s).`,
           );
+          for (const att of extracted.attachments) {
+            if (att.attachmentId && !att.data) {
+              try {
+                const attRes = await fetch(
+                  `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgStub.id}/attachments/${att.attachmentId}`,
+                  {
+                    headers: { Authorization: `Bearer ${token}` },
+                  },
+                );
+                if (attRes.ok) {
+                  const attJson = (await attRes.json()) as { size?: number; data?: string };
+                  if (attJson.data) {
+                    att.data = attJson.data;
+                  }
+                }
+              } catch (attFetchErr) {
+                console.warn(
+                  `[ServerGmailSync] Notice retrieving attachment payload for ${att.filename}:`,
+                  attFetchErr,
+                );
+              }
+            }
+          }
         }
 
         const snippet = fullMsg.snippet || "";
@@ -688,7 +711,7 @@ export async function executeServerGmailSync(
             thread_id: threadId,
             sender_email: parsedFrom.email || "unknown@forwarder.com",
             recipient_email: parsedTo.email || accountEmail || "operations@nashmiaindustries.com",
-            sender_name: parsedFrom.name || "Forwarder",
+            sender_name: parsedFrom.name || matchResult.forwarderName || "Freight Forwarder",
             subject: subject || "(No Subject)",
             body: body || "",
             body_html: bodyHtml,

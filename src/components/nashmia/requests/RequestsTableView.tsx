@@ -32,6 +32,7 @@ interface RequestsTableViewProps {
   onComposeEmail?: (request: BookingRequestRecord) => void;
   onRequestQuotes?: (request: BookingRequestRecord) => void;
   onViewQuotations?: (request: BookingRequestRecord) => void;
+  onOpenAwardDrawer?: (request: BookingRequestRecord) => void;
 }
 
 export const RequestsTableView = memo(function RequestsTableView({
@@ -46,6 +47,7 @@ export const RequestsTableView = memo(function RequestsTableView({
   onComposeEmail,
   onRequestQuotes,
   onViewQuotations,
+  onOpenAwardDrawer,
 }: RequestsTableViewProps) {
   const isAllSelected = requests.length > 0 && selectedIds.length === requests.length;
   const localList = useMemo(() => getLocalForwarderRequests(), []);
@@ -455,19 +457,37 @@ export const RequestsTableView = memo(function RequestsTableView({
 
                   {/* 10. Award Status */}
                   <td className="px-4 py-3.5 whitespace-nowrap">
-                    {isAwarded && (fwdSummary.awardedForwarder || req.forwarderName) ? (
-                      <span className="inline-flex items-center gap-1 rounded-full border border-cyan-200 bg-cyan-50 px-2.5 py-0.5 text-[11px] font-bold text-cyan-900">
-                        AWARDED ({fwdSummary.awardedForwarder || req.forwarderName})
-                      </span>
-                    ) : fwdSummary.quotationsReceived > 0 ? (
-                      <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
-                        Awaiting Award
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-500">
-                        Awaiting Quotes
-                      </span>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (onOpenAwardDrawer) {
+                          onOpenAwardDrawer(req);
+                        } else if (onViewQuotations) {
+                          onViewQuotations(req);
+                        }
+                      }}
+                      className="cursor-pointer hover:opacity-85 transition-opacity text-left"
+                      title="Open Award Status & Rates Drawer"
+                    >
+                      {isAwarded && (fwdSummary.awardedForwarder || req.forwarderName) ? (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-cyan-200 bg-cyan-50 px-2.5 py-0.5 text-[11px] font-bold text-cyan-900 shadow-2xs">
+                          AWARDED ({fwdSummary.awardedForwarder || req.forwarderName})
+                        </span>
+                      ) : fwdSummary.quotationsReceived > 0 ? (
+                        <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-[11px] font-bold text-emerald-800 shadow-2xs">
+                          <span>{fwdSummary.quotationsReceived} Quotes</span>
+                          {fwdSummary.bestRate && (
+                            <span className="font-mono text-[10.5px] text-slate-700">
+                              (${fwdSummary.bestRate.toLocaleString()})
+                            </span>
+                          )}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-500">
+                          Awaiting Quotes
+                        </span>
+                      )}
+                    </button>
                   </td>
 
                   {/* 11. View Quotations Action */}

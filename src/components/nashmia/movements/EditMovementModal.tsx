@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   X,
   Ship,
@@ -15,6 +15,8 @@ import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { updateBookingDetailsInSupabase } from "@/lib/supabase-services";
 import { toDbBookingStatus, toDbMovementStatus } from "@/lib/movement-lifecycle";
+import { useSwipeToDismiss } from "@/hooks/use-swipe-to-dismiss";
+import { cn } from "@/lib/utils";
 import type { Movement } from "@/lib/nashmia-data";
 
 interface EditMovementModalProps {
@@ -41,6 +43,22 @@ export function EditMovementModal({
 }: EditMovementModalProps) {
   const queryClient = useQueryClient();
   const [isSaving, setIsSaving] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(typeof window !== "undefined" ? window.innerWidth < 640 : false);
+    };
+    checkMobile();
+    window.addEventListener("resize", checkMobile);
+    return () => window.removeEventListener("resize", checkMobile);
+  }, []);
+
+  const { elementRef, handleRef } = useSwipeToDismiss<HTMLDivElement>({
+    direction: "down",
+    onDismiss: onClose,
+    enabled: isMobile && isOpen,
+  });
 
   // Form states
   const [pol, setPol] = useState("");
@@ -155,11 +173,31 @@ export function EditMovementModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-150">
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150 overflow-y-auto"
+      onClick={onClose}
+    >
       <div
-        className="relative w-full max-w-lg bg-white rounded-3xl border border-slate-200 shadow-2xl p-6 sm:p-7 overflow-hidden text-slate-900 animate-in zoom-in-95 duration-200"
+        ref={elementRef}
+        className={cn(
+          "relative z-10 w-full max-w-lg bg-white shadow-2xl border-t sm:border border-slate-200 text-slate-900 overflow-y-auto outline-none transition-all",
+          // Mobile: Bottom sheet sliding from bottom
+          "max-h-[92vh] rounded-t-[28px] rounded-b-none p-5 pb-[max(2rem,env(safe-area-inset-bottom))] animate-in slide-in-from-bottom duration-240 ease-[cubic-bezier(0.16,1,0.3,1)]",
+          // Desktop: Centered modal
+          "sm:rounded-3xl sm:p-6 sm:pb-6 sm:slide-in-from-bottom-0 sm:zoom-in-95 sm:duration-150 sm:max-h-[92vh]",
+        )}
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Mobile Tactile Drag Handle */}
+        <div
+          ref={handleRef}
+          data-swipe-handle="true"
+          className="group mx-auto -mt-2 mb-2 flex h-7 w-full max-w-[180px] cursor-grab touch-none items-center justify-center sm:hidden active:cursor-grabbing select-none"
+          aria-label="Drag down to dismiss"
+        >
+          <div className="h-1.5 w-12 rounded-full bg-slate-300 transition-all duration-150 group-hover:bg-slate-400 group-active:scale-x-110 group-active:bg-slate-500" />
+        </div>
+
         {/* Header */}
         <div className="flex items-start justify-between border-b border-slate-100 pb-4">
           <div className="flex items-center gap-3">

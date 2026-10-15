@@ -734,8 +734,22 @@ export function ShippingSection({
 
       {/* RATE CARDS MODAL / DIRECTORY VIEWER */}
       {rateDirectoryOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm animate-in fade-in">
-          <div className="glass-card-strong w-full max-w-2xl rounded-[24px] border border-white/95 p-6 shadow-2xl animate-in zoom-in-95 outline-none">
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 p-0 sm:p-4 backdrop-blur-sm animate-in fade-in"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setRateDirectoryOpen(false);
+          }}
+        >
+          <div className="glass-card-strong w-full max-w-2xl max-h-[90vh] rounded-t-[28px] rounded-b-none sm:rounded-[24px] border-t sm:border border-white/95 p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] shadow-2xl animate-in slide-in-from-bottom sm:slide-in-from-bottom-0 sm:zoom-in-95 duration-240 ease-[cubic-bezier(0.16,1,0.3,1)] outline-none overflow-y-auto">
+            {/* Mobile Tactile Drag Handle */}
+            <div
+              data-swipe-handle="true"
+              className="mx-auto -mt-2 mb-3 flex h-6 w-full max-w-[140px] cursor-grab touch-none items-center justify-center sm:hidden select-none"
+              aria-label="Drag down to dismiss"
+            >
+              <div className="h-1.5 w-12 rounded-full bg-slate-300" />
+            </div>
+
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
               <div className="flex items-center gap-2.5">
                 <div className="flex size-8 items-center justify-center rounded-lg bg-[#6A80A9]/10 text-[#6A80A9]">

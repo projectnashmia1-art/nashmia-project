@@ -243,7 +243,7 @@ export function ComposeEmailModal({
   const queryClient = useQueryClient();
   const [isProcessModalOpen, setIsProcessModalOpen] = useState(false);
   const [processItems, setProcessItems] = useState<ForwarderSendingItem[]>([]);
-  const [movementRef, setMovementRef] = useState<string>("MOV-2026-6093");
+  const [movementRef, setMovementRef] = useState<string>("NASH-BK-2026-7023");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -360,13 +360,13 @@ export function ComposeEmailModal({
     }
 
     // Resolve Movement / Booking Reference
-    let movementReference = "MOV-2026-6093";
+    let movementReference = "NASH-BK-2026-7023";
     if (activeBooking) {
       movementReference =
         activeBooking.movementNumber ||
         activeBooking.bookingReference ||
         activeBooking.reference ||
-        "MOV-2026-6093";
+        "NASH-BK-2026-7023";
     } else {
       const extracted = extractMovementNumber(subject) || extractMovementNumber(body);
       if (extracted) movementReference = extracted;
@@ -479,11 +479,11 @@ export function ComposeEmailModal({
       role="dialog"
       aria-modal="true"
       aria-label="Compose Email"
-      className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-5 overflow-y-auto"
+      className="fixed inset-0 z-[9999] flex items-end sm:items-center justify-center p-0 sm:p-5 overflow-y-auto"
     >
       {/* Background Overlay */}
       <div
-        className="fixed inset-0 bg-slate-900/40 transition-all duration-200 ease-out animate-in fade-in"
+        className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs transition-all duration-200 ease-out animate-in fade-in"
         onClick={onClose}
         aria-hidden="true"
       />
@@ -492,12 +492,23 @@ export function ComposeEmailModal({
       <div
         onClick={(e) => e.stopPropagation()}
         className={cn(
-          "relative z-10 flex flex-col bg-white text-slate-900 shadow-2xl border border-slate-200/90 rounded-[28px] overflow-hidden transition-all duration-200 antialiased",
+          "relative z-10 flex flex-col bg-white text-slate-900 shadow-2xl transition-all duration-200 antialiased outline-none",
           isMaximized
-            ? "w-full h-full max-w-none max-h-none rounded-none p-6 sm:p-8"
-            : "sm:max-w-[620px] w-[95vw] max-h-[92vh] p-6 sm:p-7",
+            ? "w-full h-full max-w-none max-h-none rounded-none p-5 sm:p-8"
+            : "w-full sm:max-w-[620px] max-h-[92vh] rounded-t-[28px] rounded-b-none sm:rounded-[28px] border-t sm:border border-slate-200/90 p-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:p-7 animate-in slide-in-from-bottom sm:slide-in-from-bottom-0 sm:zoom-in-95 duration-240 ease-[cubic-bezier(0.16,1,0.3,1)] overflow-hidden",
         )}
       >
+        {/* Mobile Tactile Drag Handle */}
+        {!isMaximized && (
+          <div
+            data-swipe-handle="true"
+            className="mx-auto -mt-2 mb-2 flex h-6 w-full max-w-[140px] cursor-grab touch-none items-center justify-center sm:hidden select-none shrink-0"
+            aria-label="Drag down to dismiss"
+          >
+            <div className="h-1.5 w-12 rounded-full bg-slate-300" />
+          </div>
+        )}
+
         {/* 1. Header Bar: Icon + "Compose email" + Maximize & Close */}
         <div className="flex items-center justify-between pb-3.5">
           <div className="flex items-center gap-2 text-slate-800 font-semibold text-[15px]">

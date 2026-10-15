@@ -219,11 +219,23 @@ export const ManualReviewLinkModal: React.FC<ManualReviewLinkModalProps> = ({
           await saveCutOffsForMovement(
             finalMovementNumber,
             {
+              ...cutOffDates,
               siCutoff: cutOffDates.siCutoff,
               vgmCutoff: cutOffDates.vgmCutoff,
               portCutoff: cutOffDates.portCutoff,
               gateCutoff: cutOffDates.gateCutoff,
               closingDate: cutOffDates.closingDate,
+              deadlines: cutOffDeadlines,
+              sourceDocumentId: document.id,
+              sourceDocumentName: document.name,
+              sourceEmailId:
+                ((document.metadata as Record<string, unknown>)?.sourceEmailId as string) ||
+                ((document.metadata as Record<string, unknown>)?.emailMessageId as string) ||
+                null,
+              extractionStatus: "COMPLETED",
+              reviewStatus: "MANUALLY_VERIFIED",
+              requiresManualReview: false,
+              hasAmbiguousDates: false,
             },
             selectedBookingId || undefined,
           );
@@ -262,7 +274,7 @@ export const ManualReviewLinkModal: React.FC<ManualReviewLinkModalProps> = ({
   return createPortal(
     <div
       id="manual-review-modal-backdrop"
-      className="fixed inset-0 z-[9999] flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-150"
+      className="fixed inset-0 z-[9999] flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto animate-in fade-in duration-150"
     >
       <div
         className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm"
@@ -272,8 +284,17 @@ export const ManualReviewLinkModal: React.FC<ManualReviewLinkModalProps> = ({
       <div
         id="manual-review-modal-card"
         onClick={(e) => e.stopPropagation()}
-        className="relative z-10 bg-white rounded-xl shadow-2xl border border-slate-200 w-full max-w-2xl overflow-hidden my-8 outline-none"
+        className="relative z-10 bg-white rounded-t-[28px] rounded-b-none sm:rounded-xl shadow-2xl border-t sm:border border-slate-200 w-full max-w-2xl max-h-[92vh] overflow-hidden my-0 sm:my-8 outline-none animate-in slide-in-from-bottom sm:slide-in-from-bottom-0 duration-240 ease-[cubic-bezier(0.16,1,0.3,1)] flex flex-col"
       >
+        {/* Mobile Tactile Drag Handle */}
+        <div
+          data-swipe-handle="true"
+          className="mx-auto pt-2.5 pb-1 flex h-6 w-full max-w-[140px] cursor-grab touch-none items-center justify-center sm:hidden select-none shrink-0 bg-amber-500/10"
+          aria-label="Drag down to dismiss"
+        >
+          <div className="h-1.5 w-12 rounded-full bg-amber-300" />
+        </div>
+
         {/* Modal Header */}
         <div className="bg-amber-500/10 border-b border-amber-200/80 px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">

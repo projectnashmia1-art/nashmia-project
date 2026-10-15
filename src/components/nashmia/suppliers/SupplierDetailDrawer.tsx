@@ -93,7 +93,7 @@ export function SupplierDetailDrawer({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[95vw] sm:max-w-[760px] lg:max-w-[820px] p-0 overflow-hidden rounded-[24px] sm:rounded-[28px] border border-slate-200 bg-white shadow-2xl max-h-[90vh] flex flex-col">
+      <DialogContent className="w-full sm:max-w-[760px] lg:max-w-[820px] p-0 overflow-hidden sm:rounded-[28px] bg-white shadow-2xl max-h-[92vh] flex flex-col">
         {/* TOP HEADER SECTION */}
         <div className="relative border-b border-slate-200 bg-gradient-to-r from-[#E8F5F6]/70 via-white to-slate-50 p-5 sm:p-6 pb-4">
           <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">

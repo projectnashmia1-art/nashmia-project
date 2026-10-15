@@ -42,6 +42,10 @@ import {
   updateForwarderQuotation,
   updateForwarderQuoteStatus,
 } from "@/lib/multi-forwarder-service";
+import {
+  logQuotationResponseDiagnostics,
+  runPropertyAlignmentDiagnostic,
+} from "@/lib/quotation-diagnostics";
 import { AwardForwarderModal } from "./AwardForwarderModal";
 import { EditQuotationModal } from "./EditQuotationModal";
 import { QuotationStatusBadge } from "./QuotationStatusBadge";
@@ -96,6 +100,52 @@ export const GroupedQuotationModal = memo(function GroupedQuotationModal({
     setIsLoading(true);
     try {
       const list = await fetchForwarderRequestsForBooking(booking);
+      logQuotationResponseDiagnostics(list, "RequestCardQuotationFetcher - GroupedQuotationModal");
+
+      // Diagnostic check comparing fetched API response fields against form/card state properties
+      list.forEach((item) => {
+        runPropertyAlignmentDiagnostic(
+          item as unknown as Record<string, unknown>,
+          {
+            id: item.id,
+            quotationId: item.offerData?.id || item.id,
+            bookingId: item.bookingId || booking.id,
+            movementNumber: item.movementNumber || booking.movementNumber,
+            ratePerContainer: item.offerData?.ratePerContainer || item.ratePerContainer,
+            quotedTotal: item.offerData?.totalFreight || item.totalFreight,
+            currency: item.offerData?.currency || item.currency,
+            carrier: item.offerData?.carrier || item.preferredCarrier,
+            etd: item.offerData?.etd || item.etd,
+            eta: item.offerData?.eta || item.eta,
+            vesselName: item.offerData?.vesselName || item.vesselName,
+            status: item.status,
+            itemizedCharges: item.offerData?.itemizedCharges || [],
+          },
+          `Forwarder Quotation Popup - GroupedQuotationModal (${item.forwarderName})`,
+        );
+      });
+      console.log("[RequestCardQuotationFetcher] Raw API response object for Request Card:", {
+        bookingId: booking.id,
+        movementNumber: booking.movementNumber,
+        count: list.length,
+        quotationRecords: list.map((r) => ({
+          requestId: r.id,
+          id: r.offerData?.id || r.id,
+          quotation_id: r.offerData?.quotationId || r.offerData?.id || r.id,
+          booking_id: r.bookingId || booking.id,
+          forwarderName: r.forwarderName,
+          status: r.status,
+          ratePerContainer: r.offerData?.ratePerContainer || r.ratePerContainer,
+          totalFreight: r.offerData?.totalFreight || r.totalFreight,
+          currency: r.offerData?.currency || r.currency,
+          charges: r.offerData?.itemizedCharges || [],
+          quotation_charges: r.offerData?.itemizedCharges || [],
+          associatedChargeRowsCount: r.offerData?.itemizedCharges?.length || 0,
+          associatedChargeRows: r.offerData?.itemizedCharges || [],
+          fullOfferData: r.offerData,
+        })),
+        fullRawResponseObject: list,
+      });
       setForwarderRequests(list);
     } catch (err) {
       console.warn("[GroupedQuotationModal] Error loading requests:", err);
@@ -129,22 +179,100 @@ export const GroupedQuotationModal = memo(function GroupedQuotationModal({
     };
   }, [loadRequests]);
 
-  // Strictly show only forwarders to whom request emails have actually been sent
+  // Strictly show distinct forwarders/quotations for this booking
   const displayRequests = useMemo(() => {
-    return forwarderRequests;
+    const map = new Map<string, ForwarderQuoteRequestRecord>();
+    for (const r of forwarderRequests) {
+      const emailKey = r.forwarderEmail?.trim().toLowerCase();
+      const nameKey = r.forwarderName?.trim().toLowerCase();
+      const key = emailKey || nameKey || r.forwarderId || r.id;
+
+      const existing = map.get(key);
+      if (!existing) {
+        map.set(key, r);
+      } else {
+        const hasOffer = Boolean(r.offerData?.ratePerContainer || r.ratePerContainer);
+        const existingHasOffer = Boolean(
+          existing.offerData?.ratePerContainer || existing.ratePerContainer,
+        );
+        if (hasOffer && !existingHasOffer) {
+          map.set(key, r);
+        } else if (
+          new Date(r.updatedAt || r.sentAt || 0).getTime() >=
+          new Date(existing.updatedAt || existing.sentAt || 0).getTime()
+        ) {
+          map.set(key, r);
+        }
+      }
+    }
+    return Array.from(map.values());
   }, [forwarderRequests]);
+
+  // Compute auto-selected quotation based on exact movement number match & best rate
+  const autoSelectedQuotation = useMemo(() => {
+    if (!booking || displayRequests.length === 0) return null;
+
+    const currentMov = (booking.movementNumber || booking.reference || "").trim().toUpperCase();
+    const cleanCurrentMov = currentMov.replace(/^NASH-/, "");
+
+    // 1. Highest priority: Exact movement number match with a valid quotation rate/offer
+    const exactMovWithRate = displayRequests.filter((r) => {
+      const rMov = (r.movementNumber || r.bookingReference || "").trim().toUpperCase();
+      const cleanRMov = rMov.replace(/^NASH-/, "");
+      const isMovMatch = rMov === currentMov || cleanRMov === cleanCurrentMov;
+      const rate = r.offerData?.ratePerContainer || r.ratePerContainer || 0;
+      return isMovMatch && rate > 0 && r.status !== "NOT_AVAILABLE" && r.status !== "REJECTED";
+    });
+
+    if (exactMovWithRate.length > 0) {
+      exactMovWithRate.sort((a, b) => {
+        const rateA = a.offerData?.ratePerContainer || a.ratePerContainer || 0;
+        const rateB = b.offerData?.ratePerContainer || b.ratePerContainer || 0;
+        return rateA - rateB;
+      });
+      return exactMovWithRate[0];
+    }
+
+    // 2. Second priority: Any quotation with a valid rate for this booking
+    const anyWithRate = displayRequests.filter((r) => {
+      const rate = r.offerData?.ratePerContainer || r.ratePerContainer || 0;
+      return rate > 0 && r.status !== "NOT_AVAILABLE" && r.status !== "REJECTED";
+    });
+
+    if (anyWithRate.length > 0) {
+      anyWithRate.sort((a, b) => {
+        const rateA = a.offerData?.ratePerContainer || a.ratePerContainer || 0;
+        const rateB = b.offerData?.ratePerContainer || b.ratePerContainer || 0;
+        return rateA - rateB;
+      });
+      return anyWithRate[0];
+    }
+
+    // 3. Third priority: Exact movement match even if pending offer
+    const exactMovPending = displayRequests.find((r) => {
+      const rMov = (r.movementNumber || r.bookingReference || "").trim().toUpperCase();
+      const cleanRMov = rMov.replace(/^NASH-/, "");
+      return rMov === currentMov || cleanRMov === cleanCurrentMov;
+    });
+
+    return exactMovPending || displayRequests[0] || null;
+  }, [booking, displayRequests]);
 
   // Compute best rates and analytics
   const metrics = useMemo(() => {
-    const validOffers = displayRequests.filter(
-      (r) =>
-        r.offerData?.ratePerContainer && r.status !== "NOT_AVAILABLE" && r.status !== "REJECTED",
-    );
+    const getRate = (r: ForwarderQuoteRequestRecord) =>
+      r.offerData?.ratePerContainer || r.ratePerContainer || 0;
+
+    const validOffers = displayRequests.filter((r) => {
+      const rate = getRate(r);
+      return rate > 0 && r.status !== "NOT_AVAILABLE" && r.status !== "REJECTED";
+    });
 
     if (validOffers.length === 0) {
       return {
         bestRate: null,
         bestForwarder: null,
+        bestOfferId: null,
         fastestTransit: null,
         totalOffers: 0,
         pendingOffers: displayRequests.filter(
@@ -153,19 +281,17 @@ export const GroupedQuotationModal = memo(function GroupedQuotationModal({
       };
     }
 
-    const sortedByRate = [...validOffers].sort(
-      (a, b) => (a.offerData?.ratePerContainer || 99999) - (b.offerData?.ratePerContainer || 99999),
-    );
+    const sortedByRate = [...validOffers].sort((a, b) => getRate(a) - getRate(b));
 
     const sortedByTransit = [...validOffers].sort(
-      (a, b) => (a.offerData?.transitDays || 999) - (b.offerData?.transitDays || 999),
+      (a, b) => (a.offerData?.transitDays || 22) - (b.offerData?.transitDays || 22),
     );
 
     return {
-      bestRate: sortedByRate[0].offerData?.ratePerContainer || null,
+      bestRate: getRate(sortedByRate[0]),
       bestForwarder: sortedByRate[0].forwarderName,
       bestOfferId: sortedByRate[0].id,
-      fastestTransit: sortedByTransit[0].offerData?.transitDays || null,
+      fastestTransit: sortedByTransit[0].offerData?.transitDays || 22,
       totalOffers: validOffers.length,
       pendingOffers: displayRequests.filter(
         (r) => r.status === "AWAITING_OFFER" || r.status === "PENDING",
@@ -295,20 +421,23 @@ export const GroupedQuotationModal = memo(function GroupedQuotationModal({
   const requestedEtd = booking.requestedEtd || "24 Sep 2026";
   const estimatedEta = booking.estimatedEta || "12 Oct 2026";
 
-  const getForwarderInitials = (name: string) => {
-    return name
-      .split(" ")
-      .map((w) => w[0])
-      .filter(Boolean)
-      .slice(0, 2)
-      .join("")
-      .toUpperCase();
+  const getForwarderInitials = (name?: string | null) => {
+    if (!name) return "FW";
+    return (
+      name
+        .split(" ")
+        .map((w) => w[0])
+        .filter(Boolean)
+        .slice(0, 2)
+        .join("")
+        .toUpperCase() || "FW"
+    );
   };
 
   return (
     <>
       <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-        <DialogContent className="sm:max-w-[530px] w-[95vw] max-h-[92vh] flex flex-col p-0 overflow-hidden border border-slate-200/90 shadow-2xl rounded-2xl bg-white text-slate-900 antialiased">
+        <DialogContent className="w-full sm:max-w-[530px] max-h-[92vh] flex flex-col p-0 overflow-hidden sm:rounded-2xl bg-white text-slate-900 antialiased shadow-2xl">
           {/* Header Bar - Clean & Sized to Request Card */}
           <div className="px-5 py-4 border-b border-slate-100 flex items-start justify-between bg-white shrink-0">
             <div className="space-y-1">
@@ -458,6 +587,69 @@ export const GroupedQuotationModal = memo(function GroupedQuotationModal({
                 </span>
               </div>
 
+              {/* Auto-Selected Match Banner */}
+              {autoSelectedQuotation && (
+                <div className="rounded-xl border border-[#0FA3B1]/40 bg-gradient-to-r from-teal-500/10 via-sky-500/10 to-indigo-500/5 p-3.5 shadow-xs space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <span className="size-2 rounded-full bg-[#0FA3B1] animate-pulse" />
+                      <span className="text-xs font-bold text-[#0FA3B1] uppercase tracking-wider flex items-center gap-1">
+                        <Sparkles className="size-3.5" /> Auto-Selected Quotation Match
+                      </span>
+                    </div>
+                    <span className="text-[10.5px] font-bold text-teal-800 bg-teal-100/90 px-2 py-0.5 rounded-md border border-teal-200">
+                      Matched {movementNo}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <h4 className="text-[14px] font-bold text-slate-900 truncate">
+                        {autoSelectedQuotation.forwarderName}
+                      </h4>
+                      <div className="text-[11.5px] text-slate-600 flex items-center gap-2 mt-0.5 font-medium flex-wrap">
+                        <span>{autoSelectedQuotation.offerData?.carrier || "Direct Carrier Line"}</span>
+                        <span>•</span>
+                        <span>ETD: {autoSelectedQuotation.offerData?.etd || requestedEtd}</span>
+                        <span>•</span>
+                        <span>{autoSelectedQuotation.offerData?.transitDays || 24}d Transit</span>
+                      </div>
+                    </div>
+
+                    <div className="text-right shrink-0">
+                      {autoSelectedQuotation.offerData?.ratePerContainer || autoSelectedQuotation.ratePerContainer ? (
+                        <div>
+                          <div className="text-base font-extrabold text-slate-900 font-mono leading-tight">
+                            ${(autoSelectedQuotation.offerData?.ratePerContainer || autoSelectedQuotation.ratePerContainer || 0).toLocaleString()}
+                            <span className="text-[10.5px] font-normal text-slate-500 font-sans ml-1">/cntr</span>
+                          </div>
+                          <div className="text-[10.5px] font-semibold text-[#0FA3B1] font-mono mt-0.5">
+                            Total: ${(autoSelectedQuotation.offerData?.totalFreight || autoSelectedQuotation.totalFreight || 0).toLocaleString()} {autoSelectedQuotation.offerData?.currency || "USD"}
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-xs font-medium text-slate-500">Awaiting Offer</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-[#0FA3B1]/20 flex items-center justify-between gap-2">
+                    <p className="text-[11px] text-slate-600 font-medium leading-tight">
+                      System automatically selected this quotation matching Movement <strong className="text-slate-800 font-mono">{movementNo}</strong>.
+                    </p>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => handleAwardClick(autoSelectedQuotation)}
+                      className="bg-[#0FA3B1] hover:bg-[#0D919E] text-white text-xs font-bold px-3 py-1 rounded-lg h-7 gap-1 shadow-2xs shrink-0 cursor-pointer"
+                    >
+                      <Trophy className="size-3" />
+                      <span>Award Auto-Selected Carrier</span>
+                    </Button>
+                  </div>
+                </div>
+              )}
+
               {/* List of Forwarder Quotation Cards */}
               <div className="space-y-3">
                 {displayRequests.length === 0 ? (
@@ -494,22 +686,38 @@ export const GroupedQuotationModal = memo(function GroupedQuotationModal({
                 ) : (
                   displayRequests.map((fwdReq) => {
                     const canonicalStatus = normalizeQuoteStatus(fwdReq.status);
+                    const rawTotal =
+                      fwdReq.offerData?.totalFreight ||
+                      fwdReq.offerData?.quotedTotal ||
+                      fwdReq.offerData?.totalAmount ||
+                      fwdReq.offerData?.totalCost ||
+                      fwdReq.totalFreight;
+                    const rawRate =
+                      fwdReq.offerData?.ratePerContainer ||
+                      fwdReq.offerData?.oceanFreight ||
+                      fwdReq.ratePerContainer ||
+                      (rawTotal ? rawTotal / containerCount : null);
+
+                    const rate = rawRate;
+                    const totalFreight = rawTotal || (rate ? rate * containerCount : null);
+
                     const hasOffer =
+                      Boolean(rate) ||
+                      Boolean(totalFreight) ||
+                      Boolean(fwdReq.offerData) ||
                       canonicalStatus === "OFFER_RECEIVED" ||
                       canonicalStatus === "NEEDS_REVIEW" ||
                       canonicalStatus === "AWARDED" ||
-                      canonicalStatus === "CONFIRMED" ||
-                      Boolean(fwdReq.offerData?.ratePerContainer);
+                      canonicalStatus === "CONFIRMED";
+
                     const isAwarded = canonicalStatus === "AWARDED";
                     const isConfirmed = canonicalStatus === "CONFIRMED";
                     const isNeedsReview = canonicalStatus === "NEEDS_REVIEW";
                     const isNotAvailable = canonicalStatus === "NOT_AVAILABLE";
                     const isNotAwarded = canonicalStatus === "NOT_AWARDED";
                     const isBestOffer = hasOffer && fwdReq.id === metrics.bestOfferId;
+                    const isAutoSelected = autoSelectedQuotation?.id === fwdReq.id;
 
-                    const rate = fwdReq.offerData?.ratePerContainer || fwdReq.ratePerContainer;
-                    const totalFreight =
-                      fwdReq.offerData?.totalFreight || (rate ? rate * containerCount : null);
                     const currency = fwdReq.offerData?.currency || fwdReq.currency || "USD";
                     const etd = fwdReq.offerData?.etd || requestedEtd;
                     const transitDays = fwdReq.offerData?.transitDays || 24;
@@ -527,13 +735,15 @@ export const GroupedQuotationModal = memo(function GroupedQuotationModal({
                             ? "border-emerald-300 ring-1 ring-emerald-500/20 bg-emerald-50/15"
                             : isAwarded
                               ? "border-cyan-300 ring-1 ring-cyan-500/20 bg-cyan-50/15"
-                              : isBestOffer
-                                ? "border-[#0FA3B1] ring-1 ring-[#0FA3B1]/20"
-                                : isNeedsReview
-                                  ? "border-amber-300 bg-amber-50/15"
-                                  : isNotAvailable
-                                    ? "border-rose-200 bg-rose-50/10 opacity-75"
-                                    : "border-slate-200/90 hover:border-slate-300",
+                              : isAutoSelected
+                                ? "border-2 border-[#0FA3B1] ring-2 ring-[#0FA3B1]/25 bg-teal-50/20"
+                                : isBestOffer
+                                  ? "border-[#0FA3B1] ring-1 ring-[#0FA3B1]/20"
+                                  : isNeedsReview
+                                    ? "border-amber-300 bg-amber-50/15"
+                                    : isNotAvailable
+                                      ? "border-rose-200 bg-rose-50/10 opacity-75"
+                                      : "border-slate-200/90 hover:border-slate-300",
                         )}
                       >
                         {/* 1. Header: Forwarder, Carrier, Best Rate Pill & Status Badge */}
@@ -547,10 +757,16 @@ export const GroupedQuotationModal = memo(function GroupedQuotationModal({
                                 <span className="font-bold text-[14px] text-slate-900 truncate">
                                   {fwdReq.forwarderName}
                                 </span>
-                                {isBestOffer && (
+                                {isAutoSelected && (
+                                  <span className="inline-flex items-center gap-0.5 rounded-full bg-[#0FA3B1]/10 text-[#0FA3B1] border border-[#0FA3B1]/30 px-1.5 py-0.2 text-[10px] font-bold shrink-0">
+                                    <Sparkles className="size-2.5 text-[#0FA3B1]" />
+                                    Auto-Selected
+                                  </span>
+                                )}
+                                {isBestOffer && !isAutoSelected && (
                                   <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 px-1.5 py-0.2 text-[10px] font-bold shrink-0">
                                     <Trophy className="size-2.5 text-emerald-600" />
-                                    Best
+                                    Best Rate
                                   </span>
                                 )}
                               </div>
@@ -813,7 +1029,7 @@ export const GroupedQuotationModal = memo(function GroupedQuotationModal({
           open={Boolean(inspectingQuotationTarget)}
           onOpenChange={() => setInspectingQuotationTarget(null)}
         >
-          <DialogContent className="sm:max-w-[620px] w-[95vw] p-0 overflow-hidden border border-slate-200 shadow-2xl rounded-2xl bg-white text-slate-900 max-h-[90vh] flex flex-col antialiased">
+          <DialogContent className="w-full sm:max-w-[620px] p-0 overflow-hidden sm:rounded-2xl bg-white text-slate-900 max-h-[92vh] flex flex-col antialiased shadow-2xl">
             <div className="bg-white text-slate-900 px-6 py-4.5 border-b border-slate-100 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="size-9 rounded-xl bg-[#0FA3B1]/10 text-[#0FA3B1] grid place-items-center">
@@ -987,37 +1203,94 @@ export const GroupedQuotationModal = memo(function GroupedQuotationModal({
                       : null,
                   },
                   {
-                    fieldKey: "freightCharges",
-                    label: "10. Freight Charges",
-                    value: inspectingQuotationTarget.offerData?.ratePerContainer
-                      ? `$${inspectingQuotationTarget.offerData.ratePerContainer.toLocaleString()} (Ocean Freight Base)`
-                      : null,
+                    fieldKey: "oceanFreight",
+                    label: "10. Ocean Freight (Base Rate)",
+                    value:
+                      inspectingQuotationTarget.offerData?.oceanFreight !== undefined
+                        ? `$${inspectingQuotationTarget.offerData.oceanFreight.toLocaleString()} (Ocean Freight)`
+                        : inspectingQuotationTarget.offerData?.ratePerContainer
+                          ? `$${inspectingQuotationTarget.offerData.ratePerContainer.toLocaleString()} (Base Rate)`
+                          : null,
                   },
                   {
-                    fieldKey: "additionalCharges",
-                    label: "11. Additional Charges",
-                    value: inspectingQuotationTarget.offerData?.additionalCharges
-                      ? String(inspectingQuotationTarget.offerData.additionalCharges)
-                      : null,
+                    fieldKey: "originCharges",
+                    label: "11. Origin Charges",
+                    value:
+                      inspectingQuotationTarget.offerData?.originCharges !== undefined
+                        ? `$${inspectingQuotationTarget.offerData.originCharges.toLocaleString()}`
+                        : null,
+                  },
+                  {
+                    fieldKey: "destinationCharges",
+                    label: "12. Destination Charges",
+                    value:
+                      inspectingQuotationTarget.offerData?.destinationCharges !== undefined
+                        ? `$${inspectingQuotationTarget.offerData.destinationCharges.toLocaleString()}`
+                        : null,
+                  },
+                  {
+                    fieldKey: "thc",
+                    label: "13. THC (Terminal Handling)",
+                    value:
+                      inspectingQuotationTarget.offerData?.thc !== undefined
+                        ? `$${inspectingQuotationTarget.offerData.thc.toLocaleString()}`
+                        : null,
+                  },
+                  {
+                    fieldKey: "documentationCharges",
+                    label: "14. Documentation Charges (BL / Doc Fee)",
+                    value:
+                      inspectingQuotationTarget.offerData?.documentationCharges !== undefined
+                        ? `$${inspectingQuotationTarget.offerData.documentationCharges.toLocaleString()}`
+                        : null,
+                  },
+                  {
+                    fieldKey: "customsCharges",
+                    label: "15. Customs Charges / Clearance",
+                    value:
+                      inspectingQuotationTarget.offerData?.customsCharges !== undefined
+                        ? `$${inspectingQuotationTarget.offerData.customsCharges.toLocaleString()}`
+                        : null,
+                  },
+                  {
+                    fieldKey: "truckingCharges",
+                    label: "16. Trucking Charges / Haulage",
+                    value:
+                      inspectingQuotationTarget.offerData?.truckingCharges !== undefined
+                        ? `$${inspectingQuotationTarget.offerData.truckingCharges.toLocaleString()}`
+                        : null,
+                  },
+                  {
+                    fieldKey: "otherCharges",
+                    label: "17. Other Charges & Surcharges",
+                    value:
+                      inspectingQuotationTarget.offerData?.otherCharges !== undefined
+                        ? `$${inspectingQuotationTarget.offerData.otherCharges.toLocaleString()}`
+                        : inspectingQuotationTarget.offerData?.additionalCharges
+                          ? String(inspectingQuotationTarget.offerData.additionalCharges)
+                          : null,
                   },
                   {
                     fieldKey: "totalCost",
-                    label: "12. Total Cost (Explicitly Stated)",
-                    value: inspectingQuotationTarget.offerData?.totalCost
-                      ? `$${inspectingQuotationTarget.offerData.totalCost.toLocaleString()}`
-                      : null,
+                    label: "18. Total Amount (Quoted All-In)",
+                    value:
+                      inspectingQuotationTarget.offerData?.totalAmount !== undefined
+                        ? `$${inspectingQuotationTarget.offerData.totalAmount.toLocaleString()} ${inspectingQuotationTarget.offerData?.currency || "USD"}`
+                        : inspectingQuotationTarget.offerData?.totalCost !== undefined
+                          ? `$${inspectingQuotationTarget.offerData.totalCost.toLocaleString()}`
+                          : null,
                     explicitNote: true,
                   },
                   {
                     fieldKey: "freeDays",
-                    label: "13. Free Days",
+                    label: "19. Free Days",
                     value: inspectingQuotationTarget.offerData?.freeDays
                       ? `${inspectingQuotationTarget.offerData.freeDays} Days (Demurrage & Detention)`
                       : null,
                   },
                   {
                     fieldKey: "carrier",
-                    label: "14. Sailing / Vessel / Voyage",
+                    label: "20. Sailing / Vessel / Voyage",
                     value:
                       inspectingQuotationTarget.offerData?.carrier ||
                       inspectingQuotationTarget.offerData?.vesselName
@@ -1033,13 +1306,21 @@ export const GroupedQuotationModal = memo(function GroupedQuotationModal({
                         : null,
                   },
                   {
+                    fieldKey: "routing",
+                    label: "21. Routing",
+                    value: inspectingQuotationTarget.offerData?.routing || "Direct Service",
+                  },
+                  {
                     fieldKey: "rateValidity",
-                    label: "15. Rate Validity",
-                    value: inspectingQuotationTarget.offerData?.validUntil || null,
+                    label: "22. Validity Date",
+                    value:
+                      inspectingQuotationTarget.offerData?.validityDate ||
+                      inspectingQuotationTarget.offerData?.validUntil ||
+                      null,
                   },
                   {
                     fieldKey: "notes",
-                    label: "16. Notes / Remarks",
+                    label: "23. Notes / Remarks",
                     value: inspectingQuotationTarget.offerData?.notes || null,
                   },
                   {
@@ -1208,7 +1489,7 @@ export const GroupedQuotationModal = memo(function GroupedQuotationModal({
           open={Boolean(selectedEmailPreview)}
           onOpenChange={() => setSelectedEmailPreview(null)}
         >
-          <DialogContent className="sm:max-w-[620px] w-[95vw] p-0 overflow-hidden border border-slate-200 shadow-2xl rounded-2xl bg-white text-slate-900 antialiased">
+          <DialogContent className="w-full sm:max-w-[620px] max-h-[92vh] flex flex-col p-0 overflow-hidden sm:rounded-2xl bg-white text-slate-900 antialiased shadow-2xl">
             {/* Header */}
             <div className="bg-white text-slate-900 px-6 py-4.5 border-b border-slate-100">
               <div className="flex items-center justify-between">

@@ -401,8 +401,17 @@ export function RateCardsPage({ onOpenMobileMenu }: RateCardsPageProps) {
 
       {/* 3. Delete Confirmation Modal */}
       {deleteCandidate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm animate-in fade-in">
-          <div className="glass-card-strong relative w-full max-w-md rounded-[28px] border border-white/90 bg-white p-6 shadow-2xl animate-in zoom-in-95">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 p-0 sm:p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="glass-card-strong relative w-full max-w-md rounded-t-[28px] rounded-b-none sm:rounded-[28px] border-t sm:border border-white/90 bg-white p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] shadow-2xl animate-in slide-in-from-bottom sm:slide-in-from-bottom-0 sm:zoom-in-95 duration-240 ease-[cubic-bezier(0.16,1,0.3,1)] outline-none">
+            {/* Mobile Tactile Drag Handle */}
+            <div
+              data-swipe-handle="true"
+              className="mx-auto -mt-2 mb-3 flex h-6 w-full max-w-[140px] cursor-grab touch-none items-center justify-center sm:hidden select-none"
+              aria-label="Drag down to dismiss"
+            >
+              <div className="h-1.5 w-12 rounded-full bg-slate-300" />
+            </div>
+
             <div className="flex items-center gap-3">
               <div className="grid size-12 place-items-center rounded-2xl bg-rose-50 text-rose-600 shadow-2xs shrink-0">
                 <AlertTriangle className="size-6" />
