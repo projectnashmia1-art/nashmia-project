@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Mail,
@@ -6,6 +6,9 @@ import {
   AlertOctagon,
   Clock,
   FolderInput,
+  FolderPlus,
+  FolderCheck,
+  Check,
   Tag,
   MoreVertical,
   ChevronLeft,
@@ -20,6 +23,7 @@ import {
   XCircle,
   AlertCircle,
   ShieldCheck,
+  Loader2,
   RefreshCw,
   FileCheck2,
   Bot,
@@ -38,11 +42,10 @@ import type { EmailMessageRecord } from "@/types/email.types";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { useAuth } from "@/lib/auth-context";
+import { saveDriveDocument } from "@/components/nashmia/documents/documents-data";
 import { updateLocalBooking, getLocalBookings } from "@/lib/supabase-services";
 import { getSenderAvatar, formatCardTimestamp } from "./EmailListPanel";
-import { MovementLifecycleDrawer } from "../movements/MovementLifecycleDrawer";
 import { classifyConfirmationDeterministic } from "@/lib/forwarder-confirmation-detector";
-import { extractQuotationFieldsDeterministic } from "@/lib/forwarder-quotation-processor";
 import {
   processAutomaticMovementConfirmation,
   type MovementConfirmationResult,
@@ -129,14 +132,6 @@ export function EmailPreviewPanel({
     return idx >= 0 ? idx : 0;
   }, [allEmails, email]);
 
-  // Extracted quotation metrics (Computed directly without hook overhead)
-  const extractedQuote = email
-    ? extractQuotationFieldsDeterministic(
-        email.subject || "",
-        email.body || email.snippet || "",
-      )
-    : null;
-
   const totalCount = allEmails.length > 0 ? allEmails.length : 1;
 
   const handlePrev = () => {
@@ -150,6 +145,90 @@ export function EmailPreviewPanel({
       onSelectEmail(allEmails[currentIndex + 1]);
     }
   };
+
+  // Real attachments only — no fake demo fallbacks
+  const attachments = email?.attachments && email.attachments.length > 0 ? email.attachments : [];
+
+  const [savingAttMap, setSavingAttMap] = useState<Record<string, boolean>>({});
+  const [savedAttMap, setSavedAttMap] = useState<Record<string, boolean>>({});
+
+  const handleSaveAttachmentToDocuments = useCallback(
+    async (att: Record<string, unknown>, notify = true) => {
+      if (!email) return;
+      const rawName = String(att.filename || att.name || "Attachment.pdf").trim();
+      const key = `${rawName}-${att.size}`;
+      setSavingAttMap((prev) => ({ ...prev, [key]: true }));
+
+      try {
+        const resolvedAttId = att.attachmentId || att.id;
+        const resolvedGmailMsgId =
+          att.gmailMessageId ||
+          email.gmailMessageId ||
+          (email.id.startsWith("gmail-") ? email.id.replace(/^gmail-/, "") : undefined);
+
+        const res = await fetch("/api/documents/auto-save-attachment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            filename: rawName,
+            name: rawName,
+            size: att.size,
+            mimeType: att.mimeType,
+            data: att.data,
+            url: att.url,
+            attachmentId: resolvedAttId,
+            gmailMessageId: resolvedGmailMsgId,
+            gmailThreadId: email.threadId,
+            emailMessageId: email.id,
+            subject: email.subject,
+            senderEmail: email.senderEmail || email.fromEmail,
+            senderName: email.senderName || email.fromName,
+            movementNumber: email.movementNumber,
+            bookingId: email.bookingId,
+          }),
+        });
+
+        if (res.ok) {
+          const resData = await res.json();
+          if (resData.document) {
+            saveDriveDocument(resData.document);
+          }
+          setSavedAttMap((prev) => ({ ...prev, [key]: true }));
+          window.dispatchEvent(
+            new CustomEvent("nashmia_documents_updated", { detail: { updated: true } }),
+          );
+          window.dispatchEvent(
+            new CustomEvent("nashmia:document-saved", { detail: resData.document }),
+          );
+          if (notify) {
+            toast.success(`Saved "${rawName}" to Documents page and Supabase database!`);
+          }
+        } else if (notify) {
+          toast.error(`Could not save "${rawName}". Please try again.`);
+        }
+      } catch (err) {
+        console.error("Error saving attachment to documents:", err);
+        if (notify) {
+          toast.error(`Failed to save "${rawName}" to Documents.`);
+        }
+      } finally {
+        setSavingAttMap((prev) => ({ ...prev, [key]: false }));
+      }
+    },
+    [email],
+  );
+
+  // Background auto-save for unpersisted incoming attachments
+  useEffect(() => {
+    if (!email || !attachments || attachments.length === 0) return;
+    attachments.forEach((att) => {
+      const rawName = String(att.filename || att.name || "Attachment.pdf").trim();
+      const key = `${rawName}-${att.size}`;
+      if (!savedAttMap[key]) {
+        void handleSaveAttachmentToDocuments(att as Record<string, unknown>, false);
+      }
+    });
+  }, [email?.id, attachments, handleSaveAttachmentToDocuments, savedAttMap]);
 
   if (!email) {
     if (isLoading) {
@@ -190,16 +269,6 @@ export function EmailPreviewPanel({
   const currentUserInitial = (currentUserName[0] || "Y").toUpperCase();
 
   const formattedTime = formatCardTimestamp(email.sentAt || email.createdAt);
-
-  const hasQuotationOffer = Boolean(
-    extractedQuote &&
-    ((extractedQuote.oceanFreight !== null && extractedQuote.oceanFreight > 0) ||
-      (extractedQuote.totalAmount !== null && extractedQuote.totalAmount > 0)),
-  );
-
-  // Real attachments only — no fake demo fallbacks
-  const attachments =
-    email.attachments && email.attachments.length > 0 ? email.attachments : [];
 
   // Confirmation state
   const activeConfStatus = localConfirmation?.status || email.confirmationStatus || "NEEDS_REVIEW";
@@ -604,74 +673,6 @@ export function EmailPreviewPanel({
         </div>
       </div>
 
-      {/* Quotation Offer Banner */}
-      {hasQuotationOffer && (
-        <div className="mx-6 mt-3 p-4 rounded-xl bg-gradient-to-r from-sky-50 via-teal-50/50 to-emerald-50/40 border border-[#0FA3B1]/40 shadow-2xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-          <div className="flex items-start gap-3 min-w-0">
-            <div className="size-10 rounded-xl bg-[#0FA3B1] text-white flex items-center justify-center shrink-0 shadow-xs font-bold font-mono">
-              <DollarSign className="size-5 stroke-[2.5]" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center flex-wrap gap-2">
-                <span className="text-sm font-bold text-slate-900">
-                  Freight Quotation Offer Received
-                </span>
-                {movementRef && (
-                  <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-white border border-[#0FA3B1]/30 text-[#0FA3B1] text-xs font-mono font-bold shadow-2xs">
-                    {movementRef}
-                  </span>
-                )}
-                <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[11px] font-bold border border-emerald-300">
-                  Offer Received
-                </span>
-              </div>
-              <div className="flex items-center flex-wrap gap-x-3 gap-y-1 text-xs text-slate-600 mt-1 font-medium">
-                {extractedQuote?.oceanFreight !== null && (
-                  <span>
-                    Rate:{" "}
-                    <strong className="text-slate-900 font-mono text-sm">
-                      ${extractedQuote?.oceanFreight?.toLocaleString()}{" "}
-                      {extractedQuote?.currency || "USD"}
-                    </strong>{" "}
-                    / cntr
-                  </span>
-                )}
-                {extractedQuote?.totalAmount !== null && (
-                  <span>
-                    Total:{" "}
-                    <strong className="text-slate-900 font-mono text-sm">
-                      ${extractedQuote?.totalAmount?.toLocaleString()}{" "}
-                      {extractedQuote?.currency || "USD"}
-                    </strong>
-                  </span>
-                )}
-                {extractedQuote?.sailingDate && (
-                  <span>
-                    ETD: <strong className="text-slate-800">{extractedQuote.sailingDate}</strong>
-                  </span>
-                )}
-                {extractedQuote?.freeDays !== null && extractedQuote?.freeDays !== undefined && (
-                  <span>{extractedQuote.freeDays}d Free</span>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
-            {movementRef && (
-              <button
-                type="button"
-                onClick={() => setIsDrawerOpen(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0FA3B1] hover:bg-[#0D919E] text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
-              >
-                <ExternalLink className="size-3.5" />
-                <span>View Movement</span>
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* Confirmed Booking Banner */}
       {isConfirmed && (
         <div className="mx-6 mt-3 p-4 rounded-xl bg-gradient-to-r from-emerald-50 via-emerald-50/70 to-teal-50/50 border border-emerald-300 shadow-2xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
@@ -806,84 +807,124 @@ export function EmailPreviewPanel({
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {attachments.map((att, idx) => (
-                <div
-                  key={idx}
-                  className="flex items-center justify-between p-3 rounded-xl border border-slate-200/80 bg-slate-50/50 hover:bg-slate-100/70 transition-colors"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="size-9 rounded-lg bg-white border border-slate-200 grid place-items-center shrink-0">
-                      <FileText className="size-4 text-blue-600" />
+              {attachments.map((att, idx) => {
+                const rawName = String(att.filename || att.name || "Attachment.pdf").trim();
+                const key = `${rawName}-${att.size}`;
+                const isSaving = Boolean(savingAttMap[key]);
+                const isSaved = Boolean(savedAttMap[key]);
+
+                return (
+                  <div
+                    key={idx}
+                    className="flex items-center justify-between p-3 rounded-xl border border-slate-200/80 bg-slate-50/50 hover:bg-slate-100/70 transition-colors gap-2"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                      <div className="size-8 rounded-lg bg-white border border-slate-200 grid place-items-center shrink-0">
+                        <FileText className="size-4 text-blue-600" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-bold text-slate-800 truncate" title={rawName}>
+                          {rawName}
+                        </p>
+                        <p className="text-[11px] text-slate-400">{att.size}</p>
+                      </div>
                     </div>
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold text-slate-800 truncate">{att.name}</p>
-                      <p className="text-[11px] text-slate-400">{att.size}</p>
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleSaveAttachmentToDocuments(att as Record<string, unknown>, true)
+                        }
+                        disabled={isSaving}
+                        title={
+                          isSaved
+                            ? "Attachment is saved in Documents repository and Supabase database"
+                            : "Save this attachment to Documents page & Supabase database"
+                        }
+                        className={cn(
+                          "px-2.5 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1 transition-all cursor-pointer",
+                          isSaved
+                            ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                            : "bg-white text-blue-700 hover:bg-blue-50 border border-blue-200 shadow-2xs",
+                        )}
+                      >
+                        {isSaving ? (
+                          <Loader2 className="size-3 animate-spin text-blue-600" />
+                        ) : isSaved ? (
+                          <Check className="size-3 text-emerald-600 stroke-[2.5]" />
+                        ) : (
+                          <FolderPlus className="size-3 text-blue-600" />
+                        )}
+                        <span>{isSaved ? "Saved" : isSaving ? "Saving..." : "Save to Docs"}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const filename = att.filename || att.name || "attachment";
+                          if (att.data) {
+                            try {
+                              const cleanBase64 = att.data.replace(/-/g, "+").replace(/_/g, "/");
+                              const binary = atob(cleanBase64);
+                              const bytes = new Uint8Array(binary.length);
+                              for (let i = 0; i < binary.length; i++) {
+                                bytes[i] = binary.charCodeAt(i);
+                              }
+                              const blob = new Blob([bytes], {
+                                type: att.mimeType || "application/octet-stream",
+                              });
+                              const blobUrl = URL.createObjectURL(blob);
+                              const a = document.createElement("a");
+                              a.href = blobUrl;
+                              a.download = filename;
+                              document.body.appendChild(a);
+                              a.click();
+                              document.body.removeChild(a);
+                              URL.revokeObjectURL(blobUrl);
+                              toast.success(`Downloaded ${filename}`);
+                              return;
+                            } catch {
+                              // ignore
+                            }
+                          }
+                          if (att.url && att.url !== "#") {
+                            const a = document.createElement("a");
+                            a.href = att.url;
+                            a.download = filename;
+                            a.target = "_blank";
+                            a.rel = "noopener noreferrer";
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+                            toast.success(`Downloading ${filename}...`);
+                            return;
+                          }
+                          const msgId = att.gmailMessageId || email.gmailMessageId;
+                          if (att.attachmentId && msgId) {
+                            const downloadEndpoint = `/api/gmail/attachment?messageId=${encodeURIComponent(msgId)}&attachmentId=${encodeURIComponent(att.attachmentId)}&filename=${encodeURIComponent(filename)}&mimeType=${encodeURIComponent(att.mimeType || "application/octet-stream")}`;
+                            const a = document.createElement("a");
+                            a.href = downloadEndpoint;
+                            a.download = filename;
+                            a.target = "_blank";
+                            a.rel = "noopener noreferrer";
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+                            toast.success(`Downloading ${filename}...`);
+                            return;
+                          }
+                          toast.info(`Attachment "${filename}" is being synchronized from Gmail.`);
+                        }}
+                        title={`Download ${rawName}`}
+                        className="p-1.5 rounded-lg text-slate-400 hover:text-slate-800 hover:bg-white transition-colors cursor-pointer border border-transparent hover:border-slate-200"
+                      >
+                        <Download className="size-4" />
+                      </button>
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const filename = att.filename || att.name || "attachment";
-                      if (att.data) {
-                        try {
-                          const cleanBase64 = att.data.replace(/-/g, "+").replace(/_/g, "/");
-                          const binary = atob(cleanBase64);
-                          const bytes = new Uint8Array(binary.length);
-                          for (let i = 0; i < binary.length; i++) {
-                            bytes[i] = binary.charCodeAt(i);
-                          }
-                          const blob = new Blob([bytes], {
-                            type: att.mimeType || "application/octet-stream",
-                          });
-                          const blobUrl = URL.createObjectURL(blob);
-                          const a = document.createElement("a");
-                          a.href = blobUrl;
-                          a.download = filename;
-                          document.body.appendChild(a);
-                          a.click();
-                          document.body.removeChild(a);
-                          URL.revokeObjectURL(blobUrl);
-                          toast.success(`Downloaded ${filename}`);
-                          return;
-                        } catch {
-                          // ignore
-                        }
-                      }
-                      if (att.url && att.url !== "#") {
-                        const a = document.createElement("a");
-                        a.href = att.url;
-                        a.download = filename;
-                        a.target = "_blank";
-                        a.rel = "noopener noreferrer";
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                        toast.success(`Downloading ${filename}...`);
-                        return;
-                      }
-                      const msgId = att.gmailMessageId || email.gmailMessageId;
-                      if (att.attachmentId && msgId) {
-                        const downloadEndpoint = `/api/gmail/attachment?messageId=${encodeURIComponent(msgId)}&attachmentId=${encodeURIComponent(att.attachmentId)}&filename=${encodeURIComponent(filename)}&mimeType=${encodeURIComponent(att.mimeType || "application/octet-stream")}`;
-                        const a = document.createElement("a");
-                        a.href = downloadEndpoint;
-                        a.download = filename;
-                        a.target = "_blank";
-                        a.rel = "noopener noreferrer";
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                        toast.success(`Downloading ${filename}...`);
-                        return;
-                      }
-                      toast.info(`Attachment "${filename}" is being synchronized from Gmail.`);
-                    }}
-                    title={`Download ${att.name}`}
-                    className="p-1.5 rounded-lg text-slate-400 hover:text-slate-800 hover:bg-white transition-colors cursor-pointer"
-                  >
-                    <Download className="size-4" />
-                  </button>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}

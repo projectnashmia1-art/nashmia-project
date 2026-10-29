@@ -1,8 +1,15 @@
-import { useState, type ReactNode } from "react";
+import { useState, useEffect, lazy, Suspense, type ReactNode } from "react";
 import { AppSidebar, MobileSidebar } from "@/components/nashmia/AppSidebar";
 import { useSidebarCollapsed } from "@/hooks/use-sidebar-collapsed";
 import { PageTransition } from "@/components/common/PageTransition";
 import { cn } from "@/lib/utils";
+import { useQueryClient } from "@tanstack/react-query";
+
+const MovementLifecycleDrawer = lazy(() =>
+  import("@/components/nashmia/movements/MovementLifecycleDrawer").then((m) => ({
+    default: m.MovementLifecycleDrawer,
+  })),
+);
 
 export interface AppLayoutProps {
   children: ReactNode | ((props: { onOpenMobileMenu: () => void }) => ReactNode);
@@ -19,6 +26,45 @@ export function AppLayout({
 }: AppLayoutProps) {
   const [collapsed, toggleCollapsed] = useSidebarCollapsed();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const queryClient = useQueryClient();
+
+  // Global Movement Lifecycle Drawer in-place state
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerRef, setDrawerRef] = useState<string | null>(null);
+  const [drawerBookingId, setDrawerBookingId] = useState<string | null>(null);
+  const [drawerTab, setDrawerTab] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handleOpenMovement = (e: Event) => {
+      const detail = (e as CustomEvent<{
+        movementNumber?: string;
+        reference?: string;
+        bookingReference?: string;
+        bookingId?: string;
+        defaultTab?: string;
+        tab?: string;
+        isDocument?: boolean;
+      }>).detail;
+
+      if (!detail) return;
+      const ref =
+        detail.movementNumber ||
+        detail.reference ||
+        detail.bookingReference ||
+        detail.bookingId;
+
+      if (ref && ref.trim()) {
+        const cleanRef = ref.trim().toUpperCase();
+        setDrawerRef(cleanRef);
+        setDrawerBookingId(detail.bookingId || null);
+        setDrawerTab(detail.defaultTab || detail.tab || (detail.isDocument ? "documents" : null));
+        setDrawerOpen(true);
+      }
+    };
+
+    window.addEventListener("nashmia_open_movement_drawer", handleOpenMovement);
+    return () => window.removeEventListener("nashmia_open_movement_drawer", handleOpenMovement);
+  }, []);
 
   return (
     <div
@@ -53,6 +99,28 @@ export function AppLayout({
           </PageTransition>
         </div>
       </main>
+
+      {/* Global In-Place Movement Drawer: opens seamlessly across all pages without navigation */}
+      {drawerOpen && drawerRef && (
+        <Suspense fallback={null}>
+          <MovementLifecycleDrawer
+            isOpen={drawerOpen}
+            onClose={() => {
+              setDrawerOpen(false);
+              setDrawerRef(null);
+              setDrawerTab(null);
+            }}
+            initialReference={drawerRef}
+            bookingId={drawerBookingId}
+            defaultTab={drawerTab as any}
+            onMovementUpdated={() => {
+              void queryClient.invalidateQueries({ queryKey: ["dashboard-bookings"] });
+              void queryClient.invalidateQueries({ queryKey: ["movements"] });
+              void queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
+            }}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

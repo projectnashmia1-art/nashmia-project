@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, memo } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import {
@@ -72,8 +73,8 @@ export const GroupedQuotationModal = memo(function GroupedQuotationModal({
   onRequestMoreQuotes,
 }: GroupedQuotationModalProps) {
   const { userId } = useAuth();
+  const queryClient = useQueryClient();
   const [forwarderRequests, setForwarderRequests] = useState<ForwarderQuoteRequestRecord[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
   const [isAwarding, setIsAwarding] = useState<string | null>(null);
   const [confirmingInlineId, setConfirmingInlineId] = useState<string | null>(null);
   const [awardModalTarget, setAwardModalTarget] = useState<ForwarderQuoteRequestRecord | null>(
@@ -95,70 +96,41 @@ export const GroupedQuotationModal = memo(function GroupedQuotationModal({
     threadId?: string;
   } | null>(null);
 
-  const loadRequests = useCallback(async () => {
-    if (!booking) return;
-    setIsLoading(true);
-    try {
-      const list = await fetchForwarderRequestsForBooking(booking);
-      logQuotationResponseDiagnostics(list, "RequestCardQuotationFetcher - GroupedQuotationModal");
+  const bookingCacheKey = booking?.id || booking?.movementNumber || booking?.bookingReference || "";
 
-      // Diagnostic check comparing fetched API response fields against form/card state properties
-      list.forEach((item) => {
-        runPropertyAlignmentDiagnostic(
-          item as unknown as Record<string, unknown>,
-          {
-            id: item.id,
-            quotationId: item.offerData?.id || item.id,
-            bookingId: item.bookingId || booking.id,
-            movementNumber: item.movementNumber || booking.movementNumber,
-            ratePerContainer: item.offerData?.ratePerContainer || item.ratePerContainer,
-            quotedTotal: item.offerData?.totalFreight || item.totalFreight,
-            currency: item.offerData?.currency || item.currency,
-            carrier: item.offerData?.carrier || item.preferredCarrier,
-            etd: item.offerData?.etd || item.etd,
-            eta: item.offerData?.eta || item.eta,
-            vesselName: item.offerData?.vesselName || item.vesselName,
-            status: item.status,
-            itemizedCharges: item.offerData?.itemizedCharges || [],
-          },
-          `Forwarder Quotation Popup - GroupedQuotationModal (${item.forwarderName})`,
-        );
-      });
-      console.log("[RequestCardQuotationFetcher] Raw API response object for Request Card:", {
-        bookingId: booking.id,
-        movementNumber: booking.movementNumber,
-        count: list.length,
-        quotationRecords: list.map((r) => ({
-          requestId: r.id,
-          id: r.offerData?.id || r.id,
-          quotation_id: r.offerData?.quotationId || r.offerData?.id || r.id,
-          booking_id: r.bookingId || booking.id,
-          forwarderName: r.forwarderName,
-          status: r.status,
-          ratePerContainer: r.offerData?.ratePerContainer || r.ratePerContainer,
-          totalFreight: r.offerData?.totalFreight || r.totalFreight,
-          currency: r.offerData?.currency || r.currency,
-          charges: r.offerData?.itemizedCharges || [],
-          quotation_charges: r.offerData?.itemizedCharges || [],
-          associatedChargeRowsCount: r.offerData?.itemizedCharges?.length || 0,
-          associatedChargeRows: r.offerData?.itemizedCharges || [],
-          fullOfferData: r.offerData,
-        })),
-        fullRawResponseObject: list,
-      });
-      setForwarderRequests(list);
-    } catch (err) {
-      console.warn("[GroupedQuotationModal] Error loading requests:", err);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [booking]);
+  // TanStack Query: Cached instant retrieval with automatic background revalidation
+  const {
+    data: fetchedRequests = [],
+    isLoading: isQueryLoading,
+    refetch: refetchRequests,
+  } = useQuery({
+    queryKey: ["forwarder-quotes-modal", bookingCacheKey],
+    queryFn: async () => {
+      if (!booking) return [];
+      return await fetchForwarderRequestsForBooking(booking);
+    },
+    enabled: Boolean(isOpen && booking),
+    staleTime: 60_000,
+    gcTime: 1000 * 60 * 15,
+    refetchOnWindowFocus: false,
+    refetchOnMount: false,
+  });
 
+  // Sync query data into local state for optimistic updates
   useEffect(() => {
-    if (isOpen && booking) {
-      void loadRequests();
+    if (fetchedRequests && fetchedRequests.length > 0) {
+      setForwarderRequests(fetchedRequests);
     }
-  }, [isOpen, booking, loadRequests]);
+  }, [fetchedRequests]);
+
+  const isLoading = isQueryLoading && forwarderRequests.length === 0;
+
+  const loadRequests = useCallback(async () => {
+    const res = await refetchRequests();
+    if (res.data) {
+      setForwarderRequests(res.data);
+    }
+  }, [refetchRequests]);
 
   // Realtime synchronization events
   useEffect(() => {
@@ -608,7 +580,9 @@ export const GroupedQuotationModal = memo(function GroupedQuotationModal({
                         {autoSelectedQuotation.forwarderName}
                       </h4>
                       <div className="text-[11.5px] text-slate-600 flex items-center gap-2 mt-0.5 font-medium flex-wrap">
-                        <span>{autoSelectedQuotation.offerData?.carrier || "Direct Carrier Line"}</span>
+                        <span>
+                          {autoSelectedQuotation.offerData?.carrier || "Direct Carrier Line"}
+                        </span>
                         <span>•</span>
                         <span>ETD: {autoSelectedQuotation.offerData?.etd || requestedEtd}</span>
                         <span>•</span>
@@ -617,14 +591,28 @@ export const GroupedQuotationModal = memo(function GroupedQuotationModal({
                     </div>
 
                     <div className="text-right shrink-0">
-                      {autoSelectedQuotation.offerData?.ratePerContainer || autoSelectedQuotation.ratePerContainer ? (
+                      {autoSelectedQuotation.offerData?.ratePerContainer ||
+                      autoSelectedQuotation.ratePerContainer ? (
                         <div>
                           <div className="text-base font-extrabold text-slate-900 font-mono leading-tight">
-                            ${(autoSelectedQuotation.offerData?.ratePerContainer || autoSelectedQuotation.ratePerContainer || 0).toLocaleString()}
-                            <span className="text-[10.5px] font-normal text-slate-500 font-sans ml-1">/cntr</span>
+                            $
+                            {(
+                              autoSelectedQuotation.offerData?.ratePerContainer ||
+                              autoSelectedQuotation.ratePerContainer ||
+                              0
+                            ).toLocaleString()}
+                            <span className="text-[10.5px] font-normal text-slate-500 font-sans ml-1">
+                              /cntr
+                            </span>
                           </div>
                           <div className="text-[10.5px] font-semibold text-[#0FA3B1] font-mono mt-0.5">
-                            Total: ${(autoSelectedQuotation.offerData?.totalFreight || autoSelectedQuotation.totalFreight || 0).toLocaleString()} {autoSelectedQuotation.offerData?.currency || "USD"}
+                            Total: $
+                            {(
+                              autoSelectedQuotation.offerData?.totalFreight ||
+                              autoSelectedQuotation.totalFreight ||
+                              0
+                            ).toLocaleString()}{" "}
+                            {autoSelectedQuotation.offerData?.currency || "USD"}
                           </div>
                         </div>
                       ) : (
@@ -635,7 +623,8 @@ export const GroupedQuotationModal = memo(function GroupedQuotationModal({
 
                   <div className="pt-2 border-t border-[#0FA3B1]/20 flex items-center justify-between gap-2">
                     <p className="text-[11px] text-slate-600 font-medium leading-tight">
-                      System automatically selected this quotation matching Movement <strong className="text-slate-800 font-mono">{movementNo}</strong>.
+                      System automatically selected this quotation matching Movement{" "}
+                      <strong className="text-slate-800 font-mono">{movementNo}</strong>.
                     </p>
                     <Button
                       type="button"

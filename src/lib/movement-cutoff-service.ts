@@ -64,6 +64,22 @@ export interface MovementCutOffDeadline {
   reminderDueTimeMs?: number; // timestamp in ms of 48 hours before deadline
 }
 
+export interface CutOffRevisionEntry {
+  revisionId: string;
+  previousCutoffDate?: string | null;
+  previousDeadlines?: MovementCutOffDeadline[];
+  revisedCutoffDate?: string | null;
+  revisedDeadlines?: MovementCutOffDeadline[];
+  revisedAt: string;
+  sourceDocumentId?: string | null;
+  sourceDocumentName?: string | null;
+  sourceEmailId?: string | null;
+  revisionDocumentId?: string | null;
+  revisionDocumentName?: string | null;
+  reason?: string;
+  wasManuallyVerifiedPreserved?: boolean;
+}
+
 export interface MovementCutOffDates {
   cutoffDate?: string | null;
   cutoff_date?: string | null;
@@ -102,6 +118,13 @@ export interface MovementCutOffDates {
   requires_manual_review?: boolean;
   reviewReason?: string | null;
   review_reason?: string | null;
+  isManuallyVerified?: boolean;
+  is_manually_verified?: boolean;
+  manuallyVerifiedAt?: string | null;
+  manuallyVerifiedBy?: string | null;
+  revisionHistory?: CutOffRevisionEntry[];
+  revision_history?: CutOffRevisionEntry[];
+  revisionCount?: number;
   bookingId?: string | null;
   booking_id?: string | null;
   movementId?: string | null;
@@ -484,6 +507,8 @@ export function categorizeCutOffDate(
 export function parseCutOffDateTime(str: string): { date: string; time: string; inText: string } {
   if (!str) return { date: "—", time: "—", inText: "pending" };
 
+  const hasExplicitTime = /(:\d{2}|\b(am|pm)\b|\b\d{1,2}[:.]\d{2}\b)/i.test(str);
+
   // Try direct pattern match like "18 Sep 2026 4:00 PM" or "2026-09-18 16:00"
   const d = parseCutOffToDate(str) || new Date(str);
   if (!isNaN(d.getTime())) {
@@ -492,11 +517,13 @@ export function parseCutOffDateTime(str: string): { date: string; time: string; 
       month: "short",
       year: "numeric",
     });
-    const timeFormatted = d.toLocaleTimeString("en-US", {
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    });
+    const timeFormatted = hasExplicitTime
+      ? d.toLocaleTimeString("en-US", {
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true,
+        })
+      : "";
     const diffMs = d.getTime() - Date.now();
     const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
     const inText =
@@ -520,6 +547,29 @@ export function parseCutOffDateTime(str: string): { date: string; time: string; 
   }
 
   return { date: str, time: "", inText: "upcoming" };
+}
+
+/**
+ * Normalizes cut-off type labels for canonical deduplication and matching.
+ * E.g. "SI Cut-Off", "Shipping Instruction Cut-Off", "SI Cutoff" -> "SI_CUTOFF"
+ */
+export function normalizeCutoffType(type: string | null | undefined): string {
+  if (!type) return "CUTOFF_DEADLINE";
+  const clean = type
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "_");
+  if (clean.includes("SI_") || clean.includes("SHIPPING_INSTRUCTION") || clean === "SI")
+    return "SI_CUTOFF";
+  if (clean.includes("VGM")) return "VGM_CUTOFF";
+  if (clean.includes("PORT")) return "PORT_CUTOFF";
+  if (clean.includes("GATE")) return "GATE_CUTOFF";
+  if (clean.includes("CARGO")) return "CARGO_CUTOFF";
+  if (clean.includes("CY_") || clean === "CY") return "CY_CUTOFF";
+  if (clean.includes("DOC")) return "DOC_CUTOFF";
+  if (clean.includes("TERMINAL")) return "TERMINAL_CUTOFF";
+  if (clean.includes("CLOSING")) return "CLOSING_DATE";
+  return clean || "CUTOFF_DEADLINE";
 }
 
 /**
@@ -562,8 +612,17 @@ export function buildNormalizedDeadlines(dates: MovementCutOffDates): MovementCu
 
   const nowIso = new Date().toISOString();
 
-  if (Array.isArray(dates.deadlines) && dates.deadlines.length > 0) {
-    return dates.deadlines.map((d) => {
+  const rawDeadlines =
+    (Array.isArray(dates.deadlines) && dates.deadlines.length > 0 && dates.deadlines) ||
+    (Array.isArray((dates as any).cut_off_deadlines) &&
+      (dates as any).cut_off_deadlines.length > 0 &&
+      (dates as any).cut_off_deadlines) ||
+    (Array.isArray((dates as any).cutOffDeadlines) &&
+      (dates as any).cutOffDeadlines.length > 0 &&
+      (dates as any).cutOffDeadlines);
+
+  if (rawDeadlines && rawDeadlines.length > 0) {
+    return rawDeadlines.map((d: any) => {
       const base = enrich(
         d.type,
         d.dateTime || `${d.date || ""} ${d.time || ""}`,
@@ -772,43 +831,59 @@ export function getCutOffsForMovement(
 ): MovementCutOffDates | null {
   if (!movementIdentifier) return null;
 
-  // 1. If the booking record has cut_off_dates directly embedded, verify and return
-  if (bookingRecord?.cut_off_dates) {
-    const dates = bookingRecord.cut_off_dates;
-    return {
-      ...dates,
-      deadlines: buildNormalizedDeadlines(dates),
-    };
-  }
-
-  // 2. Check confirmation_details inside the booking record
-  if (
-    bookingRecord?.confirmation_details &&
-    typeof bookingRecord.confirmation_details === "object"
-  ) {
-    const details = bookingRecord.confirmation_details as {
-      cut_off_dates?: MovementCutOffDates;
-      cutOffDates?: MovementCutOffDates;
-    };
-    const embedded = details.cut_off_dates || details.cutOffDates;
-    if (embedded) {
-      return {
-        ...embedded,
-        deadlines: buildNormalizedDeadlines(embedded),
-      };
-    }
-  }
-
-  // 3. Query the persistent movement cut-offs registry for this specific movement key
   const normKey = normalizeMovementKey(movementIdentifier);
   const rawKey = movementIdentifier.trim().toUpperCase();
   const registry = getCutOffsRegistry();
+  const fromRegistry = registry[normKey] || registry[rawKey] || null;
 
-  const found = registry[normKey] || registry[rawKey];
-  if (found) {
+  const embeddedDates =
+    bookingRecord?.cut_off_dates ||
+    (
+      bookingRecord?.confirmation_details as {
+        cut_off_dates?: MovementCutOffDates;
+        cutOffDates?: MovementCutOffDates;
+      }
+    )?.cut_off_dates ||
+    (
+      bookingRecord?.confirmation_details as {
+        cut_off_dates?: MovementCutOffDates;
+        cutOffDates?: MovementCutOffDates;
+      }
+    )?.cutOffDates;
+
+  if (embeddedDates && fromRegistry) {
+    const regRevCount = (fromRegistry.revisionHistory || []).length;
+    const embRevCount = (embeddedDates.revisionHistory || []).length;
+    const primary = regRevCount >= embRevCount ? fromRegistry : embeddedDates;
+    const secondary = primary === fromRegistry ? embeddedDates : fromRegistry;
+    const combinedRevs = [
+      ...(primary.revisionHistory || primary.revision_history || []),
+      ...(secondary.revisionHistory || secondary.revision_history || []),
+    ];
+    const uniqueRevs = Array.from(new Map(combinedRevs.map((r) => [r.revisionId, r])).values());
     return {
-      ...found,
-      deadlines: buildNormalizedDeadlines(found),
+      ...primary,
+      revisionHistory: uniqueRevs,
+      revision_history: uniqueRevs,
+      revisionCount: uniqueRevs.length,
+      deadlines:
+        primary.deadlines && primary.deadlines.length > 0
+          ? primary.deadlines
+          : buildNormalizedDeadlines(primary),
+    };
+  }
+
+  if (embeddedDates) {
+    return {
+      ...embeddedDates,
+      deadlines: buildNormalizedDeadlines(embeddedDates),
+    };
+  }
+
+  if (fromRegistry) {
+    return {
+      ...fromRegistry,
+      deadlines: buildNormalizedDeadlines(fromRegistry),
     };
   }
 
@@ -866,6 +941,137 @@ export async function saveCutOffsForMovement(
     cutOffs.review_status ||
     (cutOffs.requiresManualReview || cutOffs.hasAmbiguousDates ? "NEEDS_REVIEW" : "AUTO_VERIFIED");
 
+  // Lookup existing cut-off from registry or local memory
+  const registry = getCutOffsRegistry();
+  const existing = registry[normKey] || registry[rawKey] || null;
+
+  // 1. DUPLICATE CHECK: Prevent duplicate cut-off entries when the same email or attachment is processed repeatedly
+  const isDuplicateProcessing = Boolean(
+    existing &&
+    ((sourceDocId &&
+      (existing.sourceDocumentId === sourceDocId || existing.source_document_id === sourceDocId)) ||
+      (sourceMailId &&
+        (existing.sourceEmailId === sourceMailId || existing.source_email_id === sourceMailId)) ||
+      (!sourceDocId && !sourceMailId)) &&
+    (existing.cutoffDate === primaryCutoffDate || existing.cutoff_date === primaryCutoffDate),
+  );
+
+  if (isDuplicateProcessing && existing) {
+    console.log(
+      `[saveCutOffsForMovement] ⏭️ Duplicate cut-off processing skipped for Movement ${movementIdentifier}. Existing cut-off date (${primaryCutoffDate}) preserved without creating duplicate entries.`,
+    );
+    return {
+      ...existing,
+      deadlines:
+        existing.deadlines && existing.deadlines.length > 0
+          ? existing.deadlines
+          : normalizedDeadlines,
+    };
+  }
+
+  // 2. CHECK MANUALLY VERIFIED STATUS:
+  // Never silently overwrite a manually verified date.
+  const isExistingManuallyVerified = Boolean(
+    existing &&
+    (existing.isManuallyVerified ||
+      existing.is_manually_verified ||
+      existing.reviewStatus === "MANUALLY_VERIFIED" ||
+      existing.review_status === "MANUALLY_VERIFIED"),
+  );
+
+  const isIncomingExplicitlyVerified = Boolean(
+    cutOffs.isManuallyVerified ||
+    cutOffs.is_manually_verified ||
+    cutOffs.reviewStatus === "MANUALLY_VERIFIED" ||
+    cutOffs.review_status === "MANUALLY_VERIFIED",
+  );
+
+  // 3. REVISION DETECTION:
+  // If a revised cut-off document contains a different date, preserve the original document and update current cut-off
+  // only according to existing revision/history rules.
+  const existingCutoffDate = existing?.cutoffDate || existing?.cutoff_date || null;
+  const isDateDifferent = Boolean(
+    existing && existingCutoffDate && primaryCutoffDate && existingCutoffDate !== primaryCutoffDate,
+  );
+
+  let finalCutoffDate = primaryCutoffDate;
+  let finalDeadlines = normalizedDeadlines;
+  let finalReviewStatus = revStatus;
+  let finalRequiresManualReview = Boolean(
+    cutOffs.requiresManualReview || cutOffs.hasAmbiguousDates,
+  );
+  let finalReviewReason = cutOffs.reviewReason || cutOffs.review_reason || null;
+  let isRevision = false;
+  let eventType = "Cut-Off Schedule Extracted";
+  let eventTitle = `Cut-Off Schedule Maintained (${movementIdentifier})`;
+  let eventDesc = `Extracted ${normalizedDeadlines.length} cut-off deadlines for Movement ${movementIdentifier}. Status: ${extStatus}, Review: ${revStatus}.`;
+
+  const previousRevisions: CutOffRevisionEntry[] =
+    existing?.revisionHistory || existing?.revision_history || [];
+  const updatedRevisions: CutOffRevisionEntry[] = [...previousRevisions];
+
+  if (isExistingManuallyVerified && !isIncomingExplicitlyVerified && isDateDifferent) {
+    // CRITICAL SAFETY RULE: Never silently overwrite a manually verified date!
+    // Preserve existing verified date as the active cut-off.
+    finalCutoffDate = existingCutoffDate;
+    finalDeadlines =
+      existing.deadlines && existing.deadlines.length > 0
+        ? existing.deadlines
+        : normalizedDeadlines;
+    finalReviewStatus = "NEEDS_REVIEW";
+    finalRequiresManualReview = true;
+    finalReviewReason = `Incoming revised cut-off date (${primaryCutoffDate}) differs from manually verified date (${existingCutoffDate}). Manually verified date preserved; manual review required.`;
+
+    updatedRevisions.push({
+      revisionId: `rev-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      previousCutoffDate: existingCutoffDate,
+      previousDeadlines: existing.deadlines,
+      revisedCutoffDate: primaryCutoffDate,
+      revisedDeadlines: normalizedDeadlines,
+      revisedAt: nowIso,
+      sourceDocumentId: sourceDocId,
+      sourceDocumentName: cutOffs.sourceDocumentName,
+      sourceEmailId: sourceMailId,
+      reason: `Revised document contains cut-off date (${primaryCutoffDate}) differing from manually verified date (${existingCutoffDate}). Manually verified date preserved.`,
+      wasManuallyVerifiedPreserved: true,
+    });
+
+    isRevision = true;
+    eventType = "Cut-Off Revision Flagged";
+    eventTitle = `Cut-Off Revision Flagged (${movementIdentifier})`;
+    eventDesc = `Received cut-off date (${primaryCutoffDate}) for Movement ${movementIdentifier}, but existing date (${existingCutoffDate}) was manually verified. The verified date was protected from silent overwrite and flagged for operational review.`;
+  } else if (isIncomingExplicitlyVerified) {
+    // User or operator manually verified this cut-off
+    finalReviewStatus = "MANUALLY_VERIFIED";
+    finalRequiresManualReview = false;
+    finalReviewReason = null;
+    eventType = "Cut-Off Date Manually Verified";
+    eventTitle = `Cut-Off Date Manually Verified (${movementIdentifier})`;
+    eventDesc = `Cut-off date ${finalCutoffDate} for Movement ${movementIdentifier} was manually verified and confirmed.`;
+  } else if (isDateDifferent) {
+    // Non-verified previous cut-off: Update current cut-off according to revision rules, preserving original document
+    isRevision = true;
+    updatedRevisions.push({
+      revisionId: `rev-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      previousCutoffDate: existingCutoffDate,
+      previousDeadlines: existing.deadlines,
+      revisedCutoffDate: primaryCutoffDate,
+      revisedDeadlines: normalizedDeadlines,
+      revisedAt: nowIso,
+      sourceDocumentId: existing.sourceDocumentId || existing.source_document_id || null,
+      sourceDocumentName: existing.sourceDocumentName || existing.source_document_name || null,
+      sourceEmailId: existing.sourceEmailId || existing.source_email_id || null,
+      revisionDocumentId: sourceDocId,
+      revisionDocumentName: cutOffs.sourceDocumentName || null,
+      reason: `Cut-off date revised from ${existingCutoffDate} to ${primaryCutoffDate}. Original document preserved in repository.`,
+      wasManuallyVerifiedPreserved: false,
+    });
+
+    eventType = "Cut-Off Schedule Revised";
+    eventTitle = `Cut-Off Schedule Revised (${movementIdentifier})`;
+    eventDesc = `Cut-off date revised from ${existingCutoffDate} to ${primaryCutoffDate} for Movement ${movementIdentifier}. Original notice preserved in documents repository.`;
+  }
+
   const payload: MovementCutOffDates = {
     ...cutOffs,
     bookingId: bookingId || cutOffs.bookingId || cutOffs.booking_id || null,
@@ -876,20 +1082,38 @@ export async function saveCutOffsForMovement(
     movement_number: movementIdentifier,
     cutoffType: primaryCutoffType,
     cutoff_type: primaryCutoffType,
-    cutoffDate: primaryCutoffDate,
-    cutoff_date: primaryCutoffDate,
-    sourceDocumentId: sourceDocId || undefined,
-    source_document_id: sourceDocId || undefined,
-    sourceEmailId: sourceMailId || undefined,
-    source_email_id: sourceMailId || undefined,
+    cutoffDate: finalCutoffDate,
+    cutoff_date: finalCutoffDate,
+    sourceDocumentId: sourceDocId || existing?.sourceDocumentId || undefined,
+    source_document_id: sourceDocId || existing?.source_document_id || undefined,
+    sourceDocumentName: cutOffs.sourceDocumentName || existing?.sourceDocumentName || undefined,
+    sourceEmailId: sourceMailId || existing?.sourceEmailId || undefined,
+    source_email_id: sourceMailId || existing?.source_email_id || undefined,
     extractionStatus: extStatus,
     extraction_status: extStatus,
-    reviewStatus: revStatus,
-    review_status: revStatus,
-    deadlines: normalizedDeadlines,
-    receivedAt: cutOffs.receivedAt || nowIso,
-    createdAt: cutOffs.createdAt || cutOffs.created_at || nowIso,
-    created_at: cutOffs.created_at || cutOffs.createdAt || nowIso,
+    reviewStatus: finalReviewStatus,
+    review_status: finalReviewStatus,
+    requiresManualReview: finalRequiresManualReview,
+    requires_manual_review: finalRequiresManualReview,
+    reviewReason: finalReviewReason,
+    review_reason: finalReviewReason,
+    isManuallyVerified:
+      (isExistingManuallyVerified && !isIncomingExplicitlyVerified && isDateDifferent) ||
+      isIncomingExplicitlyVerified,
+    is_manually_verified:
+      (isExistingManuallyVerified && !isIncomingExplicitlyVerified && isDateDifferent) ||
+      isIncomingExplicitlyVerified,
+    manuallyVerifiedAt: isIncomingExplicitlyVerified ? nowIso : existing?.manuallyVerifiedAt,
+    manuallyVerifiedBy: isIncomingExplicitlyVerified
+      ? cutOffs.manuallyVerifiedBy || "Operator"
+      : existing?.manuallyVerifiedBy,
+    deadlines: finalDeadlines,
+    revisionHistory: updatedRevisions,
+    revision_history: updatedRevisions,
+    revisionCount: updatedRevisions.length,
+    receivedAt: cutOffs.receivedAt || existing?.receivedAt || nowIso,
+    createdAt: existing?.createdAt || cutOffs.createdAt || nowIso,
+    created_at: existing?.created_at || cutOffs.created_at || nowIso,
     updatedAt: nowIso,
     updated_at: nowIso,
   };
@@ -1010,13 +1234,30 @@ export async function saveCutOffsForMovement(
             movementIdentifier,
             movementKey: normKey,
             cutOffs: payload,
-            deadlines: normalizedDeadlines,
+            deadlines: finalDeadlines,
+            isRevision,
+          },
+        }),
+      );
+      window.dispatchEvent(
+        new CustomEvent("nashmia:cut-off-saved", {
+          detail: {
+            movementIdentifier,
+            movementKey: normKey,
+            cutOffs: payload,
+            deadlines: finalDeadlines,
+            isRevision,
           },
         }),
       );
       window.dispatchEvent(
         new CustomEvent("nashmia_bookings_updated", {
-          detail: { updated: true, movementNumber: movementIdentifier },
+          detail: { updated: true, movementNumber: movementIdentifier, cutOffs: payload },
+        }),
+      );
+      window.dispatchEvent(
+        new CustomEvent("supabase_realtime_bookings_change", {
+          detail: { updated: true, movementNumber: movementIdentifier, cutOffs: payload },
         }),
       );
 
@@ -1210,15 +1451,15 @@ export async function saveCutOffsForMovement(
         }
       }
 
-      // Insert database tracking event into booking_events table
-      if (validBookingUuid) {
+      // Insert database tracking event into booking_events table (skip if duplicate repeated processing)
+      if (validBookingUuid && !isDuplicateProcessing) {
         await supabase.from("booking_events").insert({
           booking_id: validBookingUuid,
-          event_type: "Cut-Off Schedule Extracted",
+          event_type: eventType,
           event_date: nowIso,
           location: "Operations Desk",
-          title: `Cut-Off Schedule Maintained (${movementIdentifier})`,
-          description: `Extracted ${normalizedDeadlines.length} cut-off deadlines for Movement ${movementIdentifier}. Status: ${extStatus}, Review: ${revStatus}.`,
+          title: eventTitle,
+          description: eventDesc,
           payload: {
             bookingId: validBookingUuid,
             booking_id: validBookingUuid,
@@ -1228,17 +1469,21 @@ export async function saveCutOffsForMovement(
             movement_number: movementIdentifier,
             cutoffType: primaryCutoffType,
             cutoff_type: primaryCutoffType,
-            cutoffDate: primaryCutoffDate,
-            cutoff_date: primaryCutoffDate,
+            cutoffDate: finalCutoffDate,
+            cutoff_date: finalCutoffDate,
             sourceDocumentId: sourceDocId,
             source_document_id: sourceDocId,
             sourceEmailId: sourceMailId,
             source_email_id: sourceMailId,
             extractionStatus: extStatus,
             extraction_status: extStatus,
-            reviewStatus: revStatus,
-            review_status: revStatus,
-            deadlines: normalizedDeadlines,
+            reviewStatus: finalReviewStatus,
+            review_status: finalReviewStatus,
+            requiresManualReview: finalRequiresManualReview,
+            requires_manual_review: finalRequiresManualReview,
+            isRevision,
+            revisionHistory: updatedRevisions,
+            deadlines: finalDeadlines,
             cutOffDates: payload,
             createdAt: payload.createdAt || nowIso,
             created_at: payload.createdAt || nowIso,
@@ -1477,55 +1722,405 @@ export async function getCutOffDataFromDatabase(movementIdentifier: string): Pro
   }
 }
 
-/**
- * Returns all upcoming cut-offs grouped and strictly identified by their specific Movement.
- * Used by UpcomingCutoffs widget to ensure each deadline clearly displays its own Movement.
- */
-export function getAllUpcomingCutOffs(): Array<{
+export interface UpcomingCutoffItem {
   ref: string;
   type: string;
   date: string;
   time: string;
   in: string;
   dateTime: string;
+  timestamp: number;
   reminderDateTime?: string;
   isReminderDue?: boolean;
-}> {
+  requiresManualReview?: boolean;
+  reviewReason?: string | null;
+  isAmbiguous?: boolean;
+  sourceDocumentId?: string | null;
+  sourceDocumentName?: string | null;
+  pdfUrl?: string | null;
+  bookingDetails?: {
+    id?: string;
+    lane?: string;
+    originPort?: string;
+    destinationPort?: string;
+    carrier?: string;
+    vessel?: string;
+    status?: string;
+    buyerName?: string;
+    supplierName?: string;
+  };
+}
+
+/**
+ * Returns all upcoming cut-offs grouped and strictly identified by their specific Movement.
+ * Incorporates cut-offs from the persistent registry, live booking records, and saved document attachments.
+ * Links associated booking details, original PDF URLs, manual review flags, and sorts by actual date (nearest first).
+ */
+export function getAllUpcomingCutOffs(
+  optionalBookings?: Array<Record<string, unknown>>,
+): UpcomingCutoffItem[] {
   const registry = getCutOffsRegistry();
-  const result: Array<{
-    ref: string;
-    type: string;
-    date: string;
-    time: string;
-    in: string;
-    dateTime: string;
-    reminderDateTime?: string;
-    isReminderDue?: boolean;
-  }> = [];
 
-  const processedMovements = new Set<string>();
-
-  for (const [key, dates] of Object.entries(registry)) {
-    const norm = normalizeMovementKey(key);
-    if (processedMovements.has(norm)) continue;
-    processedMovements.add(norm);
-
-    const ref = dates.movementNumber || key;
-    const deadlines = buildNormalizedDeadlines(dates);
-
-    for (const d of deadlines) {
-      result.push({
-        ref,
-        type: d.type,
-        date: d.date || "—",
-        time: d.time || "—",
-        in: d.in || "upcoming",
-        dateTime: d.dateTime,
-        reminderDateTime: d.reminderDateTime,
-        isReminderDue: d.isReminderDue,
-      });
+  // 1. Gather all available bookings for rich association
+  let bookingsList: Array<Record<string, unknown>> = [];
+  if (typeof window !== "undefined") {
+    try {
+      const rawCustom = localStorage.getItem("nashmia_custom_bookings_v1");
+      const rawLocal = localStorage.getItem("nashmia_local_bookings");
+      const parsed = rawCustom ? JSON.parse(rawCustom) : rawLocal ? JSON.parse(rawLocal) : [];
+      if (Array.isArray(parsed)) bookingsList = [...parsed];
+    } catch {
+      // safe fallback
     }
   }
+  if (Array.isArray(optionalBookings) && optionalBookings.length > 0) {
+    const existingKeys = new Set(
+      bookingsList.map((b) =>
+        (b.id || b.movement_number || b.booking_reference || "").toString().toLowerCase(),
+      ),
+    );
+    for (const ob of optionalBookings) {
+      const key = (ob.id || ob.movement_number || ob.booking_reference || "")
+        .toString()
+        .toLowerCase();
+      if (key && existingKeys.has(key)) {
+        bookingsList = bookingsList.map((b) =>
+          (b.id || b.movement_number || b.booking_reference || "").toString().toLowerCase() === key
+            ? { ...b, ...ob }
+            : b,
+        );
+      } else {
+        bookingsList.push(ob);
+      }
+    }
+  }
+
+  // Build booking index by normalized movement reference
+  const bookingMap = new Map<string, Record<string, unknown>>();
+  for (const b of bookingsList) {
+    if (!b) continue;
+    const ref = (b.movement_number || b.booking_reference || b.reference || b.id || "") as string;
+    if (ref) {
+      bookingMap.set(ref.trim().toUpperCase(), b);
+      bookingMap.set(normalizeMovementKey(ref), b);
+    }
+  }
+
+  // 2. Index documents for original cut-off PDF links
+  const savedDocs = getSavedDocuments();
+  const docMapById = new Map<string, DriveFile>();
+  const docMapByMov = new Map<string, DriveFile>();
+  for (const doc of savedDocs) {
+    if (!doc) continue;
+    if (doc.id) docMapById.set(doc.id, doc);
+    const mov = (doc.metadata?.movementNumber ||
+      doc.metadata?.movementReferenceNumber ||
+      "") as string;
+    if (mov) {
+      const isCutoff =
+        doc.metadata?.category === "Cut-Off Notice" ||
+        doc.metadata?.documentType === "CUT_OFF_NOTICE" ||
+        doc.name.toLowerCase().includes("cutoff") ||
+        doc.name.toLowerCase().includes("cut-off") ||
+        doc.type === "pdf";
+      if (isCutoff && !docMapByMov.has(mov.trim().toUpperCase())) {
+        docMapByMov.set(mov.trim().toUpperCase(), doc);
+        docMapByMov.set(normalizeMovementKey(mov), doc);
+      }
+    }
+  }
+
+  // Helper to extract booking details
+  const extractBookingDetails = (ref: string, bkId?: string | null) => {
+    const matched =
+      (bkId ? bookingMap.get(bkId.toUpperCase()) : null) ||
+      bookingMap.get(ref.trim().toUpperCase()) ||
+      bookingMap.get(normalizeMovementKey(ref));
+    if (!matched) return undefined;
+
+    const pol = (
+      (matched.origin_port as string) ||
+      (matched.pol_name as string) ||
+      ""
+    ).toUpperCase();
+    const pod = (
+      (matched.destination_port as string) ||
+      (matched.pod_name as string) ||
+      ""
+    ).toUpperCase();
+    const lane = pol && pod ? `${pol} → ${pod}` : "";
+    const carrier = (matched.carrier as string) || (matched.forwarder_name as string) || "";
+    const vessel = (matched.vessel_name as string) || "";
+    const status = (matched.status as string) || "";
+    const buyerName = (matched.buyer_name as string) || "";
+    const supplierName = (matched.supplier_name as string) || "";
+
+    return {
+      id: matched.id as string | undefined,
+      lane: lane || undefined,
+      originPort: pol || undefined,
+      destinationPort: pod || undefined,
+      carrier: carrier || undefined,
+      vessel: vessel || undefined,
+      status: status || undefined,
+      buyerName: buyerName || undefined,
+      supplierName: supplierName || undefined,
+    };
+  };
+
+  // Helper to resolve PDF URL
+  const resolvePdfLink = (
+    docId?: string | null,
+    ref?: string,
+  ): { pdfUrl: string | null; docName: string | null } => {
+    let doc: DriveFile | undefined;
+    if (docId) {
+      doc = docMapById.get(docId);
+    }
+    if (!doc && ref) {
+      doc = docMapByMov.get(ref.trim().toUpperCase()) || docMapByMov.get(normalizeMovementKey(ref));
+    }
+
+    // Check in booking confirmation_details.linked_documents
+    if (!doc && ref) {
+      const b =
+        bookingMap.get(ref.trim().toUpperCase()) || bookingMap.get(normalizeMovementKey(ref));
+      const conf = (b?.confirmation_details as Record<string, unknown>) || {};
+      const linked = Array.isArray(conf.linked_documents)
+        ? (conf.linked_documents as Array<Record<string, unknown>>)
+        : [];
+      const matchedLinked = linked.find(
+        (ld) =>
+          ld.category === "Cut-Off Notice" ||
+          ld.documentType === "CUT_OFF_NOTICE" ||
+          (typeof ld.name === "string" &&
+            (ld.name.toLowerCase().includes("cut-off") ||
+              ld.name.toLowerCase().includes("cutoff"))) ||
+          (typeof ld.fileName === "string" &&
+            (ld.fileName.toLowerCase().includes("cut-off") ||
+              ld.fileName.toLowerCase().includes("cutoff"))) ||
+          (docId && (ld.id === docId || ld.bookingDocumentId === docId)),
+      );
+      if (matchedLinked) {
+        doc = {
+          id: (matchedLinked.id || matchedLinked.bookingDocumentId || docId) as string,
+          name: (matchedLinked.name || matchedLinked.fileName || "Cut-Off Notice.pdf") as string,
+          type: "pdf",
+          extension: "pdf",
+          owners: [],
+          lastModified: "Recently",
+          fileSize: (matchedLinked.fileSize || "384 KB") as string,
+          url: (matchedLinked.url || matchedLinked.storageUrl || matchedLinked.fileUrl) as string,
+          metadata: {
+            storagePath: matchedLinked.storagePath as string,
+            originalFilename: (matchedLinked.fileName || matchedLinked.name) as string,
+            category: "Cut-Off Notice",
+          },
+        };
+      }
+    }
+
+    if (!doc && !ref && !docId) return { pdfUrl: null, docName: null };
+
+    const docName =
+      doc?.metadata?.originalFilename ||
+      doc?.metadata?.fileName ||
+      doc?.name ||
+      (ref ? `CutOff_Notice_${ref}.pdf` : "Cut-Off Notice.pdf");
+    let pdfUrl: string | null = null;
+
+    if (doc?.metadata?.storagePath) {
+      pdfUrl = `/api/documents/download?path=${encodeURIComponent(doc.metadata.storagePath)}`;
+    } else if (doc?.url && doc.url !== "#" && !doc.url.startsWith("https://drive.nashmia.com")) {
+      pdfUrl = doc.url;
+    } else if (
+      doc?.sharedLink &&
+      doc.sharedLink !== "#" &&
+      !doc.sharedLink.startsWith("https://drive.nashmia.com")
+    ) {
+      pdfUrl = doc.sharedLink;
+    } else {
+      const msgId = doc?.metadata?.gmailMessageId || doc?.metadata?.emailMessageId;
+      const attId = (doc?.metadata as Record<string, unknown>)?.attachmentId as string | undefined;
+      if (msgId && attId) {
+        pdfUrl = `/api/gmail/attachment?messageId=${encodeURIComponent(msgId)}&attachmentId=${encodeURIComponent(attId)}&filename=${encodeURIComponent(docName)}`;
+      } else if (ref) {
+        pdfUrl = `/documents?movement=${encodeURIComponent(ref)}`;
+      }
+    }
+
+    return { pdfUrl, docName };
+  };
+
+  // Map to hold authoritative active cut-off per Movement + Cut-Off Type
+  // Key format: `${normalizeMovementKey(ref)}__${normalizeCutoffType(type)}`
+  const activeCutoffsMap = new Map<string, UpcomingCutoffItem>();
+
+  // Helper to process a set of cut-off dates
+  const processDates = (
+    ref: string,
+    dates: MovementCutOffDates,
+    sourceRank: "registry" | "booking" | "document",
+  ) => {
+    if (!ref || !dates) return;
+    const deadlines = buildNormalizedDeadlines(dates);
+    const bkDetails = extractBookingDetails(ref, dates.bookingId || dates.booking_id);
+
+    for (const d of deadlines) {
+      if (!d.type && !d.date && !d.dateTime) continue;
+      const normRef = normalizeMovementKey(ref);
+      const rawType = d.type || d.cutoffType || "Cut-off Deadline";
+      const normType = normalizeCutoffType(rawType);
+      const canonicalKey = `${normRef}__${normType}`;
+
+      const { pdfUrl, docName } = resolvePdfLink(
+        d.sourceDocumentId ||
+          d.source_document_id ||
+          dates.sourceDocumentId ||
+          dates.source_document_id,
+        ref,
+      );
+
+      // If an authoritative item already exists in activeCutoffsMap from a prior rank:
+      if (activeCutoffsMap.has(canonicalKey)) {
+        const existingItem = activeCutoffsMap.get(canonicalKey)!;
+        // Enrich missing PDF URL or booking details without duplicating or overwriting with stale dates
+        if (!existingItem.pdfUrl && pdfUrl) {
+          existingItem.pdfUrl = pdfUrl;
+          existingItem.sourceDocumentName = docName || existingItem.sourceDocumentName;
+        }
+        if (!existingItem.bookingDetails && bkDetails) {
+          existingItem.bookingDetails = bkDetails;
+        }
+        continue;
+      }
+
+      const parsedDt =
+        parseCutOffToDate(d.dateTime || `${d.date || ""} ${d.time || ""}`) ||
+        (d.dateTime ? new Date(d.dateTime) : null);
+      const timestamp = parsedDt && !isNaN(parsedDt.getTime()) ? parsedDt.getTime() : Infinity;
+
+      const requiresReview = Boolean(
+        d.requiresManualReview ||
+        d.requires_manual_review ||
+        d.isAmbiguous ||
+        d.is_ambiguous ||
+        dates.requiresManualReview ||
+        dates.requires_manual_review ||
+        dates.hasAmbiguousDates ||
+        dates.has_ambiguous_dates ||
+        dates.reviewStatus === "NEEDS_REVIEW" ||
+        dates.review_status === "NEEDS_REVIEW",
+      );
+
+      const reviewReason =
+        d.reviewReason ||
+        d.review_reason ||
+        dates.reviewReason ||
+        dates.review_reason ||
+        (d.isAmbiguous ? "Ambiguous extracted date/time format" : null);
+
+      activeCutoffsMap.set(canonicalKey, {
+        ref,
+        type: rawType,
+        date: d.date || "—",
+        time: d.time && d.time !== "—" ? d.time : "",
+        in: d.in || "upcoming",
+        dateTime: d.dateTime,
+        timestamp,
+        reminderDateTime: d.reminderDateTime,
+        isReminderDue: d.isReminderDue,
+        requiresManualReview: requiresReview,
+        reviewReason,
+        isAmbiguous: Boolean(d.isAmbiguous || d.is_ambiguous || dates.hasAmbiguousDates),
+        sourceDocumentId: d.sourceDocumentId || dates.sourceDocumentId || null,
+        sourceDocumentName: docName || dates.sourceDocumentName || null,
+        pdfUrl,
+        bookingDetails: bkDetails,
+      });
+    }
+  };
+
+  // Source A: Registry entries (authoritative active cut-offs maintained in system)
+  for (const [key, dates] of Object.entries(registry)) {
+    const ref = dates.movementNumber || dates.movement_number || key;
+    processDates(ref, dates, "registry");
+  }
+
+  // Source B: Direct booking records with embedded cutoffs
+  for (const b of bookingsList) {
+    const ref = (b.movement_number || b.booking_reference || b.reference) as string;
+    if (!ref) continue;
+    let embedded: any =
+      (b.cut_off_dates as MovementCutOffDates) ||
+      (b.cutOffDates as MovementCutOffDates) ||
+      (b.confirmation_details as { cut_off_dates?: MovementCutOffDates })?.cut_off_dates;
+
+    const directDeadlines =
+      (Array.isArray(b.cut_off_deadlines) && b.cut_off_deadlines) ||
+      (Array.isArray(b.cutOffDeadlines) && b.cutOffDeadlines) ||
+      (Array.isArray((b.confirmation_details as any)?.cut_off_deadlines) &&
+        (b.confirmation_details as any)?.cut_off_deadlines);
+
+    if (!embedded && directDeadlines && directDeadlines.length > 0) {
+      embedded = {
+        movementNumber: ref,
+        deadlines: directDeadlines,
+        bookingId: b.id,
+      };
+    } else if (
+      embedded &&
+      directDeadlines &&
+      directDeadlines.length > 0 &&
+      (!embedded.deadlines || embedded.deadlines.length === 0)
+    ) {
+      embedded = {
+        ...embedded,
+        deadlines: directDeadlines,
+      };
+    }
+
+    if (embedded) {
+      processDates(ref, embedded, "booking");
+    }
+  }
+
+  // Source C: Saved documents with cut-off deadlines (preserves documents while deduplicating active cut-offs)
+  for (const doc of savedDocs) {
+    const mov = (doc.metadata?.movementNumber || doc.metadata?.movementReferenceNumber) as string;
+    if (!mov) continue;
+    if (doc.metadata?.cutOffDates) {
+      processDates(mov, doc.metadata.cutOffDates, "document");
+    } else if (
+      Array.isArray(doc.metadata?.cutOffDeadlines) &&
+      doc.metadata.cutOffDeadlines.length > 0
+    ) {
+      processDates(
+        mov,
+        {
+          movementNumber: mov,
+          deadlines: doc.metadata.cutOffDeadlines as MovementCutOffDeadline[],
+          sourceDocumentId: doc.id,
+          sourceDocumentName: doc.name,
+        },
+        "document",
+      );
+    }
+  }
+
+  const result = Array.from(activeCutoffsMap.values());
+
+  // Sort upcoming cut-offs by their actual date, with the nearest upcoming deadlines first
+  result.sort((a, b) => {
+    // Both have valid dates
+    if (a.timestamp !== Infinity && b.timestamp !== Infinity) {
+      return a.timestamp - b.timestamp;
+    }
+    // Valid dates come before unknown/pending dates
+    if (a.timestamp !== Infinity) return -1;
+    if (b.timestamp !== Infinity) return 1;
+    return 0;
+  });
 
   return result;
 }

@@ -49,7 +49,11 @@ import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
 import { quickActions, type Movement } from "@/lib/nashmia-data";
-import { getAllUpcomingCutOffs } from "@/lib/movement-cutoff-service";
+import {
+  getAllUpcomingCutOffs,
+  normalizeMovementKey,
+  type UpcomingCutoffItem,
+} from "@/lib/movement-cutoff-service";
 import { useAuth } from "@/lib/auth-context";
 import {
   fetchDashboardMetricsFromSupabase,
@@ -63,6 +67,7 @@ import { useSupabaseRealtime } from "@/hooks/use-supabase-realtime";
 import {
   getLifecycleStageConfig,
   normalizeLifecycleStage,
+  toDbMovementStatus,
   type LifecycleStage,
 } from "@/lib/movement-lifecycle";
 import { ExcelBookingUploadModal } from "./movements/ExcelBookingUploadModal";
@@ -428,7 +433,10 @@ function deriveLiveDashboardMetrics(
     kpis,
     lifecycle,
     attention: attentionList,
-    cutoffs: serverMetrics?.cutoffs || getAllUpcomingCutOffs(uniqueBookings) || [],
+    cutoffs:
+      getAllUpcomingCutOffs(uniqueBookings).length > 0
+        ? getAllUpcomingCutOffs(uniqueBookings)
+        : serverMetrics?.cutoffs || [],
   };
 }
 
@@ -463,11 +471,8 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
     refetch: bookingsRefetch,
   } = bookingsQuery;
 
-  // Realtime subscription with immediate local cache mutation for zero-lag response
+  // Single multiplexed Realtime subscription: GlobalRealtimeHub handles all tables across one socket
   useSupabaseRealtime("bookings", undefined, isConfigured, { organizationId });
-  useSupabaseRealtime("booking_events", undefined, isConfigured, { organizationId });
-  useSupabaseRealtime("notifications", undefined, isConfigured, { organizationId });
-  useSupabaseRealtime("email_messages", undefined, isConfigured, { organizationId });
 
   useEffect(() => {
     const handleImmediateUpdate = (e?: Event) => {
@@ -485,6 +490,8 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
             detail.bookingId ||
             detail.id ||
             detail.movementNumber ||
+            detail.movementIdentifier ||
+            detail.movementKey ||
             detail.bookingReference ||
             detail.reference ||
             ""
@@ -532,15 +539,38 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
                   const bId = (b.id || "").trim().toLowerCase();
                   const bMov = (b.movement_number || "").trim().toLowerCase();
                   const bRef = (b.booking_reference || "").trim().toLowerCase();
-                  if (bId === targetId || bMov === targetId || bRef === targetId) {
+                  const isMatch =
+                    bId === targetId ||
+                    bMov === targetId ||
+                    bRef === targetId ||
+                    (targetId && normalizeMovementKey(bMov) === normalizeMovementKey(targetId)) ||
+                    (targetId && normalizeMovementKey(bRef) === normalizeMovementKey(targetId));
+
+                  if (isMatch) {
                     const isConfirmed =
                       detail.isConfirmed ||
                       detail.confirmationStatus === "CONFIRMED" ||
                       (typeof detail.status === "string" && detail.status.includes("Confirm"));
 
+                    const existingConf = (b.confirmation_details as Record<string, unknown>) || {};
+                    const newMovementStatus =
+                      detail.movement_status ||
+                      detail.movementStatus ||
+                      (detail.status ? toDbMovementStatus(detail.status) : undefined) ||
+                      b.movement_status;
+
+                    const resolvedFwdName =
+                      detail.forwarderName ||
+                      detail.forwarder_name ||
+                      detail.confirmed_forwarder_name ||
+                      (existingConf.confirmed_forwarder_name as string) ||
+                      (b.forwarder as { name?: string })?.name ||
+                      (b as { forwarder_name?: string }).forwarder_name;
+
                     return {
                       ...b,
                       status: detail.status || b.status,
+                      movement_status: newMovementStatus,
                       confirmation_status:
                         detail.confirmationStatus ||
                         (isConfirmed ? "CONFIRMED" : b.confirmation_status),
@@ -549,14 +579,37 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
                         b.confirmed_at ||
                         (isConfirmed ? new Date().toISOString() : undefined),
                       confirmed_by: detail.confirmedBy || b.confirmed_by,
+                      forwarder_name: resolvedFwdName || b.forwarder_name,
+                      forwarder_id: detail.forwarderId || b.forwarder_id,
+                      forwarder: resolvedFwdName
+                        ? { name: resolvedFwdName, company_name: resolvedFwdName }
+                        : b.forwarder,
                       vessel_name: detail.vesselName || b.vessel_name,
                       voyage_number: detail.voyageNumber || b.voyage_number,
+                      cut_off_dates: detail.cutOffs || b.cut_off_dates,
+                      cut_off_deadlines: detail.deadlines || b.cut_off_deadlines,
+                      confirmation_details: {
+                        ...existingConf,
+                        confirmed_forwarder_name:
+                          resolvedFwdName || (existingConf.confirmed_forwarder_name as string),
+                        confirmed_forwarder_id:
+                          detail.forwarderId || (existingConf.confirmed_forwarder_id as string),
+                        confirmed_forwarder_email:
+                          detail.forwarderEmail ||
+                          (existingConf.confirmed_forwarder_email as string),
+                        current_stage: detail.status || existingConf.current_stage,
+                        lifecycle_stage: detail.status || existingConf.lifecycle_stage,
+                        movement_status: newMovementStatus,
+                        cut_off_dates: detail.cutOffs || existingConf.cut_off_dates,
+                        cut_off_deadlines: detail.deadlines || existingConf.cut_off_deadlines,
+                      },
                     } as FullBookingRecord;
                   }
                   return b;
                 });
               },
             );
+            void queryClient.invalidateQueries({ queryKey: ["dashboard-metrics"] });
           }
         }
       }
@@ -565,8 +618,14 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
     window.addEventListener("nashmia_booking_created", handleImmediateUpdate);
     window.addEventListener("nashmia_movement_created", handleImmediateUpdate);
     window.addEventListener("nashmia_booking_confirmed", handleImmediateUpdate);
+    window.addEventListener("nashmia_movement_confirmed", handleImmediateUpdate);
     window.addEventListener("nashmia_booking_awarded", handleImmediateUpdate);
     window.addEventListener("nashmia_booking_status_updated", handleImmediateUpdate);
+    window.addEventListener("nashmia_movement_status_updated", handleImmediateUpdate);
+    window.addEventListener("nashmia_movement_cutoff_updated", handleImmediateUpdate);
+    window.addEventListener("nashmia:cut-off-saved", handleImmediateUpdate);
+    window.addEventListener("nashmia:document-saved", handleImmediateUpdate);
+    window.addEventListener("nashmia:attachment-saved", handleImmediateUpdate);
     window.addEventListener("supabase_realtime_bookings_change", handleImmediateUpdate);
     window.addEventListener("nashmia_bookings_updated", handleImmediateUpdate);
     window.addEventListener("nashmia_multi_forwarder_updated", handleImmediateUpdate);
@@ -578,8 +637,14 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
       window.removeEventListener("nashmia_booking_created", handleImmediateUpdate);
       window.removeEventListener("nashmia_movement_created", handleImmediateUpdate);
       window.removeEventListener("nashmia_booking_confirmed", handleImmediateUpdate);
+      window.removeEventListener("nashmia_movement_confirmed", handleImmediateUpdate);
       window.removeEventListener("nashmia_booking_awarded", handleImmediateUpdate);
       window.removeEventListener("nashmia_booking_status_updated", handleImmediateUpdate);
+      window.removeEventListener("nashmia_movement_status_updated", handleImmediateUpdate);
+      window.removeEventListener("nashmia_movement_cutoff_updated", handleImmediateUpdate);
+      window.removeEventListener("nashmia:cut-off-saved", handleImmediateUpdate);
+      window.removeEventListener("nashmia:document-saved", handleImmediateUpdate);
+      window.removeEventListener("nashmia:attachment-saved", handleImmediateUpdate);
       window.removeEventListener("supabase_realtime_bookings_change", handleImmediateUpdate);
       window.removeEventListener("nashmia_bookings_updated", handleImmediateUpdate);
       window.removeEventListener("nashmia_multi_forwarder_updated", handleImmediateUpdate);
@@ -1126,12 +1191,14 @@ function StageBadge({
   stage,
   confirmationStatus,
   refOrId,
+  movementStatus,
 }: {
   stage: string;
   confirmationStatus?: string;
   refOrId?: string;
+  movementStatus?: string;
 }) {
-  const config = getLifecycleStageConfig(stage, confirmationStatus, refOrId);
+  const config = getLifecycleStageConfig(stage, confirmationStatus, refOrId, movementStatus);
   return (
     <span
       className={cn(
@@ -1140,10 +1207,234 @@ function StageBadge({
       )}
     >
       <span className="mr-1.5 inline-block size-1.5 self-center rounded-full bg-current" />
-      {config.shortLabel}
+      {config.shortLabel || config.label}
     </span>
   );
 }
+
+interface RecentMovementRowProps {
+  m: Movement & { id?: string; movementStatus?: string; confirmationStatus?: string };
+  onOpenMovement: (id?: string, ref?: string) => void;
+  onEditMovement: (m: Movement & { id?: string }) => void;
+  onDeleteMovement: (m: Movement & { id?: string }) => void;
+}
+
+const RecentMovementTableRow = memo(function RecentMovementTableRow({
+  m,
+  onOpenMovement,
+  onEditMovement,
+  onDeleteMovement,
+}: RecentMovementRowProps) {
+  return (
+    <tr
+      onClick={() => onOpenMovement(m.id, m.ref)}
+      className="group cursor-pointer border-b border-[#F0F2F5] transition-colors duration-150 last:border-b-0 hover:bg-[#F8FAFC]"
+    >
+      <td className="whitespace-nowrap pl-6 pr-4 py-4.5 text-[13.5px] font-semibold tracking-[-0.01em] text-slate-900 group-hover:text-blue-600 transition-colors">
+        {m.ref}
+      </td>
+      <td className="whitespace-nowrap px-4 py-4.5 text-[13.5px] text-slate-700 font-medium">
+        {m.buyer}
+      </td>
+      <td className="whitespace-nowrap px-4 py-4.5 text-[13.5px] text-slate-600">
+        <span
+          className="truncate max-w-[140px] inline-block align-middle font-medium"
+          title={m.supplier}
+        >
+          {m.supplier}
+        </span>
+      </td>
+      <td className="whitespace-nowrap px-4 py-4.5 text-[13.5px]">
+        <span
+          className="truncate max-w-[140px] inline-block align-middle font-semibold text-[#0FA3B1]"
+          title={m.forwarder}
+        >
+          {m.forwarder}
+        </span>
+      </td>
+      <td className="px-3.5 py-4.5 text-[13px] font-semibold text-slate-700">
+        {m.pol === "Pending" ? (
+          <span className="inline-flex items-center rounded-md bg-amber-50 border border-amber-200/60 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+            Pending
+          </span>
+        ) : (
+          m.pol
+        )}
+      </td>
+      <td className="px-3.5 py-4.5 text-[13px] font-semibold text-slate-700">
+        {m.pod === "Pending" ? (
+          <span className="inline-flex items-center rounded-md bg-amber-50 border border-amber-200/60 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+            Pending
+          </span>
+        ) : (
+          m.pod
+        )}
+      </td>
+      <td className="whitespace-nowrap px-4 py-4.5 text-[13px] text-slate-600">
+        {m.vessel === "Pending" ? (
+          <span className="inline-flex items-center rounded-md bg-slate-100 border border-slate-200/80 px-2 py-0.5 text-[11px] font-medium text-slate-500">
+            Pending
+          </span>
+        ) : (
+          m.vessel
+        )}
+      </td>
+      <td className="whitespace-nowrap px-4 py-4.5 text-[13px] text-slate-600">
+        {m.etd === "Pending" ? (
+          <span className="inline-flex items-center rounded-md bg-slate-100 border border-slate-200/80 px-2 py-0.5 text-[11px] font-medium text-slate-500">
+            Pending
+          </span>
+        ) : (
+          m.etd
+        )}
+      </td>
+      <td className="whitespace-nowrap px-4 py-4.5 text-[13px] text-slate-600">
+        {m.eta === "Pending" ? (
+          <span className="inline-flex items-center rounded-md bg-slate-100 border border-slate-200/80 px-2 py-0.5 text-[11px] font-medium text-slate-500">
+            Pending
+          </span>
+        ) : (
+          m.eta
+        )}
+      </td>
+      <td className="px-4 py-4.5">
+        <StageBadge
+          stage={m.stage}
+          confirmationStatus={m.confirmationStatus}
+          refOrId={m.id || m.ref}
+          movementStatus={(m as { movementStatus?: string }).movementStatus}
+        />
+      </td>
+      <td className="px-4 py-4.5 text-[13.5px] font-medium text-slate-900">{m.rate}</td>
+      <td className="px-4 py-4.5 text-[12.5px] text-slate-400">{m.age}</td>
+      <td className="pr-6 pl-2 py-4.5 text-right" onClick={(e) => e.stopPropagation()}>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              aria-label="Movement options"
+              className="size-8 rounded-full flex items-center justify-center text-slate-400 hover:text-slate-800 hover:bg-slate-100 transition-colors cursor-pointer"
+            >
+              <MoreVertical className="size-4" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            className="w-48 text-xs rounded-xl shadow-lg border border-slate-200 p-1"
+          >
+            <DropdownMenuItem
+              onClick={() => onOpenMovement(m.id, m.ref)}
+              className="gap-2 cursor-pointer font-medium"
+            >
+              <ExternalLink className="size-3.5 text-slate-500" />
+              Inspect Lifecycle
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => onEditMovement(m)}
+              className="gap-2 cursor-pointer font-medium text-slate-800"
+            >
+              <Edit3 className="size-3.5 text-blue-500" />
+              Update Movement
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => {
+                navigator.clipboard.writeText(m.ref);
+                toast.success(`Movement reference ${m.ref} copied`);
+              }}
+              className="gap-2 cursor-pointer font-medium text-slate-600"
+            >
+              <Copy className="size-3.5 text-slate-400" />
+              Copy Reference
+            </DropdownMenuItem>
+            <div className="h-px bg-slate-100 my-1" />
+            <DropdownMenuItem
+              onClick={() => void onDeleteMovement(m)}
+              className="gap-2 cursor-pointer font-medium text-rose-600 focus:bg-rose-50 focus:text-rose-700"
+            >
+              <Trash2 className="size-3.5 text-rose-500" />
+              Delete Movement
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </td>
+    </tr>
+  );
+});
+
+const RecentMovementMobileCard = memo(function RecentMovementMobileCard({
+  m,
+  onOpenMovement,
+  onEditMovement,
+  onDeleteMovement,
+}: RecentMovementRowProps) {
+  return (
+    <div
+      onClick={() => onOpenMovement(m.id, m.ref)}
+      className="w-full rounded-2xl border border-slate-200/90 bg-white p-4 text-left transition hover:bg-slate-50 active:bg-slate-100/70 cursor-pointer shadow-2xs space-y-2.5"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-mono text-sm font-bold text-slate-900">{m.ref}</span>
+        <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+          <StageBadge
+            stage={m.stage}
+            confirmationStatus={m.confirmationStatus}
+            refOrId={m.id || m.ref}
+            movementStatus={(m as { movementStatus?: string }).movementStatus}
+          />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label="Options"
+                className="size-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-800 hover:bg-slate-100"
+              >
+                <MoreVertical className="size-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              className="w-44 text-xs rounded-xl shadow-lg border border-slate-200 p-1"
+            >
+              <DropdownMenuItem onClick={() => onEditMovement(m)} className="gap-2 font-medium">
+                <Edit3 className="size-3.5 text-blue-500" />
+                Update
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => void onDeleteMovement(m)}
+                className="gap-2 font-medium text-rose-600"
+              >
+                <Trash2 className="size-3.5 text-rose-500" />
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+      <div className="text-xs text-slate-700">
+        <p className="text-slate-900 font-semibold">{m.buyer}</p>
+        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-slate-500">
+          <span>
+            <strong className="text-slate-400 font-normal">Shipper: </strong>
+            {m.supplier}
+          </span>
+          <span className="text-[#0FA3B1] font-medium">
+            <strong className="text-slate-400 font-normal">Forwarder: </strong>
+            {m.forwarder}
+          </span>
+        </div>
+      </div>
+      <div className="flex items-center justify-between rounded-xl bg-slate-50/80 p-2.5 text-xs text-slate-600 border border-slate-100">
+        <div className="font-semibold text-slate-800">
+          {m.pol} → {m.pod}
+        </div>
+        <div className="text-slate-500 text-[11px]">
+          ETD {m.etd} • ETA {m.eta}
+        </div>
+        <div className="font-bold text-slate-900">{m.rate}</div>
+      </div>
+    </div>
+  );
+});
 
 export const RecentMovements = memo(function RecentMovements() {
   const { bookings, isLoading, refetch } = useDashboardData();
@@ -1154,10 +1445,19 @@ export const RecentMovements = memo(function RecentMovements() {
   const [editingMovement, setEditingMovement] = useState<(Movement & { id?: string }) | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
+  const [inputValue, setInputValue] = useState("");
   const [selectedStage, setSelectedStage] = useState<string>("all");
   const searchInputRef = useRef<HTMLInputElement>(null);
   const PAGE_SIZE = 6;
   const queryClient = useQueryClient();
+
+  // Debounce search input by 200ms for smooth keystroke response
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setSearchQuery(inputValue);
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [inputValue]);
 
   const handleDeleteMovement = useCallback(
     async (m: Movement & { id?: string }) => {
@@ -1215,15 +1515,28 @@ export const RecentMovements = memo(function RecentMovements() {
     setCurrentPage(1);
   }, [searchQuery, selectedStage]);
 
-  // Check URL query parameters on mount to auto-open movement drawer if returning from tracking page
+  // Check URL query parameters on mount to auto-open movement drawer
   useEffect(() => {
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
-      const sel = params.get("selected") || params.get("movement");
+      const sel = params.get("selected") || params.get("movement") || params.get("ref");
       if (sel) {
         handleOpenMovement(sel, sel);
       }
     }
+  }, [handleOpenMovement]);
+
+  // Global event listener to open movement drawer from notification clicks
+  useEffect(() => {
+    const handleDrawerEvent = (e: Event) => {
+      const ce = e as CustomEvent<{ movementNumber?: string; reference?: string; bookingId?: string }>;
+      const ref = ce.detail?.movementNumber || ce.detail?.reference || ce.detail?.bookingId;
+      if (ref) {
+        handleOpenMovement(ce.detail?.bookingId || ref, ref);
+      }
+    };
+    window.addEventListener("nashmia_open_movement_drawer", handleDrawerEvent);
+    return () => window.removeEventListener("nashmia_open_movement_drawer", handleDrawerEvent);
   }, [handleOpenMovement]);
 
   // Global ⌘K / Ctrl+K keyboard shortcut handler to focus search input
@@ -1282,23 +1595,34 @@ export const RecentMovements = memo(function RecentMovements() {
         }
       }
 
+      const confDetails = (b.confirmation_details as Record<string, unknown>) || {};
+
       const isConfirmedMovement =
         b.status === "Booking Confirmed" ||
+        b.status === "Confirmed" ||
         (b as { movement_status?: string }).movement_status === "Confirmed" ||
+        (b as { movement_status?: string }).movement_status === "CONFIRMED" ||
+        b.confirmation_status === "CONFIRMED" ||
+        Boolean(confDetails.confirmed_at) ||
+        Boolean(confDetails.is_confirmed) ||
         b.is_movement_confirmed === true ||
         Boolean(b.confirmed_at) ||
-        Boolean((b as { confirmed_by?: string }).confirmed_by) ||
         Boolean((b as { awardedForwarderName?: string }).awardedForwarderName);
 
+      const resolvedForwarder =
+        (confDetails.confirmed_forwarder_name as string) ||
+        (confDetails.forwarder_name as string) ||
+        (confDetails.forwarderName as string) ||
+        (confDetails.forwarder as string) ||
+        (b as { forwarder_name?: string }).forwarder_name ||
+        (b as { forwarderName?: string }).forwarderName ||
+        (b.forwarder as { name?: string; company_name?: string } | null)?.name ||
+        (b.forwarder as { company_name?: string } | null)?.company_name ||
+        (b as { awardedForwarderName?: string }).awardedForwarderName ||
+        (b.shipping_line as { name?: string } | null)?.name;
+
       const forwarderName = isConfirmedMovement
-        ? (b as { awardedForwarderName?: string }).awardedForwarderName ||
-          (b as { confirmed_by?: string }).confirmed_by ||
-          (b.forwarder as { name?: string; company_name?: string } | null)?.name ||
-          (b.forwarder as { company_name?: string } | null)?.company_name ||
-          (b as { forwarderName?: string }).forwarderName ||
-          (b as { forwarder_name?: string }).forwarder_name ||
-          (b.shipping_line as { name?: string } | null)?.name ||
-          "Confirmed Forwarder"
+        ? resolvedForwarder || "Confirmed Forwarder"
         : "Pending Award";
 
       // Extract POL (Port of Loading)
@@ -1355,6 +1679,21 @@ export const RecentMovements = memo(function RecentMovements() {
           ? new Date(b.eta).toLocaleDateString("en-GB", { day: "2-digit", month: "short" })
           : "Pending";
 
+      const conf = (b.confirmation_details as Record<string, unknown>) || {};
+      const explicitMilestone =
+        (conf.current_stage as string) ||
+        (conf.lifecycle_stage as string) ||
+        (b as { current_stage?: string }).current_stage ||
+        (b as { lifecycle_stage?: string }).lifecycle_stage;
+
+      const rawStage = explicitMilestone || b.movement_status || b.status;
+      const canonicalStage = normalizeLifecycleStage(
+        rawStage,
+        b.confirmation_status,
+        b.id || b.movement_number,
+        b.movement_status,
+      );
+
       return {
         id: b.id,
         ref: rawRef || fallbackRef,
@@ -1366,7 +1705,7 @@ export const RecentMovements = memo(function RecentMovements() {
         vessel: cleanVessel,
         etd: cleanEtd,
         eta: cleanEta,
-        stage: b.status,
+        stage: canonicalStage,
         movementStatus: b.movement_status,
         confirmationStatus: b.confirmation_status,
         rate: b.total_freight ? `$${b.total_freight.toLocaleString()}` : "Pending Quote",
@@ -1473,16 +1812,19 @@ export const RecentMovements = memo(function RecentMovements() {
               <input
                 ref={searchInputRef}
                 type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                value={inputValue}
+                onChange={(e) => setInputValue(e.target.value)}
                 placeholder="Search by reference, buyer, supplier, forwarder, port, or vessel..."
                 className="h-[42px] w-full rounded-xl border border-slate-200 bg-slate-50/70 pl-10 pr-20 text-[13.5px] text-slate-900 placeholder:text-slate-400 transition-all duration-200 focus:border-[#0FA3B1] focus:bg-white focus:shadow-[0_0_0_3px_rgba(15,163,177,0.12)] focus:outline-none"
               />
               <div className="absolute right-3 top-1/2 flex -translate-y-1/2 items-center gap-1.5">
-                {searchQuery ? (
+                {inputValue ? (
                   <button
                     type="button"
-                    onClick={() => setSearchQuery("")}
+                    onClick={() => {
+                      setInputValue("");
+                      setSearchQuery("");
+                    }}
                     aria-label="Clear search"
                     className="rounded-full p-1 text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-700 cursor-pointer"
                   >
@@ -1678,144 +2020,13 @@ export const RecentMovements = memo(function RecentMovements() {
                 </thead>
                 <tbody>
                   {paginatedMovements.map((m, idx) => (
-                    <tr
+                    <RecentMovementTableRow
                       key={m.id ? `mov-${m.id}` : `mov-${m.ref}-${idx}`}
-                      onClick={() => handleOpenMovement(m.id, m.ref)}
-                      className="group cursor-pointer border-b border-[#F0F2F5] transition-colors duration-150 last:border-b-0 hover:bg-[#F8FAFC]"
-                    >
-                      <td className="whitespace-nowrap pl-6 pr-4 py-4.5 text-[13.5px] font-semibold tracking-[-0.01em] text-slate-900 group-hover:text-blue-600 transition-colors">
-                        {m.ref}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-4.5 text-[13.5px] text-slate-700 font-medium">
-                        {m.buyer}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-4.5 text-[13.5px] text-slate-600">
-                        <span
-                          className="truncate max-w-[140px] inline-block align-middle font-medium"
-                          title={m.supplier}
-                        >
-                          {m.supplier}
-                        </span>
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-4.5 text-[13.5px]">
-                        <span
-                          className="truncate max-w-[140px] inline-block align-middle font-semibold text-[#0FA3B1]"
-                          title={m.forwarder}
-                        >
-                          {m.forwarder}
-                        </span>
-                      </td>
-                      <td className="px-3.5 py-4.5 text-[13px] font-semibold text-slate-700">
-                        {m.pol === "Pending" ? (
-                          <span className="inline-flex items-center rounded-md bg-amber-50 border border-amber-200/60 px-2 py-0.5 text-[11px] font-medium text-amber-700">
-                            Pending
-                          </span>
-                        ) : (
-                          m.pol
-                        )}
-                      </td>
-                      <td className="px-3.5 py-4.5 text-[13px] font-semibold text-slate-700">
-                        {m.pod === "Pending" ? (
-                          <span className="inline-flex items-center rounded-md bg-amber-50 border border-amber-200/60 px-2 py-0.5 text-[11px] font-medium text-amber-700">
-                            Pending
-                          </span>
-                        ) : (
-                          m.pod
-                        )}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-4.5 text-[13px] text-slate-600">
-                        {m.vessel === "Pending" ? (
-                          <span className="inline-flex items-center rounded-md bg-slate-100 border border-slate-200/80 px-2 py-0.5 text-[11px] font-medium text-slate-500">
-                            Pending
-                          </span>
-                        ) : (
-                          m.vessel
-                        )}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-4.5 text-[13px] text-slate-600">
-                        {m.etd === "Pending" ? (
-                          <span className="inline-flex items-center rounded-md bg-slate-100 border border-slate-200/80 px-2 py-0.5 text-[11px] font-medium text-slate-500">
-                            Pending
-                          </span>
-                        ) : (
-                          m.etd
-                        )}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-4.5 text-[13px] text-slate-600">
-                        {m.eta === "Pending" ? (
-                          <span className="inline-flex items-center rounded-md bg-slate-100 border border-slate-200/80 px-2 py-0.5 text-[11px] font-medium text-slate-500">
-                            Pending
-                          </span>
-                        ) : (
-                          m.eta
-                        )}
-                      </td>
-                      <td className="px-4 py-4.5">
-                        <StageBadge
-                          stage={m.stage}
-                          confirmationStatus={m.confirmationStatus}
-                          refOrId={m.id || m.ref}
-                          movementStatus={(m as { movementStatus?: string }).movementStatus}
-                        />
-                      </td>
-                      <td className="px-4 py-4.5 text-[13.5px] font-medium text-slate-900">
-                        {m.rate}
-                      </td>
-                      <td className="px-4 py-4.5 text-[12.5px] text-slate-400">{m.age}</td>
-                      <td
-                        className="pr-6 pl-2 py-4.5 text-right"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <button
-                              type="button"
-                              aria-label="Movement options"
-                              className="size-8 rounded-full flex items-center justify-center text-slate-400 hover:text-slate-800 hover:bg-slate-100 transition-colors cursor-pointer"
-                            >
-                              <MoreVertical className="size-4" />
-                            </button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent
-                            align="end"
-                            className="w-48 text-xs rounded-xl shadow-lg border border-slate-200 p-1"
-                          >
-                            <DropdownMenuItem
-                              onClick={() => handleOpenMovement(m.id, m.ref)}
-                              className="gap-2 cursor-pointer font-medium"
-                            >
-                              <ExternalLink className="size-3.5 text-slate-500" />
-                              Inspect Lifecycle
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={() => setEditingMovement(m)}
-                              className="gap-2 cursor-pointer font-medium text-slate-800"
-                            >
-                              <Edit3 className="size-3.5 text-blue-500" />
-                              Update Movement
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={() => {
-                                navigator.clipboard.writeText(m.ref);
-                                toast.success(`Movement reference ${m.ref} copied`);
-                              }}
-                              className="gap-2 cursor-pointer font-medium text-slate-600"
-                            >
-                              <Copy className="size-3.5 text-slate-400" />
-                              Copy Reference
-                            </DropdownMenuItem>
-                            <div className="h-px bg-slate-100 my-1" />
-                            <DropdownMenuItem
-                              onClick={() => void handleDeleteMovement(m)}
-                              className="gap-2 cursor-pointer font-medium text-rose-600 focus:bg-rose-50 focus:text-rose-700"
-                            >
-                              <Trash2 className="size-3.5 text-rose-500" />
-                              Delete Movement
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </td>
-                    </tr>
+                      m={m}
+                      onOpenMovement={handleOpenMovement}
+                      onEditMovement={setEditingMovement}
+                      onDeleteMovement={handleDeleteMovement}
+                    />
                   ))}
                 </tbody>
               </table>
@@ -1824,75 +2035,13 @@ export const RecentMovements = memo(function RecentMovements() {
             {/* Mobile cards */}
             <div className="space-y-3 md:hidden">
               {paginatedMovements.map((m, idx) => (
-                <div
+                <RecentMovementMobileCard
                   key={m.id ? `mob-mov-${m.id}` : `mob-mov-${m.ref}-${idx}`}
-                  onClick={() => handleOpenMovement(m.id, m.ref)}
-                  className="w-full rounded-2xl border border-slate-200/90 bg-white p-4 text-left transition hover:bg-slate-50 active:bg-slate-100/70 cursor-pointer shadow-2xs space-y-2.5"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-mono text-sm font-bold text-slate-900">{m.ref}</span>
-                    <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-                      <StageBadge
-                        stage={m.stage}
-                        confirmationStatus={m.confirmationStatus}
-                        refOrId={m.id || m.ref}
-                        movementStatus={(m as { movementStatus?: string }).movementStatus}
-                      />
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <button
-                            type="button"
-                            aria-label="Options"
-                            className="size-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-800 hover:bg-slate-100"
-                          >
-                            <MoreVertical className="size-3.5" />
-                          </button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent
-                          align="end"
-                          className="w-44 text-xs rounded-xl shadow-lg border border-slate-200 p-1"
-                        >
-                          <DropdownMenuItem
-                            onClick={() => setEditingMovement(m)}
-                            className="gap-2 font-medium"
-                          >
-                            <Edit3 className="size-3.5 text-blue-500" />
-                            Update
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => void handleDeleteMovement(m)}
-                            className="gap-2 font-medium text-rose-600"
-                          >
-                            <Trash2 className="size-3.5 text-rose-500" />
-                            Delete
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
-                  </div>
-                  <div className="text-xs text-slate-700">
-                    <p className="text-slate-900 font-semibold">{m.buyer}</p>
-                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-slate-500">
-                      <span>
-                        <strong className="text-slate-400 font-normal">Shipper: </strong>
-                        {m.supplier}
-                      </span>
-                      <span className="text-[#0FA3B1] font-medium">
-                        <strong className="text-slate-400 font-normal">Forwarder: </strong>
-                        {m.forwarder}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between rounded-xl bg-slate-50/80 p-2.5 text-xs text-slate-600 border border-slate-100">
-                    <div className="font-semibold text-slate-800">
-                      {m.pol} → {m.pod}
-                    </div>
-                    <div className="text-slate-500 text-[11px]">
-                      ETD {m.etd} • ETA {m.eta}
-                    </div>
-                    <div className="font-bold text-slate-900">{m.rate}</div>
-                  </div>
-                </div>
+                  m={m}
+                  onOpenMovement={handleOpenMovement}
+                  onEditMovement={setEditingMovement}
+                  onDeleteMovement={handleDeleteMovement}
+                />
               ))}
             </div>
 
@@ -1951,18 +2100,39 @@ export const RecentMovements = memo(function RecentMovements() {
 });
 
 export const UpcomingCutoffs = memo(function UpcomingCutoffs() {
+  const { bookings } = useDashboardData();
   const [selectedMovementRef, setSelectedMovementRef] = useState<string | null>(null);
-  const [cutOffList, setCutOffList] = useState(() => getAllUpcomingCutOffs());
+  const [cutOffList, setCutOffList] = useState<UpcomingCutoffItem[]>(() =>
+    getAllUpcomingCutOffs(bookings),
+  );
+
+  const bookingsRef = useRef(bookings);
+  bookingsRef.current = bookings;
+
+  useEffect(() => {
+    setCutOffList(getAllUpcomingCutOffs(bookings));
+  }, [bookings]);
 
   useEffect(() => {
     const refreshCutOffs = () => {
-      setCutOffList(getAllUpcomingCutOffs());
+      setCutOffList(getAllUpcomingCutOffs(bookingsRef.current));
     };
     window.addEventListener("nashmia_movement_cutoff_updated", refreshCutOffs);
+    window.addEventListener("nashmia:cut-off-saved", refreshCutOffs);
+    window.addEventListener("nashmia:document-saved", refreshCutOffs);
+    window.addEventListener("nashmia:attachment-saved", refreshCutOffs);
     window.addEventListener("nashmia_bookings_updated", refreshCutOffs);
+    window.addEventListener("supabase_realtime_bookings_change", refreshCutOffs);
+    window.addEventListener("storage", refreshCutOffs);
+
     return () => {
       window.removeEventListener("nashmia_movement_cutoff_updated", refreshCutOffs);
+      window.removeEventListener("nashmia:cut-off-saved", refreshCutOffs);
+      window.removeEventListener("nashmia:document-saved", refreshCutOffs);
+      window.removeEventListener("nashmia:attachment-saved", refreshCutOffs);
       window.removeEventListener("nashmia_bookings_updated", refreshCutOffs);
+      window.removeEventListener("supabase_realtime_bookings_change", refreshCutOffs);
+      window.removeEventListener("storage", refreshCutOffs);
     };
   }, []);
 
@@ -1974,38 +2144,139 @@ export const UpcomingCutoffs = memo(function UpcomingCutoffs() {
           <span className="text-[11.5px] font-medium text-slate-400">By Movement</span>
         </div>
         <p className="mt-1 text-[13.5px] text-slate-500">Deadlines in the next few days.</p>
+
         <div className="mt-5 space-y-2.5">
-          {cutOffList.slice(0, 5).map((c, idx) => (
-            <button
-              type="button"
-              onClick={() => setSelectedMovementRef(c.ref)}
-              key={`cutoff-${c.type}-${c.ref}-${idx}`}
-              className="w-full text-left flex items-center gap-3 rounded-xl border border-slate-100 bg-slate-50/50 px-4 py-3.5 transition-colors hover:border-amber-200 hover:bg-amber-50/40 cursor-pointer group"
-            >
-              <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-amber-200/80 bg-amber-50 text-amber-600 group-hover:bg-amber-100/80">
-                <Timer className="size-[17px]" />
+          {cutOffList.length === 0 ? (
+            <div className="py-8 text-center flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50/50 p-6">
+              <span className="grid size-10 place-items-center rounded-full bg-slate-100 text-slate-400 mb-2">
+                <Timer className="size-5" />
               </span>
-              <div className="min-w-0 flex-1">
-                <p className="num text-[12.5px] font-bold text-slate-900 group-hover:text-amber-800">
-                  {c.ref}
-                </p>
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className="text-[12px] text-slate-500">{c.type}</span>
-                  {c.reminderDateTime && (
-                    <span className="text-[10px] font-semibold text-amber-700 bg-amber-100/70 px-1.5 py-0.5 rounded">
-                      48h: {c.reminderDateTime}
+              <p className="text-xs font-semibold text-slate-700">No Upcoming Cut-Offs</p>
+              <p className="text-[11.5px] text-slate-400 max-w-xs mt-0.5">
+                Cut-off deadlines extracted from carrier emails and notices will appear here
+                automatically.
+              </p>
+            </div>
+          ) : (
+            <>
+              {cutOffList.slice(0, 6).map((c, idx) => {
+                const hasExplicitTime = Boolean(
+                  c.time && c.time !== "—" && c.time.toLowerCase() !== "pending",
+                );
+
+                return (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedMovementRef(c.ref)}
+                    key={`cutoff-${c.type}-${c.ref}-${idx}`}
+                    className="w-full text-left flex items-start gap-3 rounded-xl border border-slate-100 bg-slate-50/50 p-3.5 transition-colors hover:border-amber-200 hover:bg-amber-50/40 cursor-pointer group"
+                  >
+                    <span
+                      className={cn(
+                        "grid size-9 shrink-0 place-items-center rounded-xl border transition-colors mt-0.5",
+                        c.requiresManualReview
+                          ? "border-amber-300 bg-amber-100/80 text-amber-700 group-hover:bg-amber-200/80"
+                          : "border-amber-200/80 bg-amber-50 text-amber-600 group-hover:bg-amber-100/80",
+                      )}
+                    >
+                      {c.requiresManualReview ? (
+                        <AlertTriangle className="size-[17px] text-amber-700" />
+                      ) : (
+                        <Timer className="size-[17px]" />
+                      )}
                     </span>
-                  )}
+
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <p className="num text-[12.5px] font-bold text-slate-900 group-hover:text-amber-800">
+                          {c.ref}
+                        </p>
+                        <span className="text-[11px] font-semibold text-slate-700 bg-slate-200/70 px-2 py-0.5 rounded">
+                          {c.type}
+                        </span>
+                        {c.requiresManualReview ? (
+                          <span
+                            className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-800 bg-amber-100 border border-amber-300/80 px-1.5 py-0.5 rounded shadow-2xs"
+                            title={
+                              c.reviewReason || "Date format is ambiguous or requires manual review"
+                            }
+                          >
+                            <AlertTriangle className="size-2.5 text-amber-700" />
+                            <span>Needs Review</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
+                            <Check className="size-2.5" />
+                            <span>Verified</span>
+                          </span>
+                        )}
+                        {c.pdfUrl && (
+                          <a
+                            href={c.pdfUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            title={`Open original Cut-Off PDF: ${c.sourceDocumentName || "Cut-Off Notice"}`}
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-slate-200 bg-white text-[10px] font-semibold text-slate-700 hover:text-blue-600 hover:border-blue-300 hover:bg-blue-50/60 transition-colors shadow-2xs"
+                          >
+                            <FileText className="size-2.5 text-rose-500" />
+                            <span>View PDF</span>
+                            <ExternalLink className="size-2 opacity-60" />
+                          </a>
+                        )}
+                      </div>
+
+                      {/* Associated Booking Details Where Available */}
+                      {c.bookingDetails && (
+                        <div className="flex items-center gap-1.5 text-[11px] text-slate-500 font-medium truncate mt-1">
+                          {c.bookingDetails.lane && (
+                            <span className="text-slate-700 font-semibold">
+                              {c.bookingDetails.lane}
+                            </span>
+                          )}
+                          {c.bookingDetails.carrier && <span>· {c.bookingDetails.carrier}</span>}
+                          {c.bookingDetails.vessel && <span>· {c.bookingDetails.vessel}</span>}
+                          {c.bookingDetails.status && (
+                            <span className="text-[9.5px] px-1 py-0.2 rounded bg-slate-100 text-slate-600 font-normal">
+                              {c.bookingDetails.status}
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {/* 48h Reminder Notification Pill if applicable */}
+                      {c.reminderDateTime && (
+                        <div className="mt-1">
+                          <span className="text-[10px] font-semibold text-amber-700 bg-amber-100/70 px-1.5 py-0.5 rounded">
+                            48h: {c.reminderDateTime}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="text-right shrink-0">
+                      <p className="num text-[13px] font-bold text-slate-900">
+                        {hasExplicitTime ? `${c.date} · ${c.time}` : c.date}
+                      </p>
+                      <p className="text-[11px] font-semibold text-[#0FA3B1] mt-0.5">{c.in}</p>
+                    </div>
+                  </button>
+                );
+              })}
+
+              {cutOffList.length > 6 && (
+                <div className="pt-2 text-center">
+                  <Link
+                    to="/requests"
+                    className="inline-flex items-center gap-1 text-[11.5px] font-semibold text-[#0FA3B1] hover:underline"
+                  >
+                    <span>View all {cutOffList.length} upcoming deadlines</span>
+                    <ArrowRight className="size-3" />
+                  </Link>
                 </div>
-              </div>
-              <div className="text-right">
-                <p className="num text-[13.5px] font-bold text-slate-900">
-                  {c.date} · {c.time}
-                </p>
-                <p className="text-[11px] font-semibold text-[#0FA3B1]">{c.in}</p>
-              </div>
-            </button>
-          ))}
+              )}
+            </>
+          )}
         </div>
       </section>
 

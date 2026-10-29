@@ -17,7 +17,17 @@ import {
   X,
 } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  lazy,
+  Suspense,
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
@@ -30,7 +40,12 @@ import {
   type FullBookingRecord,
 } from "@/lib/supabase-services";
 import type { Movement } from "@/lib/nashmia-data";
-import { MovementLifecycleDrawer } from "../movements/MovementLifecycleDrawer";
+
+const MovementLifecycleDrawer = lazy(() =>
+  import("../movements/MovementLifecycleDrawer").then((m) => ({
+    default: m.MovementLifecycleDrawer,
+  })),
+);
 
 export interface GlobalSearchProps {
   variant?: "dashboard" | "navbar";
@@ -280,11 +295,7 @@ export const GlobalSearch = memo(function GlobalSearch({
         (m as FullBookingRecord).forwarder?.company_name ||
         (m as Movement).forwarder ||
         "Unassigned";
-      const pol = (
-        (m as FullBookingRecord).origin_port ||
-        (m as Movement).pol ||
-        ""
-      ).toUpperCase();
+      const pol = ((m as FullBookingRecord).origin_port || (m as Movement).pol || "").toUpperCase();
       const pod = (
         (m as FullBookingRecord).destination_port ||
         (m as Movement).pod ||
@@ -868,15 +879,17 @@ export const GlobalSearch = memo(function GlobalSearch({
 
       {/* Standalone Movement Lifecycle Drawer when triggered from search */}
       {activeMovementDrawerRef && (
-        <MovementLifecycleDrawer
-          isOpen={Boolean(activeMovementDrawerRef)}
-          onClose={() => {
-            setActiveMovementDrawerRef(null);
-            setActiveMovementDrawerId(null);
-          }}
-          bookingId={activeMovementDrawerId || undefined}
-          initialReference={activeMovementDrawerRef}
-        />
+        <Suspense fallback={null}>
+          <MovementLifecycleDrawer
+            isOpen={Boolean(activeMovementDrawerRef)}
+            onClose={() => {
+              setActiveMovementDrawerRef(null);
+              setActiveMovementDrawerId(null);
+            }}
+            bookingId={activeMovementDrawerId || undefined}
+            initialReference={activeMovementDrawerRef}
+          />
+        </Suspense>
       )}
     </>
   );

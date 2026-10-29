@@ -936,32 +936,41 @@ export async function sendEmailThroughBackend(
     console.log("[EmailService] Checking Gmail access token for user:", userId);
     const token = await getGmailAccessToken(userId);
 
+    let sentDirectly = false;
     if (token) {
-      console.log("[EmailService] Token found. Calling sendEmailDirectlyViaGmail...");
-      const gmailResult = await sendEmailDirectlyViaGmail({
-        fromEmail: values.fromEmail,
-        toEmail: values.toEmail,
-        toName: values.toName,
-        cc: values.cc,
-        bcc: values.bcc,
-        subject: values.subject,
-        body: values.body,
-        bookingId: values.bookingId,
-        forwarderId: values.forwarderId,
-        userId,
-      });
+      try {
+        console.log("[EmailService] Token found. Calling sendEmailDirectlyViaGmail...");
+        const gmailResult = await sendEmailDirectlyViaGmail({
+          fromEmail: values.fromEmail,
+          toEmail: values.toEmail,
+          toName: values.toName,
+          cc: values.cc,
+          bcc: values.bcc,
+          subject: values.subject,
+          body: values.body,
+          bookingId: values.bookingId,
+          forwarderId: values.forwarderId,
+          userId,
+        });
 
-      gmailMessageId = gmailResult.gmailMessageId;
-      gmailThreadId = gmailResult.gmailThreadId;
-      finalStatus = "SENT";
-      console.log("[EmailService] Email successfully dispatched via Gmail API:", {
-        gmailMessageId,
-        gmailThreadId,
-      });
-    } else {
-      console.warn(
-        "[EmailService] No Gmail access token found in client memory. Triggering /api/gmail/send-email server dispatch...",
-      );
+        gmailMessageId = gmailResult.gmailMessageId;
+        gmailThreadId = gmailResult.gmailThreadId;
+        finalStatus = "SENT";
+        sentDirectly = true;
+        console.log("[EmailService] Email successfully dispatched via Gmail API:", {
+          gmailMessageId,
+          gmailThreadId,
+        });
+      } catch (directErr) {
+        console.warn(
+          "[EmailService] Direct Gmail send encountered error. Falling back to backend server proxy:",
+          directErr,
+        );
+      }
+    }
+
+    if (!sentDirectly) {
+      console.warn("[EmailService] Triggering /api/gmail/send-email server dispatch...");
       // Attempt backend route which has access to persistent tokens and auto-refresh
       const backendRes = await fetch("/api/gmail/send-email", {
         method: "POST",

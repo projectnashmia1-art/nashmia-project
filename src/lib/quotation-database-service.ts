@@ -532,9 +532,7 @@ export async function persistQuotationToDatabase(
             // Revised quotation: Preserve previous version in quotation_versions and create revision
             isNewVersion = true;
             const prevVersion =
-              (existingQuote.version as number) ||
-              (existingQuote.version_number as number) ||
-              1;
+              (existingQuote.version as number) || (existingQuote.version_number as number) || 1;
             versionNumber = prevVersion + 1;
 
             // Archive old version to quotation_versions table
@@ -1450,7 +1448,7 @@ export async function fetchForwarderRequestsFromDatabase(
         const fwdName =
           (q.forwarder_name as string) ||
           (q.sender_name as string) ||
-          (fallbackName.charAt(0).toUpperCase() + fallbackName.slice(1));
+          fallbackName.charAt(0).toUpperCase() + fallbackName.slice(1);
 
         const synthOfferData: ForwarderOfferData = {
           ratePerContainer,
@@ -1476,7 +1474,8 @@ export async function fetchForwarderRequestsFromDatabase(
             undefined,
           notes: (q.remarks as string) || (q.notes as string) || undefined,
           receivedAt: (q.created_at as string) || new Date().toISOString(),
-          sourceEmailId: (q.incoming_email_id as string) || (q.email_message_id as string) || undefined,
+          sourceEmailId:
+            (q.incoming_email_id as string) || (q.email_message_id as string) || undefined,
           receivedVia: "Gmail Automatic Sync",
           responseClassification: "OFFER_RECEIVED",
           traceability,
@@ -1491,7 +1490,8 @@ export async function fetchForwarderRequestsFromDatabase(
           id: `SYNTH-${q.id.slice(0, 12)}`,
           quotationId: q.id as string,
           bookingId: q.booking_id || matchingBooking?.id,
-          bookingReference: matchingBooking?.booking_reference || q.movement_number || "MOV-2026-00001",
+          bookingReference:
+            matchingBooking?.booking_reference || q.movement_number || "MOV-2026-00001",
           movementNumber: q.movement_number || matchingBooking?.movement_number || "MOV-2026-00001",
           forwarderId: q.forwarder_id || `fwd-synth-${q.id.slice(0, 6)}`,
           forwarderName: fwdName,

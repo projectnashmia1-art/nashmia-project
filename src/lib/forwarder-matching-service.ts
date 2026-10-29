@@ -273,24 +273,15 @@ export function matchSenderWithForwarderMaster(
     }
   }
 
-  // Format a readable name from email username if display name is absent (e.g. "ahsanssss148@gmail.com" -> "Ahsan Abbasy" or "Ahsanssss148")
-  const emailUsername = cleanSender.split("@")[0] || "Forwarder";
-  const formattedEmailName = emailUsername
-    .split(/[._-]/)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-
-  const fallbackForwarderName = displayName || formattedEmailName || "Freight Forwarder";
-
   return {
-    isMatched: true,
+    isMatched: false,
     forwarderId: null,
-    forwarderName: fallbackForwarderName,
+    forwarderName: "Unknown Forwarder",
     forwarderEmail: cleanSender,
-    matchedBy: displayName ? "EXACT_EMAIL" : "NONE",
-    isForwarderUnknown: false,
-    needsReview: false,
-    reason: `Identified forwarder as '${fallbackForwarderName}' from sender (${cleanSender}).`,
-    disregardedDisplayName: null,
+    matchedBy: "NONE",
+    isForwarderUnknown: true,
+    needsReview: true,
+    reason: `Sender '${cleanSender}' does not match any registered forwarder in the master. Display name was disregarded.`,
+    disregardedDisplayName: displayName || null,
   };
 }

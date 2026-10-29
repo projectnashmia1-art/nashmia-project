@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { updateBookingDetailsInSupabase } from "@/lib/supabase-services";
 import { toDbBookingStatus, toDbMovementStatus } from "@/lib/movement-lifecycle";
+import { notifyMovementActivity } from "@/lib/notification-service";
 import { useSwipeToDismiss } from "@/hooks/use-swipe-to-dismiss";
 import { cn } from "@/lib/utils";
 import type { Movement } from "@/lib/nashmia-data";
@@ -144,6 +145,52 @@ export function EditMovementModal({
       };
 
       await updateBookingDetailsInSupabase(targetId, updates);
+
+      // Generate consolidated notification for all changed fields
+      const diffs: string[] = [];
+      const oldPol = movement.pol && movement.pol !== "Pending" ? movement.pol : "";
+      if (pol.trim() && pol.trim() !== oldPol) {
+        diffs.push(`POL: ${oldPol || "Pending"} → ${pol.trim()}`);
+      }
+      const oldPod = movement.pod && movement.pod !== "Pending" ? movement.pod : "";
+      if (pod.trim() && pod.trim() !== oldPod) {
+        diffs.push(`POD: ${oldPod || "Pending"} → ${pod.trim()}`);
+      }
+      const oldVessel = movement.vessel && movement.vessel !== "Pending" ? movement.vessel : "";
+      if (vessel.trim() && vessel.trim() !== oldVessel) {
+        diffs.push(`Vessel: ${oldVessel || "Pending"} → ${vessel.trim()}`);
+      }
+      const oldEtd =
+        movement.etd && movement.etd !== "Pending" && movement.etd !== "—"
+          ? new Date(movement.etd).toISOString().slice(0, 10)
+          : "";
+      if (etd && etd !== oldEtd) {
+        diffs.push(`ETD: ${oldEtd || "Pending"} → ${etd}`);
+      }
+      const oldEta =
+        movement.eta && movement.eta !== "Pending" && movement.eta !== "—"
+          ? new Date(movement.eta).toISOString().slice(0, 10)
+          : "";
+      if (eta && eta !== oldEta) {
+        diffs.push(`ETA: ${oldEta || "Pending"} → ${eta}`);
+      }
+      if (status && status !== movement.stage) {
+        diffs.push(`Stage: ${movement.stage || "Initial"} → ${status}`);
+      }
+      const oldRate = movement.rate ? movement.rate.replace(/[^0-9.]/g, "") : "";
+      if (totalFreight && totalFreight !== oldRate) {
+        diffs.push(`Freight Rate: $${oldRate || "0"} → $${totalFreight}`);
+      }
+
+      if (diffs.length > 0) {
+        void notifyMovementActivity({
+          bookingId: movement.id || targetId,
+          movementNumber: movement.ref,
+          activity: "Movement Details Updated",
+          details: diffs.join(" · "),
+          referenceNumber: movement.ref,
+        });
+      }
 
       queryClient.invalidateQueries({ queryKey: ["dashboard-bookings"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard-data"] });

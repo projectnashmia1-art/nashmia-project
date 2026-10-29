@@ -379,9 +379,7 @@ export function EmailListPanel({
 
             // Determine if attachments exist
             const attachmentCount =
-              item.attachments && item.attachments.length > 0
-                ? item.attachments.length
-                : 0;
+              item.attachments && item.attachments.length > 0 ? item.attachments.length : 0;
 
             const movementRef =
               item.movementNumber ||

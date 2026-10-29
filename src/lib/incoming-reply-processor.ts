@@ -263,10 +263,10 @@ export async function processIncomingEmailReply(
     unifiedClassification = "NEEDS_REVIEW";
   }
 
-  // Step 3.5: Forwarder Quotation Extraction & Child Request Update
-  let forwarderQuoteExtracted = false;
+  // Step 3.5: Forwarder Request Reply Tracking (Auto-extraction removed)
+  // Maintains email thread linkage and audit record; keeps status as pending reply awaiting manual update
   try {
-    const fwdReplyResult = await processIncomingForwarderEmailReply({
+    await processIncomingForwarderEmailReply({
       emailMessageId: validMsgUuid || emailMessageId,
       gmailThreadId,
       gmailMessageId,
@@ -282,18 +282,8 @@ export async function processIncomingEmailReply(
       bookingId: matchResult.bookingId,
       movementNumber: matchResult.movementNumber,
     });
-
-    if (fwdReplyResult.offerExtracted) {
-      forwarderQuoteExtracted = true;
-      if (unifiedClassification === "NEEDS_REVIEW" || unifiedClassification === "AVAILABLE") {
-        unifiedClassification = "OFFER_RECEIVED";
-      }
-      console.log(
-        `[ReplyProcessor] 💰 Extracted forwarder quotation offer for ${matchResult.forwarderName || senderEmail} against booking ${matchResult.bookingId || matchResult.movementNumber}`,
-      );
-    }
   } catch (fwdReplyErr) {
-    console.warn("[ReplyProcessor] Notice processing forwarder quotation reply:", fwdReplyErr);
+    console.warn("[ReplyProcessor] Notice tracking forwarder reply:", fwdReplyErr);
   }
 
   // Step 4: If confirmation detected and forwarder validated -> Confirm Booking/Movement!

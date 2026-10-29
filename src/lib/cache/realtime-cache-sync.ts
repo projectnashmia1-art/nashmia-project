@@ -373,9 +373,12 @@ export function applyBookingRealtimeUpdate(
   // Trigger query invalidation for all booking-related queries
   void queryClient.invalidateQueries({ queryKey: ["dashboard-bookings"] });
   void queryClient.invalidateQueries({ queryKey: ["dashboard-requests"] });
+  void queryClient.invalidateQueries({ queryKey: ["dashboard-data"] });
   void queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
   void queryClient.invalidateQueries({ queryKey: ["bookings"] });
   void queryClient.invalidateQueries({ queryKey: ["movements"] });
+  void queryClient.invalidateQueries({ queryKey: ["all-forwarder-requests"] });
+  void queryClient.invalidateQueries({ queryKey: ["quotations"] });
 
   // Dispatch lightweight cross-component notifications
   if (typeof window !== "undefined") {

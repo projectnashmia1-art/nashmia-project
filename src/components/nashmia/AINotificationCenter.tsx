@@ -124,11 +124,17 @@ export const AINotificationCenter: React.FC<AINotificationCenterProps> = ({
     if (itemType === "cutoff_reminder" || type === "alert") {
       return <Timer className="size-4.5 text-amber-600 stroke-[2.2]" />;
     }
-    if (itemType === "booking_reply" || type === "reply") {
+    if (itemType === "booking_reply" || itemType === "quote_received" || type === "reply") {
       return <MessageSquareReply className="size-4.5 text-emerald-600 stroke-[2.2]" />;
     }
     if (itemType === "booking_request" || type === "mail") {
       return <Send className="size-4.5 text-[#0FA3B1] stroke-[2.2]" />;
+    }
+    if (itemType === "booking_confirmed" || type === "check") {
+      return <CheckCircle2 className="size-4.5 text-blue-600 stroke-[2]" />;
+    }
+    if (itemType === "document_uploaded" || type === "package") {
+      return <Package className="size-4.5 text-indigo-600 stroke-[2]" />;
     }
     switch (type) {
       case "sparkles":
@@ -150,25 +156,66 @@ export const AINotificationCenter: React.FC<AINotificationCenterProps> = ({
 
   const handleItemClick = (item: NotificationItem) => {
     markAsRead(item.id);
+    onClose?.();
 
-    if (item.type === "cutoff_reminder" && item.bookingReference) {
-      onClose?.();
+    const ref = item.bookingReference?.trim();
+    const isDoc =
+      item.type === "document_uploaded" ||
+      item.linkUrl?.includes("tab=documents") ||
+      item.linkUrl?.includes("/documents") ||
+      (item.title || "").toLowerCase().includes("document") ||
+      (typeof item.description === "string" && item.description.toLowerCase().includes("document"));
+
+    // 1. Movement-centric & Document events: open Movement Details popup directly in place with focus
+    if (ref) {
+      window.dispatchEvent(
+        new CustomEvent("nashmia_open_movement_drawer", {
+          detail: {
+            movementNumber: ref,
+            reference: ref,
+            bookingId: ref,
+            defaultTab: isDoc ? "documents" : "overview",
+            isDocument: isDoc,
+          },
+        }),
+      );
+      return;
+    }
+
+    // 2. Request & Quote events (new booking requests, incoming forwarder quotes, offer awards)
+    if (
+      item.type === "booking_request" ||
+      item.type === "quote_received" ||
+      item.linkUrl?.includes("/requests")
+    ) {
       navigate({
-        to: "/movements",
-        search: { ref: item.bookingReference } as Record<string, unknown>,
+        to: "/requests",
       });
       return;
     }
 
-    if (item.linkUrl) {
-      onClose?.();
-      navigate({ to: item.linkUrl });
-    } else if (item.bookingReference) {
-      onClose?.();
+    // 3. Document events without specific movement
+    if (item.type === "document_uploaded" || item.linkUrl?.includes("/documents")) {
       navigate({
-        to: "/emails",
-        search: { search: item.bookingReference } as Record<string, unknown>,
+        to: "/documents",
       });
+      return;
+    }
+
+    // 4. Fallback link or search
+    if (item.linkUrl) {
+      const cleanUrl = item.linkUrl.replace(/^\/movements/, "/");
+      navigate({ to: cleanUrl });
+    } else if (ref) {
+      navigate({
+        to: "/",
+        search: { ref } as Record<string, unknown>,
+      });
+      window.dispatchEvent(
+        new CustomEvent("nashmia_open_movement_drawer", {
+          detail: { movementNumber: ref, reference: ref },
+        }),
+      );
     } else {
       showPillToast.info(item.rawDescription || item.title, item.title);
     }

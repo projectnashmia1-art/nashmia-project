@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useState, useEffect, useRef } from "react";
 import {
   Search,
   SlidersHorizontal,
@@ -36,6 +36,28 @@ export const RequestsToolbar = memo(function RequestsToolbar({
   statusCounts,
   totalFiltered,
 }: RequestsToolbarProps) {
+  // Local state for immediate smooth typing feedback
+  const [localSearch, setLocalSearch] = useState(filters.search);
+  const isFirstRender = useRef(true);
+
+  // Sync with external resets
+  useEffect(() => {
+    if (filters.search !== localSearch && !isFirstRender.current) {
+      setLocalSearch(filters.search);
+    }
+    isFirstRender.current = false;
+  }, [filters.search]);
+
+  // Debounce search update to parent by 200ms
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (localSearch !== filters.search) {
+        onFilterChange({ search: localSearch });
+      }
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [localSearch, filters.search, onFilterChange]);
+
   const hasActiveFilters =
     filters.search !== "" ||
     filters.status !== "All" ||
@@ -45,6 +67,7 @@ export const RequestsToolbar = memo(function RequestsToolbar({
     filters.pod !== "";
 
   const handleResetFilters = () => {
+    setLocalSearch("");
     onFilterChange({
       search: "",
       status: "All",
@@ -61,19 +84,22 @@ export const RequestsToolbar = memo(function RequestsToolbar({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         {/* Search input */}
         <div className="relative flex-1 max-w-md">
-          <Search className="absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
+          <Search className="absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-slate-400 pointer-events-none" />
           <Input
             type="text"
             placeholder="Search ref #, buyer, supplier, port, cargo, HS code..."
-            value={filters.search}
-            onChange={(e) => onFilterChange({ search: e.target.value })}
+            value={localSearch}
+            onChange={(e) => setLocalSearch(e.target.value)}
             className="h-10 pl-9.5 pr-8 text-[13.5px] border-slate-200 bg-white placeholder:text-slate-400 focus-visible:ring-[#0FA3B1]"
           />
-          {filters.search && (
+          {localSearch && (
             <button
               type="button"
-              onClick={() => onFilterChange({ search: "" })}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 hover:text-slate-600"
+              onClick={() => {
+                setLocalSearch("");
+                onFilterChange({ search: "" });
+              }}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
               aria-label="Clear search"
             >
               <X className="size-3.5" />

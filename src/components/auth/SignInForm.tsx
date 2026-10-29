@@ -19,11 +19,14 @@ export function SignInForm() {
 
   const validate = () => {
     const errs: { email?: string; password?: string } = {};
+    const trimmed = email.trim();
 
-    if (!email.trim()) {
-      errs.email = "Email is required";
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+    if (!trimmed) {
+      errs.email = "Username or email is required";
+    } else if (trimmed.includes("@") && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
       errs.email = "Please enter a valid email address";
+    } else if (!trimmed.includes("@") && !/^[a-zA-Z0-9_-]{3,50}$/.test(trimmed)) {
+      errs.email = "Username must be at least 3 characters (letters, numbers, _ or -)";
     }
 
     if (!password) {
@@ -42,8 +45,15 @@ export function SignInForm() {
     setIsLoading(true);
 
     try {
+      const trimmed = email.trim();
+      let emailToAuth = trimmed.toLowerCase();
+      if (!emailToAuth.includes("@")) {
+        // Automatic deterministic username mapping
+        emailToAuth = `${emailToAuth}@nashmia.internal`;
+      }
+
       const { data, error } = await supabase.auth.signInWithPassword({
-        email: email.trim().toLowerCase(),
+        email: emailToAuth,
         password,
       });
 
@@ -51,15 +61,32 @@ export function SignInForm() {
         setIsLoading(false);
         toast.error("Sign In Failed", {
           description:
-            error.message || "Invalid login credentials. Please check your email and password.",
+            error.message || "Invalid login credentials. Please check your username/email and password.",
+        });
+        return;
+      }
+
+      // Check account status immediately
+      const meta = data.user?.user_metadata || {};
+      const isBanned = Boolean(
+        data.user?.banned_until && new Date(data.user.banned_until).getTime() > Date.now(),
+      );
+      const isDeactivated = isBanned || meta.is_active === false || meta.status === "inactive";
+
+      if (isDeactivated) {
+        await supabase.auth.signOut();
+        setIsLoading(false);
+        toast.error("Account Deactivated", {
+          description: "Your account has been deactivated. Please contact an administrator.",
         });
         return;
       }
 
       setIsLoading(false);
       setIsSuccess(true);
+      const displayName = meta.full_name || meta.username || (data.user?.email?.split("@")[0] ?? "User");
       toast.success("Welcome back to Nashmia Logistics", {
-        description: `Signed in as ${data.user?.email || email}`,
+        description: `Signed in as ${displayName}`,
       });
 
       let targetUrl = "/";
@@ -145,7 +172,7 @@ export function SignInForm() {
             htmlFor="signin-email"
             className="block text-[13px] font-semibold text-[#000000] tracking-tight"
           >
-            Email
+            Username or Email
           </label>
           <div className="relative">
             <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-slate-400">
@@ -153,14 +180,14 @@ export function SignInForm() {
             </div>
             <input
               id="signin-email"
-              type="email"
-              autoComplete="email"
+              type="text"
+              autoComplete="username"
               value={email}
               onChange={(e) => {
                 setEmail(e.target.value);
                 if (errors.email) setErrors((prev) => ({ ...prev, email: undefined }));
               }}
-              placeholder="Enter your email"
+              placeholder="Username or email@domain.com"
               aria-invalid={errors.email ? "true" : "false"}
               aria-describedby={errors.email ? "signin-email-error" : undefined}
               className={cn(

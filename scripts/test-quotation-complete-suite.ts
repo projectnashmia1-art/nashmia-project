@@ -900,16 +900,21 @@ async function runCompleteQuotationSuite() {
 
   const cardSummary = getBookingForwarderSummary("BK-2026-0042", sampleForwarderOffers);
   assert(cardSummary.totalForwarders === 3, "21.1 Card displays total forwarders count = 3");
-  assert(cardSummary.quotationsReceived === 2, "21.2 Card displays received quotations count = 2");
-  assert(cardSummary.pendingReplies === 1, "21.3 Card displays pending replies count = 1");
-  assert(cardSummary.bestRate === 1250, "21.4 Identifies best quotation rate ($1,250)");
   assert(
-    cardSummary.bestRateForwarder === "Apex Maritime",
-    "21.5 Identifies best rate forwarder as Apex Maritime",
+    cardSummary.quotationsReceived === 0,
+    "21.2 Card hides auto-extracted quotations on active requests (count = 0)",
   );
   assert(
-    cardSummary.overallStatus === "OFFERS_RECEIVED",
-    "21.6 Computes overall card badge status 'OFFERS_RECEIVED'",
+    cardSummary.pendingReplies === 3,
+    "21.3 Card maintains status as pending reply until user manually updates (pending = 3)",
+  );
+  assert(
+    cardSummary.bestRate === undefined,
+    "21.4 Does not display auto-extracted best quotation rate on active card",
+  );
+  assert(
+    cardSummary.overallStatus === "AWAITING_QUOTES",
+    "21.5 Computes overall card badge status 'AWAITING_QUOTES' without auto-extracted OFFERS_RECEIVED",
   );
 
   console.log("\n================================================================================");

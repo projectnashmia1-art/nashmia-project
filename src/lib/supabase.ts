@@ -33,12 +33,10 @@ const supabaseUrl = (resolveEnv("VITE_SUPABASE_URL") || resolveEnv("SUPABASE_URL
 // Service-role keys and email credentials must NEVER be exposed to frontend code.
 const isServerEnvironment = typeof window === "undefined" && typeof process !== "undefined";
 
-const supabaseAnonKey = (
-  resolveEnv("VITE_SUPABASE_ANON_KEY") ||
+const supabaseAnonKey = (resolveEnv("VITE_SUPABASE_ANON_KEY") ||
   resolveEnv("VITE_SUPABASE_PUBLISHABLE_KEY") ||
   resolveEnv("SUPABASE_PUBLISHABLE_KEY") ||
-  ""
-) as string;
+  "") as string;
 
 export const isSupabaseConfigured = Boolean(
   supabaseUrl && supabaseAnonKey && !supabaseUrl.includes("placeholder-project"),
@@ -68,6 +66,19 @@ export const supabase: SupabaseClient<Database> = createClient<Database>(
       persistSession: true,
       detectSessionInUrl: true,
     },
+    global: {
+      fetch: (input, init) => {
+        // Generous 30s timeout to prevent premature aborts on large relational queries
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000);
+        if (init?.signal) {
+          init.signal.addEventListener("abort", () => controller.abort());
+        }
+        return fetch(input, { ...init, signal: controller.signal }).finally(() => {
+          clearTimeout(timeoutId);
+        });
+      },
+    },
   },
 );
 
@@ -77,9 +88,12 @@ export const supabase: SupabaseClient<Database> = createClient<Database>(
  */
 export function getServerSupabaseClient(): SupabaseClient<Database> {
   if (typeof window !== "undefined") {
-    throw new Error("Security Violation: Service client cannot be initialized in browser frontend.");
+    throw new Error(
+      "Security Violation: Service client cannot be initialized in browser frontend.",
+    );
   }
-  const secretKey = resolveEnv("SUPABASE_SECRET_KEY") || resolveEnv("SUPABASE_SERVICE_ROLE_KEY") || supabaseAnonKey;
+  const secretKey =
+    resolveEnv("SUPABASE_SECRET_KEY") || resolveEnv("SUPABASE_SERVICE_ROLE_KEY") || supabaseAnonKey;
   return createClient<Database>(supabaseUrl || fallbackUrl, secretKey || fallbackKey, {
     auth: {
       autoRefreshToken: false,

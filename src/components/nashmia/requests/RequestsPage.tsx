@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect, lazy, Suspense } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { showPillToast } from "@/lib/pill-toast";
 import { useAuth } from "@/lib/auth-context";
@@ -18,13 +18,32 @@ import { RequestsToolbar } from "./RequestsToolbar";
 import { RequestsCardGrid } from "./RequestsCardGrid";
 import { RequestsTableView } from "./RequestsTableView";
 import { RequestsKanbanView } from "./RequestsKanbanView";
-import { RequestDetailDrawer } from "./RequestDetailDrawer";
-import { ApproveRequestModal } from "./ApproveRequestModal";
-import { RevisionRequestModal } from "./RevisionRequestModal";
-import { ComposeEmailModal } from "../emails/ComposeEmailModal";
-import { MultiForwarderRequestModal } from "./MultiForwarderRequestModal";
-import { GroupedQuotationModal } from "./GroupedQuotationModal";
-import { AwardStatusDrawer } from "./AwardStatusDrawer";
+
+// Lazy-loaded modal & drawer dialogs - code-split to eliminate initial bundle bloat and background re-renders
+const RequestDetailDrawer = lazy(() =>
+  import("./RequestDetailDrawer").then((m) => ({ default: m.RequestDetailDrawer })),
+);
+const ApproveRequestModal = lazy(() =>
+  import("./ApproveRequestModal").then((m) => ({ default: m.ApproveRequestModal })),
+);
+const RevisionRequestModal = lazy(() =>
+  import("./RevisionRequestModal").then((m) => ({ default: m.RevisionRequestModal })),
+);
+const ComposeEmailModal = lazy(() =>
+  import("../emails/ComposeEmailModal").then((m) => ({ default: m.ComposeEmailModal })),
+);
+const MultiForwarderRequestModal = lazy(() =>
+  import("./MultiForwarderRequestModal").then((m) => ({ default: m.MultiForwarderRequestModal })),
+);
+const GroupedQuotationModal = lazy(() =>
+  import("./GroupedQuotationModal").then((m) => ({ default: m.GroupedQuotationModal })),
+);
+const AwardStatusDrawer = lazy(() =>
+  import("./AwardStatusDrawer").then((m) => ({ default: m.AwardStatusDrawer })),
+);
+const ConfirmBookingModal = lazy(() =>
+  import("./ConfirmBookingModal").then((m) => ({ default: m.ConfirmBookingModal })),
+);
 import {
   RequestsMetricsSkeleton,
   RequestsTableSkeleton,
@@ -76,6 +95,7 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
   const [viewingQuotationsBooking, setViewingQuotationsBooking] =
     useState<BookingRequestRecord | null>(null);
   const [awardDrawerBooking, setAwardDrawerBooking] = useState<BookingRequestRecord | null>(null);
+  const [confirmingBooking, setConfirmingBooking] = useState<BookingRequestRecord | null>(null);
 
   // React Query Fetch Booking Requests
   const {
@@ -86,16 +106,17 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
   } = useQuery({
     queryKey: ["booking-requests", userId],
     queryFn: () => fetchBookingRequestsFromSupabase(userId),
-    staleTime: 60_000,
+    staleTime: 1000 * 60 * 5, // 5m cache freshness ensures instant UI rendering while real-time updates keep it synced
+    refetchOnMount: true,
     refetchOnWindowFocus: false,
-    refetchOnMount: false,
   });
 
   // Supabase Source of Truth: All Forwarder Requests & Current Quotations
   const { data: allForwarderRequests = [] } = useQuery({
     queryKey: ["all-forwarder-requests"],
     queryFn: () => fetchAllForwarderRequestsFromSupabase(),
-    staleTime: 30_000,
+    staleTime: 1000 * 60 * 5,
+    refetchOnMount: true,
     refetchOnWindowFocus: false,
   });
 
@@ -322,6 +343,45 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
     };
   }, [queryClient]);
 
+  // Check URL query parameters or events to auto-open request detail drawer
+  useEffect(() => {
+    if (typeof window !== "undefined" && requests.length > 0) {
+      const params = new URLSearchParams(window.location.search);
+      const targetRef = params.get("ref") || params.get("selected") || params.get("movement");
+      if (targetRef) {
+        const found = requests.find(
+          (r) =>
+            r.id === targetRef ||
+            r.movementNumber?.toLowerCase() === targetRef.toLowerCase() ||
+            r.bookingReference?.toLowerCase() === targetRef.toLowerCase(),
+        );
+        if (found) {
+          setActiveDetailRequest(found);
+        }
+      }
+    }
+  }, [requests]);
+
+  useEffect(() => {
+    const handleDrawerEvent = (e: Event) => {
+      const ce = e as CustomEvent<{ movementNumber?: string; bookingReference?: string; bookingId?: string }>;
+      const targetRef = ce.detail?.movementNumber || ce.detail?.bookingReference || ce.detail?.bookingId;
+      if (targetRef && requests.length > 0) {
+        const found = requests.find(
+          (r) =>
+            r.id === targetRef ||
+            r.movementNumber?.toLowerCase() === targetRef.toLowerCase() ||
+            r.bookingReference?.toLowerCase() === targetRef.toLowerCase(),
+        );
+        if (found) {
+          setActiveDetailRequest(found);
+        }
+      }
+    };
+    window.addEventListener("nashmia_open_request_drawer", handleDrawerEvent);
+    return () => window.removeEventListener("nashmia_open_request_drawer", handleDrawerEvent);
+  }, [requests]);
+
   // Derive reactive active request for drawer to automatically update on confirmation
   const currentActiveDetail = useMemo(() => {
     if (!activeDetailRequest) return null;
@@ -538,7 +598,7 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
             if (isMatch) {
               return {
                 ...b,
-                status: "Booking Confirmed",
+                status: "Confirmed",
                 confirmation_status: "CONFIRMED",
                 confirmed_at: confirmedAt,
                 confirmed_by: details.forwarderName || "Operations Desk",
@@ -560,7 +620,7 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
             detail: {
               bookingId: requestId,
               id: requestId,
-              status: "Booking Confirmed",
+              status: "Confirmed",
               confirmationStatus: "CONFIRMED",
               isConfirmed: true,
               confirmedAt,
@@ -782,6 +842,7 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
               onRequestQuotes={(req) => handleOpenMultiForwarder(req)}
               onViewQuotations={(req) => setViewingQuotationsBooking(req)}
               onOpenAwardDrawer={(req) => setAwardDrawerBooking(req)}
+              onConfirmBooking={(req) => setConfirmingBooking(req)}
               onComposeEmail={(req) => {
                 setEmailingRequest(req);
                 setIsEmailModalOpen(true);
@@ -802,6 +863,7 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
               onRequestQuotes={(req) => handleOpenMultiForwarder(req)}
               onViewQuotations={(req) => setViewingQuotationsBooking(req)}
               onOpenAwardDrawer={(req) => setAwardDrawerBooking(req)}
+              onConfirmBooking={(req) => setConfirmingBooking(req)}
               onComposeEmail={(req) => {
                 setEmailingRequest(req);
                 setIsEmailModalOpen(true);
@@ -815,111 +877,180 @@ export function RequestsPage({ onOpenMobileMenu }: RequestsPageProps) {
               onSelectRequest={(req) => setActiveDetailRequest(req)}
               onApproveRequest={(req) => setApprovingRequest(req)}
               onRequestRevision={(req) => setRevisingRequest(req)}
+              onConfirmBooking={(req) => setConfirmingBooking(req)}
             />
           )}
         </>
       )}
 
       {/* Detail Drawer */}
-      <RequestDetailDrawer
-        request={currentActiveDetail}
-        isOpen={Boolean(currentActiveDetail)}
-        onClose={() => setActiveDetailRequest(null)}
-        onApprove={(req) => {
-          setActiveDetailRequest(null);
-          setApprovingRequest(req);
-        }}
-        onRequestRevision={(req) => {
-          setActiveDetailRequest(null);
-          setRevisingRequest(req);
-        }}
-        onRequestQuotes={(req) => handleOpenMultiForwarder(req)}
-        onViewQuotations={(req) => setViewingQuotationsBooking(req)}
-        onOpenAwardDrawer={(req) => setAwardDrawerBooking(req)}
-        onComposeEmail={(req) => {
-          setEmailingRequest(req);
-          setIsEmailModalOpen(true);
-        }}
-      />
+      {Boolean(currentActiveDetail) && (
+        <Suspense fallback={null}>
+          <RequestDetailDrawer
+            request={currentActiveDetail}
+            isOpen={Boolean(currentActiveDetail)}
+            onClose={() => setActiveDetailRequest(null)}
+            onApprove={(req) => {
+              setActiveDetailRequest(null);
+              setApprovingRequest(req);
+            }}
+            onRequestRevision={(req) => {
+              setActiveDetailRequest(null);
+              setRevisingRequest(req);
+            }}
+            onRequestQuotes={(req) => handleOpenMultiForwarder(req)}
+            onViewQuotations={(req) => setViewingQuotationsBooking(req)}
+            onOpenAwardDrawer={(req) => setAwardDrawerBooking(req)}
+            onConfirmBooking={(req) => setConfirmingBooking(req)}
+            onComposeEmail={(req) => {
+              setEmailingRequest(req);
+              setIsEmailModalOpen(true);
+            }}
+          />
+        </Suspense>
+      )}
 
       {/* Approve Modal */}
-      <ApproveRequestModal
-        request={approvingRequest}
-        isOpen={Boolean(approvingRequest)}
-        onClose={() => setApprovingRequest(null)}
-        onConfirm={handleConfirmApproval}
-      />
+      {Boolean(approvingRequest) && (
+        <Suspense fallback={null}>
+          <ApproveRequestModal
+            request={approvingRequest}
+            isOpen={Boolean(approvingRequest)}
+            onClose={() => setApprovingRequest(null)}
+            onConfirm={handleConfirmApproval}
+          />
+        </Suspense>
+      )}
 
       {/* Revision Request Modal */}
-      <RevisionRequestModal
-        request={revisingRequest}
-        isOpen={Boolean(revisingRequest)}
-        onClose={() => setRevisingRequest(null)}
-        onConfirm={handleConfirmRevision}
-      />
+      {Boolean(revisingRequest) && (
+        <Suspense fallback={null}>
+          <RevisionRequestModal
+            request={revisingRequest}
+            isOpen={Boolean(revisingRequest)}
+            onClose={() => setRevisingRequest(null)}
+            onConfirm={handleConfirmRevision}
+          />
+        </Suspense>
+      )}
 
       {/* Multi-Forwarder Request Modal */}
       {isMultiForwarderModalOpen && (
-        <MultiForwarderRequestModal
-          booking={multiForwarderBooking}
-          isOpen={isMultiForwarderModalOpen}
-          onClose={() => {
-            setIsMultiForwarderModalOpen(false);
-            setMultiForwarderBooking(null);
-          }}
-          onDispatched={() => {
-            void refetch();
-            void queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
-          }}
-        />
+        <Suspense fallback={null}>
+          <MultiForwarderRequestModal
+            booking={multiForwarderBooking}
+            isOpen={isMultiForwarderModalOpen}
+            onClose={() => {
+              setIsMultiForwarderModalOpen(false);
+              setMultiForwarderBooking(null);
+            }}
+            onDispatched={() => {
+              void refetch();
+              void queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
+            }}
+          />
+        </Suspense>
       )}
 
       {/* Grouped Quotation Comparison Modal */}
-      {viewingQuotationsBooking && (
-        <GroupedQuotationModal
-          booking={viewingQuotationsBooking}
-          isOpen={Boolean(viewingQuotationsBooking)}
-          onClose={() => setViewingQuotationsBooking(null)}
-          onRequestMoreQuotes={(req) => {
-            setViewingQuotationsBooking(null);
-            handleOpenMultiForwarder(req);
-          }}
-        />
+      {Boolean(viewingQuotationsBooking) && (
+        <Suspense fallback={null}>
+          <GroupedQuotationModal
+            booking={viewingQuotationsBooking}
+            isOpen={Boolean(viewingQuotationsBooking)}
+            onClose={() => setViewingQuotationsBooking(null)}
+            onRequestMoreQuotes={(req) => {
+              setViewingQuotationsBooking(null);
+              handleOpenMultiForwarder(req);
+            }}
+          />
+        </Suspense>
       )}
 
       {/* Award Status & Fast Quotes Drawer */}
-      {awardDrawerBooking && (
-        <AwardStatusDrawer
-          booking={awardDrawerBooking}
-          isOpen={Boolean(awardDrawerBooking)}
-          onClose={() => setAwardDrawerBooking(null)}
-          onOpenFullQuotations={(req) => {
-            setAwardDrawerBooking(null);
-            setViewingQuotationsBooking(req);
-          }}
-          onAwarded={() => {
-            void refetch();
-            void queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
-            void queryClient.invalidateQueries({ queryKey: ["all-forwarder-requests"] });
-          }}
-        />
+      {Boolean(awardDrawerBooking) && (
+        <Suspense fallback={null}>
+          <AwardStatusDrawer
+            booking={awardDrawerBooking}
+            isOpen={Boolean(awardDrawerBooking)}
+            onClose={() => setAwardDrawerBooking(null)}
+            onOpenFullQuotations={(req) => {
+              setAwardDrawerBooking(null);
+              setViewingQuotationsBooking(req);
+            }}
+            onAwarded={() => {
+              void refetch();
+              void queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
+              void queryClient.invalidateQueries({ queryKey: ["all-forwarder-requests"] });
+            }}
+          />
+        </Suspense>
       )}
 
       {/* Email Compose Modal */}
       {isEmailModalOpen && (
-        <ComposeEmailModal
-          isOpen={isEmailModalOpen}
-          onClose={() => {
-            setIsEmailModalOpen(false);
-            setEmailingRequest(null);
-          }}
-          defaultRecipientEmail={emailingRequest?.requestedBy.email}
-          defaultSubject={
-            emailingRequest
-              ? `Booking Request Update: ${emailingRequest.reference} | ${emailingRequest.polCode} → ${emailingRequest.podCode}`
-              : ""
-          }
-        />
+        <Suspense fallback={null}>
+          <ComposeEmailModal
+            isOpen={isEmailModalOpen}
+            onClose={() => {
+              setIsEmailModalOpen(false);
+              setEmailingRequest(null);
+            }}
+            defaultRecipientEmail={emailingRequest?.requestedBy.email}
+            defaultSubject={
+              emailingRequest
+                ? `Booking Request Update: ${emailingRequest.reference} | ${emailingRequest.polCode} → ${emailingRequest.podCode}`
+                : ""
+            }
+          />
+        </Suspense>
+      )}
+
+      {/* Confirm Booking & Movement Update Modal */}
+      {Boolean(confirmingBooking) && (
+        <Suspense fallback={null}>
+          <ConfirmBookingModal
+            isOpen={Boolean(confirmingBooking)}
+            onClose={() => setConfirmingBooking(null)}
+            bookingRequest={confirmingBooking}
+            forwarderRequests={allForwarderRequests}
+            onConfirmed={(confirmedData?: Partial<BookingRequestRecord>) => {
+              if (confirmingBooking) {
+                const currentId = confirmingBooking.id;
+                const currentMov = confirmingBooking.movementNumber;
+                const currentRef = confirmingBooking.reference;
+
+                queryClient.setQueryData<BookingRequestRecord[]>(
+                  ["booking-requests", userId],
+                  (old) => {
+                    if (!old) return old;
+                    return old.map((r) =>
+                      r.id === currentId ||
+                      r.reference === currentRef ||
+                      (currentMov && r.movementNumber === currentMov)
+                        ? {
+                            ...r,
+                            ...confirmedData,
+                            status: "Approved" as const,
+                            confirmationStatus: "CONFIRMED" as const,
+                            isConfirmed: true,
+                            isMovementConfirmed: true,
+                            confirmedAt: confirmedData?.confirmedAt || new Date().toISOString(),
+                          }
+                        : r,
+                    );
+                  },
+                );
+              }
+              void refetch();
+              void queryClient.invalidateQueries({ queryKey: ["booking-requests"] });
+              void queryClient.invalidateQueries({ queryKey: ["all-forwarder-requests"] });
+              void queryClient.invalidateQueries({ queryKey: ["dashboard-bookings"] });
+              void queryClient.invalidateQueries({ queryKey: ["bookings"] });
+              void queryClient.invalidateQueries({ queryKey: ["movements"] });
+            }}
+          />
+        </Suspense>
       )}
     </div>
   );

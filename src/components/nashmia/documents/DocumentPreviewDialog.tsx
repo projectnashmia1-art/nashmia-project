@@ -38,28 +38,57 @@ export function DocumentPreviewDialog({
           </div>
 
           <div className="flex items-center gap-2">
-            {file.url || file.metadata?.fileUrl ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  const targetUrl = file.url || file.metadata?.fileUrl;
-                  if (targetUrl) {
-                    const a = document.createElement("a");
-                    a.href = targetUrl;
-                    a.target = "_blank";
-                    a.rel = "noopener noreferrer";
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                  }
-                }}
-                className="h-8 text-xs gap-1.5 cursor-pointer"
-              >
-                <ExternalLink className="size-3.5" /> Open
-              </Button>
-            ) : null}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const storagePath = file.metadata?.storagePath;
+                const msgId = file.metadata?.gmailMessageId || file.metadata?.emailMessageId;
+                const attId = (file.metadata as Record<string, unknown>)?.attachmentId as
+                  string | undefined;
+
+                let targetUrl = "";
+                if (storagePath) {
+                  targetUrl = `/api/documents/download?path=${encodeURIComponent(storagePath)}`;
+                } else if (msgId && attId) {
+                  const filename =
+                    file.metadata?.originalFilename || file.metadata?.fileName || file.name;
+                  targetUrl = `/api/gmail/attachment?messageId=${encodeURIComponent(msgId)}&attachmentId=${encodeURIComponent(attId)}&filename=${encodeURIComponent(filename)}`;
+                } else if (
+                  file.url &&
+                  file.url !== "#" &&
+                  !file.url.startsWith("https://drive.nashmia.com")
+                ) {
+                  targetUrl = file.url;
+                } else if (
+                  file.metadata?.fileUrl &&
+                  file.metadata.fileUrl !== "#" &&
+                  !file.metadata.fileUrl.startsWith("https://drive.nashmia.com")
+                ) {
+                  targetUrl = file.metadata.fileUrl;
+                } else {
+                  const mov =
+                    file.metadata?.movementNumber ||
+                    file.metadata?.movementReferenceNumber ||
+                    "general";
+                  targetUrl = `/api/documents/download?path=${encodeURIComponent(`movements/${mov}/${file.name}`)}`;
+                }
+
+                if (targetUrl) {
+                  const a = document.createElement("a");
+                  a.href = targetUrl;
+                  a.target = "_blank";
+                  a.rel = "noopener noreferrer";
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+                }
+              }}
+              className="h-8 text-xs gap-1.5 cursor-pointer"
+            >
+              <ExternalLink className="size-3.5" /> Open
+            </Button>
             <Button
               type="button"
               variant="outline"
@@ -75,23 +104,41 @@ export function DocumentPreviewDialog({
               onClick={() => {
                 const storagePath = file.metadata?.storagePath;
                 const msgId = file.metadata?.gmailMessageId || file.metadata?.emailMessageId;
-                const attId = (file.metadata as Record<string, unknown>)?.attachmentId as string | undefined;
+                const attId = (file.metadata as Record<string, unknown>)?.attachmentId as
+                  string | undefined;
 
                 let downloadUrl = "";
                 if (storagePath) {
                   downloadUrl = `/api/documents/download?path=${encodeURIComponent(storagePath)}`;
                 } else if (msgId && attId) {
-                  const filename = file.metadata?.originalFilename || file.metadata?.fileName || file.name;
+                  const filename =
+                    file.metadata?.originalFilename || file.metadata?.fileName || file.name;
                   downloadUrl = `/api/gmail/attachment?messageId=${encodeURIComponent(msgId)}&attachmentId=${encodeURIComponent(attId)}&filename=${encodeURIComponent(filename)}`;
-                } else if (file.url && file.url !== "#" && !file.url.startsWith("https://drive.nashmia.com")) {
+                } else if (
+                  file.url &&
+                  file.url !== "#" &&
+                  !file.url.startsWith("https://drive.nashmia.com")
+                ) {
                   downloadUrl = file.url;
-                } else if (file.metadata?.fileUrl && file.metadata.fileUrl !== "#") {
+                } else if (
+                  file.metadata?.fileUrl &&
+                  file.metadata.fileUrl !== "#" &&
+                  !file.metadata.fileUrl.startsWith("https://drive.nashmia.com")
+                ) {
                   downloadUrl = file.metadata.fileUrl;
+                } else {
+                  const mov =
+                    file.metadata?.movementNumber ||
+                    file.metadata?.movementReferenceNumber ||
+                    "general";
+                  downloadUrl = `/api/documents/download?path=${encodeURIComponent(`movements/${mov}/${file.name}`)}`;
                 }
 
                 if (downloadUrl) {
+                  const sep = downloadUrl.includes("?") ? "&" : "?";
+                  const finalUrl = `${downloadUrl}${sep}download=true`;
                   const a = document.createElement("a");
-                  a.href = downloadUrl;
+                  a.href = finalUrl;
                   a.download =
                     file.metadata?.originalFilename || file.metadata?.fileName || file.name;
                   a.target = "_blank";

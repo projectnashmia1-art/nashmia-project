@@ -13,7 +13,7 @@ import { useGmail } from "./use-gmail";
 import { showPillToast } from "./pill-toast";
 import { fetchEmailsFromSupabase, saveLocalEmail } from "./email-services";
 import { INITIAL_REQUESTS } from "./requests-data";
-import { getLocalBookings } from "./supabase-services";
+import { getLocalBookings, safeUuid } from "./supabase-services";
 import { extractMovementNumber } from "./movement-lifecycle";
 import {
   generateAllCutOffReminders,
@@ -31,7 +31,12 @@ export type NotificationType =
   | "tracking_event"
   | "general_email"
   | "cutoff_reminder"
-  | "system";
+  | "system"
+  | "booking_confirmed"
+  | "quote_received"
+  | "offer_awarded"
+  | "document_uploaded"
+  | "eta_update";
 
 export interface NotificationItem {
   id: string;
@@ -389,7 +394,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
               "id, user_id, type, title, message, booking_id, related_booking_id, link, is_read, created_at",
             )
             .order("created_at", { ascending: false })
-            .limit(30);
+            .limit(60);
 
           if (!dbNotifErr && dbNotifications) {
             dbNotifications.forEach((n) => {
@@ -401,33 +406,79 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
 
               const cat = categorizeNotificationDate(dateVal);
               const timeStr = formatNotificationRelativeTime(dateVal);
+              const lowerTitle = (n.title || "").toLowerCase();
+              const lowerMsg = (n.message || "").toLowerCase();
+
               const isConfirmed =
-                n.title?.toLowerCase().includes("confirmed") ||
-                n.message?.toLowerCase().includes("confirmed") ||
+                lowerTitle.includes("confirmed") ||
+                lowerMsg.includes("confirmed") ||
                 n.type === "booking_confirmed";
+
+              const isCutoff =
+                lowerTitle.includes("cut-off") ||
+                lowerTitle.includes("cutoff") ||
+                lowerMsg.includes("cut-off") ||
+                n.type === "cutoff_warning" ||
+                n.type === "cutoff_reminder";
+
+              const isQuote =
+                lowerTitle.includes("quote") ||
+                lowerMsg.includes("quotation") ||
+                lowerMsg.includes("quote") ||
+                n.type === "email_received";
+
+              const isAward = lowerTitle.includes("awarded") || lowerMsg.includes("awarded");
+
+              const isDoc =
+                lowerTitle.includes("document") ||
+                lowerTitle.includes("attached") ||
+                lowerTitle.includes("bill of lading") ||
+                lowerMsg.includes("document");
+
+              const isRequest =
+                lowerTitle.includes("booking request") ||
+                lowerMsg.includes("booking request") ||
+                lowerMsg.includes("initialized");
 
               const refMatch = `${n.title || ""} ${n.message || ""}`.match(
                 /\b(MOV-\d{4}-\d{3,6}|BK-[A-Z0-9-]+|REQ-[A-Z0-9-]+|REF-[A-Z0-9-]+|NASH-[A-Z0-9-]+)\b/i,
               );
               const bookingRef = refMatch ? refMatch[1].toUpperCase() : undefined;
 
-              const notifTitle = isConfirmed
-                ? bookingRef
-                  ? `Booking Confirmed: ${bookingRef}`
-                  : n.title || "Booking Confirmed"
-                : n.title || "Notification";
+              let derivedType: NotificationType = "system";
+              let derivedIcon: NotificationItem["icon"] = "sparkles";
+
+              if (isConfirmed) {
+                derivedType = "booking_confirmed";
+                derivedIcon = "check";
+              } else if (isCutoff) {
+                derivedType = "cutoff_reminder";
+                derivedIcon = "alert";
+              } else if (isQuote) {
+                derivedType = "quote_received";
+                derivedIcon = "reply";
+              } else if (isAward) {
+                derivedType = "offer_awarded";
+                derivedIcon = "check";
+              } else if (isDoc) {
+                derivedType = "document_uploaded";
+                derivedIcon = "package";
+              } else if (isRequest) {
+                derivedType = "booking_request";
+                derivedIcon = "mail";
+              }
 
               generatedItems.push({
                 id: notifId,
-                icon: isConfirmed ? "check" : n.type === "booking_reply" ? "reply" : "sparkles",
-                title: notifTitle,
+                icon: derivedIcon,
+                title: n.title || "Notification",
                 time: timeStr,
                 timestamp,
                 description: n.message,
                 rawDescription: n.message,
                 unread: n.is_read === false && !readIds.has(notifId),
                 category: cat,
-                type: isConfirmed ? "booking_confirmed" : (n.type as NotificationType) || "system",
+                type: derivedType,
                 bookingReference: bookingRef,
                 linkUrl: n.link || "/requests",
               });
@@ -748,30 +799,82 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       const dateVal = n.created_at || new Date();
       const cat = categorizeNotificationDate(dateVal);
       const timeStr = formatNotificationRelativeTime(dateVal);
+      const lowerTitle = (n.title || "").toLowerCase();
+      const lowerMsg = (n.message || "").toLowerCase();
+
       const isConfirmed =
-        n.title?.toLowerCase().includes("confirmed") ||
-        n.message?.toLowerCase().includes("confirmed") ||
+        lowerTitle.includes("confirmed") ||
+        lowerMsg.includes("confirmed") ||
         n.type === "booking_confirmed";
+
+      const isCutoff =
+        lowerTitle.includes("cut-off") ||
+        lowerTitle.includes("cutoff") ||
+        lowerMsg.includes("cut-off") ||
+        n.type === "cutoff_warning" ||
+        n.type === "cutoff_reminder";
+
+      const isQuote =
+        lowerTitle.includes("quote") ||
+        lowerMsg.includes("quotation") ||
+        lowerMsg.includes("quote") ||
+        n.type === "email_received";
+
+      const isAward = lowerTitle.includes("awarded") || lowerMsg.includes("awarded");
+
+      const isDoc =
+        lowerTitle.includes("document") ||
+        lowerTitle.includes("attached") ||
+        lowerTitle.includes("bill of lading") ||
+        lowerMsg.includes("document");
+
+      const isRequest =
+        lowerTitle.includes("booking request") ||
+        lowerMsg.includes("booking request") ||
+        lowerMsg.includes("initialized");
+
+      const isStageOrDetails =
+        lowerTitle.includes("stage") ||
+        lowerTitle.includes("details") ||
+        lowerTitle.includes("status");
 
       const refMatch = `${n.title || ""} ${n.message || ""}`.match(
         /\b(MOV-\d{4}-\d{3,6}|BK-[A-Z0-9-]+|REQ-[A-Z0-9-]+|REF-[A-Z0-9-]+|NASH-[A-Z0-9-]+)\b/i,
       );
       const bookingRef = refMatch ? refMatch[1].toUpperCase() : undefined;
 
-      const notifTitle = isConfirmed
-        ? bookingRef
-          ? `Booking Confirmed: ${bookingRef}`
-          : n.title || "Booking Confirmed"
-        : n.title || "Notification";
-      const notifMsg =
-        n.message ||
-        (bookingRef
-          ? `Movement ${bookingRef} has been confirmed by the forwarder.`
-          : "Movement confirmed by forwarder.");
+      let derivedType: NotificationType = "system";
+      let derivedIcon: NotificationItem["icon"] = "sparkles";
+
+      if (isConfirmed) {
+        derivedType = "booking_confirmed";
+        derivedIcon = "check";
+      } else if (isCutoff) {
+        derivedType = "cutoff_reminder";
+        derivedIcon = "alert";
+      } else if (isQuote) {
+        derivedType = "quote_received";
+        derivedIcon = "reply";
+      } else if (isAward) {
+        derivedType = "offer_awarded";
+        derivedIcon = "check";
+      } else if (isDoc) {
+        derivedType = "document_uploaded";
+        derivedIcon = "package";
+      } else if (isRequest) {
+        derivedType = "booking_request";
+        derivedIcon = "mail";
+      } else if (isStageOrDetails) {
+        derivedType = "booking_update";
+        derivedIcon = "sparkles";
+      }
+
+      const notifTitle = n.title || (bookingRef ? `Movement: ${bookingRef}` : "Notification");
+      const notifMsg = n.message || "New operational update.";
 
       const newItem: NotificationItem = {
         id: `db-notif-${n.id || Date.now()}`,
-        icon: isConfirmed ? "check" : n.type === "booking_reply" ? "reply" : "sparkles",
+        icon: derivedIcon,
         title: notifTitle,
         time: timeStr || "Just now",
         timestamp: Date.now(),
@@ -779,12 +882,30 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
         rawDescription: notifMsg,
         unread: n.is_read !== true,
         category: cat,
-        type: isConfirmed ? "booking_confirmed" : (n.type as NotificationType) || "system",
+        type: derivedType,
         bookingReference: bookingRef,
-        linkUrl: n.link || "/requests",
+        linkUrl:
+          n.link ||
+          (bookingRef
+            ? `/movements?ref=${encodeURIComponent(bookingRef)}&openDrawer=true`
+            : "/requests"),
       };
 
       addItemDeduplicated(newItem);
+
+      // In-app floating pill toast alert
+      const toastSig = `toast:${n.id || bookingRef || notifTitle}`;
+      if (newItem.unread && shouldShowToast(toastSig, 8000)) {
+        if (isConfirmed || isAward) {
+          showPillToast.success(notifMsg, notifTitle, bookingRef);
+        } else if (isCutoff) {
+          showPillToast.warning(notifMsg, notifTitle, bookingRef);
+        } else if (isQuote) {
+          showPillToast.comment(notifMsg, notifTitle, bookingRef);
+        } else {
+          showPillToast.info(notifMsg, notifTitle, bookingRef);
+        }
+      }
     };
 
     const handleNotificationUpdated = (e: Event) => {
@@ -841,413 +962,9 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     };
   }, [addItemDeduplicated]);
 
-  // Supabase Real-Time Subscriptions for Bookings, Notifications, Emails & Events
-  // Deferred slightly so WebSocket connection does not contend with initial HTTP assets and critical data
-  useEffect(() => {
-    if (!isSupabaseConfigured) return;
-
-    let channel: ReturnType<typeof supabase.channel> | null = null;
-    const timer = setTimeout(() => {
-      channel = supabase
-        .channel("nashmia_live_operations_notifications_v4")
-        // 1. Persistent Notifications Table (Realtime INSERT)
-        .on(
-          "postgres_changes",
-          { event: "INSERT", schema: "public", table: "notifications" },
-          (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => {
-            const n = payload.new as {
-              id?: string;
-              title?: string;
-              message?: string;
-              type?: string;
-              is_read?: boolean;
-              link?: string;
-              created_at?: string;
-            };
-
-            const dateVal = n.created_at || new Date();
-            const cat = categorizeNotificationDate(dateVal);
-            const timeStr = formatNotificationRelativeTime(dateVal);
-            const isConfirmed =
-              n.title?.toLowerCase().includes("confirmed") ||
-              n.message?.toLowerCase().includes("confirmed") ||
-              n.type === "booking_confirmed";
-
-            const refMatch = `${n.title || ""} ${n.message || ""}`.match(
-              /\b(MOV-\d{4}-\d{3,6}|BK-[A-Z0-9-]+|REQ-[A-Z0-9-]+|REF-[A-Z0-9-]+|NASH-[A-Z0-9-]+)\b/i,
-            );
-            const bookingRef = refMatch ? refMatch[1].toUpperCase() : undefined;
-
-            const notifTitle = isConfirmed
-              ? bookingRef
-                ? `Booking Confirmed: ${bookingRef}`
-                : n.title || "Booking Confirmed"
-              : n.title || "Notification";
-            const notifMsg =
-              n.message ||
-              (bookingRef
-                ? `Movement ${bookingRef} has been confirmed by the forwarder.`
-                : "Movement confirmed by forwarder.");
-
-            const newItem: NotificationItem = {
-              id: `db-notif-${n.id || Date.now()}`,
-              icon: isConfirmed ? "check" : n.type === "booking_reply" ? "reply" : "sparkles",
-              title: notifTitle,
-              time: timeStr || "Just now",
-              timestamp: Date.now(),
-              description: notifMsg,
-              rawDescription: notifMsg,
-              unread: n.is_read !== true,
-              category: cat,
-              type: isConfirmed ? "booking_confirmed" : (n.type as NotificationType) || "system",
-              bookingReference: bookingRef,
-              linkUrl: n.link || "/requests",
-            };
-
-            addItemDeduplicated(newItem);
-          },
-        )
-        // 2. Persistent Notifications Table (Realtime UPDATE)
-        .on(
-          "postgres_changes",
-          { event: "UPDATE", schema: "public", table: "notifications" },
-          (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => {
-            const updated = payload.new as {
-              id?: string;
-              is_read?: boolean;
-            };
-            if (!updated.id) return;
-
-            setNotifications((prev) =>
-              prev.map((item) =>
-                item.id === `db-notif-${updated.id}`
-                  ? { ...item, unread: updated.is_read === false }
-                  : item,
-              ),
-            );
-          },
-        )
-        // 3. Persistent Notifications Table (Realtime DELETE)
-        .on(
-          "postgres_changes",
-          { event: "DELETE", schema: "public", table: "notifications" },
-          (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => {
-            const deleted = payload.old as { id?: string };
-            if (!deleted.id) return;
-
-            setNotifications((prev) => prev.filter((item) => item.id !== `db-notif-${deleted.id}`));
-          },
-        )
-        // 4. Bookings Status Updates (Specifically when changed to CONFIRMED)
-        .on(
-          "postgres_changes",
-          { event: "UPDATE", schema: "public", table: "bookings" },
-          (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => {
-            const updated = payload.new as {
-              id?: string;
-              booking_reference?: string;
-              movement_number?: string;
-              status?: string;
-            };
-            const old = payload.old as { status?: string };
-
-            const isConfirmed =
-              updated.status?.toUpperCase() === "CONFIRMED" ||
-              updated.status?.toLowerCase().includes("confirmed");
-            const wasNotConfirmed =
-              !old?.status ||
-              (old.status.toUpperCase() !== "CONFIRMED" &&
-                !old.status.toLowerCase().includes("confirmed"));
-
-            if (isConfirmed && wasNotConfirmed) {
-              let movementRef = updated.movement_number || updated.booking_reference || "";
-
-              if (!movementRef && updated.id) {
-                const allBookings = getLocalBookings();
-                const found = allBookings.find((b) => b.id === updated.id);
-                if (found) {
-                  movementRef =
-                    found.movement_number || found.booking_reference || found.reference || "";
-                }
-              }
-
-              if (!movementRef && updated.id && !updated.id.includes("-")) {
-                movementRef = updated.id;
-              }
-
-              if (!movementRef || movementRef.toLowerCase() === "booking") return;
-              const notifTitle = `Booking Confirmed: ${movementRef}`;
-              const notifMsg = `Movement ${movementRef} has been confirmed by the forwarder.`;
-
-              const notifItem: NotificationItem = {
-                id: `booking-confirmed-${updated.id || movementRef}`,
-                icon: "check",
-                title: notifTitle,
-                time: "Just now",
-                timestamp: Date.now(),
-                description: notifMsg,
-                rawDescription: notifMsg,
-                unread: true,
-                category: "today",
-                type: "booking_confirmed",
-                bookingReference: movementRef,
-                linkUrl: "/requests",
-              };
-
-              addItemDeduplicated(notifItem);
-            }
-          },
-        )
-        // 5. New Booking Created
-        .on(
-          "postgres_changes",
-          { event: "INSERT", schema: "public", table: "bookings" },
-          (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => {
-            const newBooking = payload.new as {
-              id?: string;
-              booking_reference?: string;
-              customer_name?: string;
-              origin_port?: string;
-              destination_port?: string;
-            };
-
-            const ref = newBooking.booking_reference || "NASH-BKG";
-            const client = newBooking.customer_name || "Customer";
-            const route = `${newBooking.origin_port || "Karachi"} → ${newBooking.destination_port || "Destination"}`;
-
-            const newItem: NotificationItem = {
-              id: `booking-${newBooking.id || Date.now()}`,
-              icon: "check",
-              title: `Booking Request Created: ${ref}`,
-              time: "Just now",
-              timestamp: Date.now(),
-              description: `New booking for ${client} (${route}) registered in operations.`,
-              rawDescription: `New booking for ${client} (${route}) registered in operations.`,
-              unread: true,
-              category: "today",
-              type: "booking_request",
-              bookingReference: ref,
-              linkUrl: "/requests",
-            };
-
-            addItemDeduplicated(newItem);
-          },
-        )
-        // 5b. Forwarder Offers (Offers received & Awarded alerts)
-        .on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "forwarder_offers" },
-          (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => {
-            const offer = (payload.new || {}) as Record<string, unknown>;
-            if (!offer || !offer.id) return;
-
-            const fName = (offer.forwarder_name as string) || "Forwarder";
-            const movRef = (offer.movement_number as string) || "";
-            const status = String(offer.status || "").toUpperCase();
-
-            if (status === "AWARDED") {
-              const title = movRef ? `Offer Awarded: ${movRef}` : "Offer Awarded";
-              const desc = `Booking ${movRef || ""} awarded to ${fName} ($${offer.rate_per_container || 0}/cntr).`;
-              const notifItem: NotificationItem = {
-                id: `offer-awarded-${offer.id}`,
-                icon: "check",
-                title,
-                time: "Just now",
-                timestamp: Date.now(),
-                description: desc,
-                rawDescription: desc,
-                unread: true,
-                category: "today",
-                type: "booking_request",
-                bookingReference: movRef,
-                linkUrl: "/requests",
-              };
-              addItemDeduplicated(notifItem);
-            } else if (status === "RESPONDED" || offer.space_available) {
-              const title = movRef ? `Offer Received: ${movRef}` : "Forwarder Offer Received";
-              const desc = `${fName} submitted quote: $${offer.rate_per_container || 0}/cntr${offer.carrier ? ` on ${offer.carrier}` : ""}.`;
-              const notifItem: NotificationItem = {
-                id: `offer-received-${offer.id}`,
-                icon: "tag",
-                title,
-                time: "Just now",
-                timestamp: Date.now(),
-                description: desc,
-                rawDescription: desc,
-                unread: true,
-                category: "today",
-                type: "quote_received",
-                bookingReference: movRef,
-                linkUrl: "/requests",
-              };
-              addItemDeduplicated(notifItem);
-            }
-          },
-        )
-        // 6. New Email Message (Outbound Request or Inbound Reply)
-        .on(
-          "postgres_changes",
-          { event: "INSERT", schema: "public", table: "email_messages" },
-          (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => {
-            const em = payload.new as {
-              id?: string;
-              subject?: string;
-              body?: string;
-              snippet?: string;
-              direction?: string;
-              sender_name?: string;
-              sender_email?: string;
-              recipient_name?: string;
-              recipient_email?: string;
-              email_type?: string;
-            };
-
-            const isReply =
-              em.direction === "inbound" ||
-              em.subject?.toLowerCase().startsWith("re:") ||
-              em.email_type === "BOOKING_CONFIRMATION";
-
-            const subject = em.subject || "(No Subject)";
-            const sender = em.sender_name || em.sender_email || "Forwarder/Buyer";
-            const snippet = em.snippet || (em.body ? em.body.slice(0, 100) : subject);
-
-            const rawHeaders =
-              ((payload.new as Record<string, unknown>).raw_headers as Record<string, unknown>) ||
-              {};
-
-            // Authentic movement number resolution
-            let bookingRef =
-              (em.movement_number as string) ||
-              (rawHeaders.movement_number as string) ||
-              (rawHeaders.movementNumber as string) ||
-              extractMovementNumber(subject) ||
-              extractMovementNumber(snippet) ||
-              extractMovementNumber(em.body);
-
-            if (em.booking_id || bookingRef) {
-              const allBookings = getLocalBookings();
-              const found = allBookings.find(
-                (b) =>
-                  (em.booking_id && b.id === em.booking_id) ||
-                  (bookingRef &&
-                    (b.movement_number === bookingRef ||
-                      b.booking_reference === bookingRef ||
-                      b.reference === bookingRef)),
-              );
-              if (found && found.movement_number) {
-                bookingRef = found.movement_number;
-              }
-            }
-
-            const isConfirmedReply =
-              (rawHeaders.confirmation_status as string) === "CONFIRMED" ||
-              subject.toLowerCase().includes("booking confirmed") ||
-              snippet.toLowerCase().includes("booking confirmed") ||
-              (em.body && em.body.toLowerCase().includes("booking confirmed"));
-
-            if (isReply && isConfirmedReply) {
-              const confirmedTitle = bookingRef
-                ? `Booking Confirmed: ${bookingRef}`
-                : "Booking Confirmed";
-              const confirmedMsg = bookingRef
-                ? `Movement ${bookingRef} confirmed by forwarder.`
-                : `Movement confirmed by forwarder.`;
-
-              const confirmedItem: NotificationItem = {
-                id: `booking-confirmed-${bookingRef || em.id}`,
-                icon: "check",
-                title: confirmedTitle,
-                time: "Just now",
-                timestamp: Date.now(),
-                description: confirmedMsg,
-                rawDescription: confirmedMsg,
-                unread: true,
-                category: "today",
-                type: "booking_confirmed",
-                bookingReference: bookingRef,
-                senderName: sender,
-                senderEmail: em.sender_email,
-                linkUrl: `/movements`,
-              };
-
-              addItemDeduplicated(confirmedItem);
-            } else if (isReply) {
-              const replyItem: NotificationItem = {
-                id: `email-reply-${em.id || Date.now()}`,
-                icon: "reply",
-                title: `Booking Reply Received: ${bookingRef ? bookingRef : subject.slice(0, 30)}`,
-                time: "Just now",
-                timestamp: Date.now(),
-                description: `From ${sender}: "${snippet}"`,
-                rawDescription: `From ${sender}: "${snippet}"`,
-                unread: true,
-                category: "today",
-                type: "booking_reply",
-                bookingReference: bookingRef,
-                senderName: sender,
-                senderEmail: em.sender_email,
-                linkUrl: `/emails?search=${encodeURIComponent(bookingRef || subject)}`,
-              };
-
-              addItemDeduplicated(replyItem);
-            } else {
-              const sentItem: NotificationItem = {
-                id: `email-sent-${em.id || Date.now()}`,
-                icon: "mail",
-                title: `Booking Request Sent: ${bookingRef || subject.slice(0, 30)}`,
-                time: "Just now",
-                timestamp: Date.now(),
-                description: `Dispatched to ${em.recipient_name || em.recipient_email}: "${snippet}"`,
-                rawDescription: `Dispatched to ${em.recipient_name || em.recipient_email}: "${snippet}"`,
-                unread: false,
-                category: "today",
-                type: "booking_request",
-                bookingReference: bookingRef,
-                linkUrl: `/emails?search=${encodeURIComponent(bookingRef || subject)}`,
-              };
-
-              addItemDeduplicated(sentItem);
-            }
-          },
-        )
-        // 7. Milestone / Tracking Updates
-        .on(
-          "postgres_changes",
-          { event: "INSERT", schema: "public", table: "booking_events" },
-          (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => {
-            const ev = payload.new as {
-              id?: string;
-              title?: string;
-              description?: string;
-            };
-
-            const newItem: NotificationItem = {
-              id: `event-${ev.id || Date.now()}`,
-              icon: "sparkles",
-              title: ev.title || "Tracking Milestone Update",
-              time: "Just now",
-              timestamp: Date.now(),
-              description: ev.description || "Container tracking update synchronized.",
-              rawDescription: ev.description || "Container tracking update synchronized.",
-              unread: true,
-              category: "today",
-              type: "tracking_event",
-              linkUrl: "/requests",
-            };
-
-            addItemDeduplicated(newItem);
-          },
-        )
-        .subscribe();
-    }, 1200);
-
-    return () => {
-      clearTimeout(timer);
-      if (channel) {
-        void supabase.removeChannel(channel);
-      }
-    };
-  }, [addItemDeduplicated]);
+  // Note: Real-time Supabase database events for notifications, bookings, and emails
+  // are multiplexed onto the single unified GlobalRealtimeHub and dispatched via window events
+  // (nashmia_notification_inserted, nashmia_booking_confirmed, etc.) to eliminate startup contention.
 
   // Listen to new Gmail incoming emails
   useEffect(() => {
@@ -1312,12 +1029,13 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       prev.map((item) => (item.id === id ? { ...item, unread: false } : item)),
     );
 
-    if (isSupabaseConfigured && id.startsWith("db-notif-")) {
-      const dbId = id.replace("db-notif-", "");
+    const cleanDbId =
+      safeUuid(id) || (id.startsWith("db-notif-") ? safeUuid(id.replace("db-notif-", "")) : null);
+    if (isSupabaseConfigured && cleanDbId) {
       void supabase
         .from("notifications")
         .update({ is_read: true, read_at: new Date().toISOString() })
-        .eq("id", dbId)
+        .eq("id", cleanDbId)
         .then(() => {});
     }
   }, []);
@@ -1364,12 +1082,13 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     addDismissedId(id);
     setNotifications((prev) => prev.filter((item) => item.id !== id));
 
-    if (isSupabaseConfigured && id.startsWith("db-notif-")) {
-      const dbId = id.replace("db-notif-", "");
+    const cleanDbId =
+      safeUuid(id) || (id.startsWith("db-notif-") ? safeUuid(id.replace("db-notif-", "")) : null);
+    if (isSupabaseConfigured && cleanDbId) {
       void supabase
         .from("notifications")
         .delete()
-        .eq("id", dbId)
+        .eq("id", cleanDbId)
         .then(() => {});
     }
   }, []);

@@ -77,7 +77,16 @@ import {
   type BookingContainerRow,
   type BookingEventRow,
 } from "@/lib/supabase-services";
+import {
+  useMovementDocuments,
+  viewDocumentInNewTab,
+  downloadDocumentFile,
+  type MovementLinkedDocument,
+} from "@/lib/movement-document-service";
+import { notifyMovementActivity } from "@/lib/notification-service";
 import { toast } from "sonner";
+
+export type DrawerTab = "overview" | "milestones" | "containers" | "cutoffs" | "documents" | "audit";
 
 export interface MovementLifecycleDrawerProps {
   isOpen: boolean;
@@ -86,6 +95,7 @@ export interface MovementLifecycleDrawerProps {
   initialReference?: string | null;
   initialBooking?: FullBookingRecord | Record<string, unknown> | null;
   onMovementUpdated?: () => void;
+  defaultTab?: DrawerTab;
 }
 
 const iconMap: Record<string, LucideIcon> = {
@@ -100,15 +110,19 @@ const iconMap: Record<string, LucideIcon> = {
   CheckCircle2,
 };
 
-type DrawerTab = "overview" | "milestones" | "containers" | "cutoffs" | "audit";
+export function MovementLifecycleDrawer(props: MovementLifecycleDrawerProps) {
+  if (!props.isOpen) return null;
+  return <MovementLifecycleDrawerInner {...props} />;
+}
 
-export function MovementLifecycleDrawer({
+function MovementLifecycleDrawerInner({
   isOpen,
   onClose,
   bookingId,
   initialReference,
   initialBooking,
   onMovementUpdated,
+  defaultTab,
 }: MovementLifecycleDrawerProps) {
   const { userId, isConfigured, organizationId } = useAuth();
   const queryClient = useQueryClient();
@@ -121,8 +135,14 @@ export function MovementLifecycleDrawer({
   const [events, setEvents] = useState<BookingEventRow[]>(() => initialBooking?.events || []);
   const [isLoading, setIsLoading] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
-  const [activeTab, setActiveTab] = useState<DrawerTab>("overview");
+  const [activeTab, setActiveTab] = useState<DrawerTab>(() => defaultTab || "overview");
   const [copiedRef, setCopiedRef] = useState(false);
+
+  useEffect(() => {
+    if (defaultTab) {
+      setActiveTab(defaultTab);
+    }
+  }, [defaultTab]);
 
   const { elementRef: sheetElementRef, handleRef: sheetHandleRef } =
     useSwipeToDismiss<HTMLDivElement>({
@@ -429,6 +449,16 @@ export function MovementLifecycleDrawer({
     initialReference ||
     "—";
 
+  const {
+    documents: movementDocs,
+    isLoading: isLoadingDocs,
+    refreshDocuments,
+    totalCount: docCount,
+  } = useMovementDocuments(
+    effectiveMovementRef !== "—" ? effectiveMovementRef : null,
+    booking?.id || bookingId || null,
+  );
+
   const originPort =
     booking?.origin_port?.trim() ||
     booking?.origin?.trim() ||
@@ -474,10 +504,29 @@ export function MovementLifecycleDrawer({
     (booking?.forwarder as { name?: string } | null)?.name ||
     (booking as { forwarderName?: string })?.forwarderName ||
     (booking as { forwarder_name?: string })?.forwarder_name ||
+    ((booking?.confirmation_details as Record<string, unknown>)
+      ?.confirmed_forwarder_name as string) ||
     (booking as { forwarder_company?: string })?.forwarder_company ||
     (booking?.shipping_line as { name?: string } | null)?.name ||
     (booking as { forwarder?: string })?.forwarder ||
     "Pending";
+
+  const pickupAddress =
+    ((booking?.confirmation_details as Record<string, unknown>)?.pickup_address as string) ||
+    (booking as { pickupAddress?: string })?.pickupAddress ||
+    null;
+  const pickupDate =
+    ((booking?.confirmation_details as Record<string, unknown>)?.pickup_date as string) ||
+    booking?.loading_date ||
+    null;
+  const agreedRate =
+    booking?.rate_amount ||
+    ((booking?.confirmation_details as Record<string, unknown>)?.agreed_rate as number) ||
+    null;
+  const agreedCurrency =
+    booking?.currency ||
+    ((booking?.confirmation_details as Record<string, unknown>)?.currency as string) ||
+    "USD";
 
   const etdFormatted =
     booking?.etd && !isNaN(new Date(booking.etd).getTime())
@@ -520,6 +569,14 @@ export function MovementLifecycleDrawer({
 
     const newMovementStatus = toDbMovementStatus(nextToApply.id);
 
+    const existingConf = (currentBooking.confirmation_details as Record<string, unknown>) || {};
+    const updatedConfirmationDetails = {
+      ...existingConf,
+      current_stage: nextToApply.id,
+      lifecycle_stage: nextToApply.id,
+      movement_status: newMovementStatus,
+    };
+
     const optimisticBooking: FullBookingRecord = {
       ...currentBooking,
       status: nextToApply.id,
@@ -530,6 +587,7 @@ export function MovementLifecycleDrawer({
         nextToApply.id === "Booking Confirmed"
           ? currentBooking.confirmed_at || new Date().toISOString()
           : currentBooking.confirmed_at,
+      confirmation_details: updatedConfirmationDetails,
     };
     setBooking(optimisticBooking);
 
@@ -552,6 +610,7 @@ export function MovementLifecycleDrawer({
       movement_status: newMovementStatus,
       confirmation_status: newConfStatus,
       is_movement_confirmed: newConfStatus === "CONFIRMED",
+      confirmation_details: updatedConfirmationDetails,
     });
     window.dispatchEvent(
       new CustomEvent("nashmia_bookings_updated", {
@@ -560,7 +619,25 @@ export function MovementLifecycleDrawer({
     );
     window.dispatchEvent(
       new CustomEvent("nashmia_booking_status_updated", {
-        detail: { bookingId: currentBooking.id, status: nextToApply.id },
+        detail: {
+          bookingId: currentBooking.id,
+          status: nextToApply.id,
+          movement_status: newMovementStatus,
+          movementStatus: newMovementStatus,
+          booking: optimisticBooking,
+        },
+      }),
+    );
+    window.dispatchEvent(
+      new CustomEvent("nashmia_movement_status_updated", {
+        detail: {
+          bookingId: currentBooking.id,
+          movementNumber: currentBooking.movement_number,
+          status: nextToApply.id,
+          movement_status: newMovementStatus,
+          movementStatus: newMovementStatus,
+          booking: optimisticBooking,
+        },
       }),
     );
 
@@ -581,11 +658,23 @@ export function MovementLifecycleDrawer({
         await updateBookingStatusInSupabase(currentBooking.id, userId, nextToApply.id, loc, desc, {
           movement_status: newMovementStatus,
           confirmation_status: newConfStatus,
+          confirmation_details: updatedConfirmationDetails,
         });
       }
 
       toast.success(`Milestone updated: ${nextToApply.label}`, {
         description: `Location: ${loc}`,
+      });
+
+      void notifyMovementActivity({
+        bookingId: currentBooking.id,
+        movementNumber: effectiveMovementRef,
+        activity: "Movement Stage Updated",
+        details: `Stage updated to ${nextToApply.label}${loc ? ` (${loc})` : ""}`,
+        previousValue: stageConfig.label,
+        newValue: nextToApply.label,
+        updatedBy: userId || "Operations",
+        referenceNumber: effectiveMovementRef,
       });
 
       setAdvanceNotes("");
@@ -666,6 +755,16 @@ export function MovementLifecycleDrawer({
       setNewWeight("24500");
       toast.success(`Container ${saved.container_number} saved to database`);
 
+      void notifyMovementActivity({
+        bookingId: saved.booking_id,
+        movementNumber: effectiveMovementRef,
+        activity: "Movement Details Updated",
+        details: `Container registered: ${saved.container_number} (${saved.container_size} ${saved.container_type}, ${saved.weight} kg, Seal: ${saved.seal_number || "None"})`,
+        newValue: saved.container_number,
+        updatedBy: userId || "Operations",
+        referenceNumber: effectiveMovementRef,
+      });
+
       // Invalidate queries for instant app-wide synchronization
       queryClient.invalidateQueries({ queryKey: ["bookings"] });
       queryClient.invalidateQueries({ queryKey: ["booking-detail"] });
@@ -738,6 +837,15 @@ export function MovementLifecycleDrawer({
     );
     setEditingContainerId(null);
     toast.success("Container specifications updated");
+
+    void notifyMovementActivity({
+      bookingId: booking?.id || bookingId || undefined,
+      movementNumber: effectiveMovementRef,
+      activity: "Movement Details Updated",
+      details: `Container ${editContainerNum || containerId} updated: Status=${editStatus}, Seal=${editSealNum || "N/A"}, Weight=${editWeight}kg`,
+      updatedBy: userId || "Operations",
+      referenceNumber: effectiveMovementRef,
+    });
 
     if (isConfigured) {
       try {
@@ -826,6 +934,11 @@ export function MovementLifecycleDrawer({
     const updatedDates = {
       ...(movementCutOffs?.dates || {}),
       [newCutOffType]: newCutOffDateTime.trim(),
+      deadlines: updatedDeadlines,
+      isManuallyVerified: true,
+      reviewStatus: "MANUALLY_VERIFIED",
+      requiresManualReview: false,
+      extractionStatus: "COMPLETED",
     };
 
     saveCutOffsForMovement(effectiveMovementRef, updatedDates, booking?.id);
@@ -836,9 +949,68 @@ export function MovementLifecycleDrawer({
       dates: updatedDates,
     });
 
-    toast.success(`${newCutOffType} saved for movement ${effectiveMovementRef}`);
+    toast.success(
+      `${newCutOffType} saved and manually verified for movement ${effectiveMovementRef}`,
+    );
+
+    void notifyMovementActivity({
+      bookingId: booking?.id || undefined,
+      movementNumber: effectiveMovementRef,
+      activity: "Cut-off Updates",
+      details: `${newCutOffType} scheduled: ${newCutOffDateTime.trim()}`,
+      newValue: newCutOffDateTime.trim(),
+      updatedBy: userId || "Operations",
+      referenceNumber: effectiveMovementRef,
+    });
+
     setNewCutOffDateTime("");
     setShowAddCutOff(false);
+  };
+
+  const handleVerifyCutOff = (dl: MovementCutOffDeadline) => {
+    const existingDeadlines = movementCutOffs?.deadlines || [];
+    const updatedDeadlines = existingDeadlines.map((d) =>
+      d.type.toLowerCase() === dl.type.toLowerCase()
+        ? {
+            ...d,
+            requiresManualReview: false,
+            requires_manual_review: false,
+            reviewStatus: "MANUALLY_VERIFIED",
+            review_status: "MANUALLY_VERIFIED",
+            reviewReason: null,
+            review_reason: null,
+          }
+        : d,
+    );
+
+    const updatedDates = {
+      ...(movementCutOffs?.dates || {}),
+      deadlines: updatedDeadlines,
+      isManuallyVerified: true,
+      reviewStatus: "MANUALLY_VERIFIED",
+      requiresManualReview: false,
+      extractionStatus: "COMPLETED",
+    };
+
+    saveCutOffsForMovement(effectiveMovementRef, updatedDates, booking?.id);
+    setMovementCutOffs({
+      movementRef: effectiveMovementRef,
+      bookingId: booking?.id,
+      deadlines: updatedDeadlines,
+      dates: updatedDates,
+    });
+
+    toast.success(`${dl.type} manually verified and confirmed.`);
+
+    void notifyMovementActivity({
+      bookingId: booking?.id || undefined,
+      movementNumber: effectiveMovementRef,
+      activity: "Cut-off Updates",
+      details: `${dl.type} manually verified for movement`,
+      newValue: "Verified",
+      updatedBy: userId || "Operations",
+      referenceNumber: effectiveMovementRef,
+    });
   };
 
   const handleCopyReference = () => {
@@ -953,6 +1125,7 @@ export function MovementLifecycleDrawer({
                 label: "Cut-Offs",
                 count: movementCutOffs?.deadlines?.length || 0,
               },
+              { id: "documents", label: "Documents", count: docCount },
               { id: "audit", label: "Audit Log", count: events.length },
             ].map((tab) => {
               const isActive = activeTab === tab.id;
@@ -1530,14 +1703,19 @@ export function MovementLifecycleDrawer({
                     <button
                       type="button"
                       onClick={() => {
-                        toast.success("Documents bundle ready", {
-                          description: `Downloading shipping package for ${effectiveMovementRef}`,
-                        });
+                        if (movementDocs.length > 0) {
+                          toast.success("Opening movement document", {
+                            description: `${movementDocs.length} linked document(s) for ${effectiveMovementRef}`,
+                          });
+                          viewDocumentInNewTab(movementDocs[0]);
+                        } else {
+                          toast.info(`No documents linked for ${effectiveMovementRef} yet`);
+                        }
                       }}
                       className="w-full bg-white hover:bg-slate-50 border border-slate-200 text-slate-800 text-[13px] font-semibold py-2.5 px-4 rounded-full flex items-center justify-center gap-2 transition-colors cursor-pointer shadow-2xs"
                     >
                       <Download className="size-4 text-slate-600" />
-                      Download Documents
+                      Download Documents {docCount > 0 ? `(${docCount})` : ""}
                     </button>
 
                     {/* Track Shipment - White Button */}
@@ -1667,46 +1845,120 @@ export function MovementLifecycleDrawer({
                   </div>
                 </div>
 
-                {/* Card 4: Attachments */}
+                {/* Card 4: Attachments / Documents */}
                 <div className="bg-white rounded-[24px] border border-slate-200/80 p-5 shadow-xs space-y-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <Paperclip className="size-4 text-slate-700" />
-                      <h3 className="text-[15px] font-bold text-slate-900">Attachments</h3>
+                      <h3 className="text-[15px] font-bold text-slate-900">
+                        Documents {docCount > 0 ? `(${docCount})` : ""}
+                      </h3>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        toast.info("Viewing all 3 attached files");
-                      }}
-                      className="text-[11.5px] font-semibold text-[#175CD3] hover:underline cursor-pointer"
-                    >
-                      View All (3)
-                    </button>
+                    {isLoadingDocs ? (
+                      <span className="text-[11px] text-slate-400 flex items-center gap-1">
+                        <RefreshCw className="size-3 animate-spin text-[#0D74FF]" />
+                        Syncing...
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          refreshDocuments();
+                          toast.info(`Documents refreshed for ${effectiveMovementRef}`);
+                        }}
+                        className="text-[11.5px] font-semibold text-[#175CD3] hover:underline cursor-pointer flex items-center gap-1"
+                      >
+                        <RefreshCw className="size-3" />
+                        Refresh
+                      </button>
+                    )}
                   </div>
 
-                  <div className="flex items-center justify-between p-2.5 rounded-xl border border-slate-100 bg-[#FAFAFA] hover:bg-slate-50 transition-colors">
-                    <div className="flex items-center gap-2.5">
-                      <div className="grid size-7 place-items-center rounded-lg bg-rose-50 border border-rose-200/60 text-rose-600 font-bold text-[9px] uppercase">
-                        PDF
-                      </div>
-                      <div>
-                        <p className="text-[12px] font-semibold text-slate-800 truncate max-w-[180px]">
-                          Booking_Confirmation.pdf
-                        </p>
-                        <p className="text-[10.5px] text-slate-400">2.4 MB</p>
-                      </div>
+                  {isLoadingDocs ? (
+                    <div className="py-6 flex flex-col items-center justify-center text-center space-y-2">
+                      <RefreshCw className="size-5 text-[#0D74FF] animate-spin" />
+                      <p className="text-[11.5px] text-slate-500">Loading linked documents...</p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        toast.success("Downloading Booking_Confirmation.pdf");
-                      }}
-                      className="grid size-7 place-items-center rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors cursor-pointer"
-                    >
-                      <Download className="size-3.5" />
-                    </button>
-                  </div>
+                  ) : movementDocs.length === 0 ? (
+                    <div className="p-4 rounded-2xl bg-[#F8FAFC] border border-slate-100 text-center space-y-1">
+                      <p className="text-[12px] font-semibold text-slate-700">
+                        No documents linked yet
+                      </p>
+                      <p className="text-[11px] text-slate-400">
+                        Carrier documents, bills of lading, and cut-off notices matched to #
+                        {effectiveMovementRef} will appear here automatically.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {movementDocs.map((doc) => {
+                        const ext = doc.extension.toUpperCase();
+                        const isPdf = ext === "PDF";
+                        const isSpreadsheet = ext === "XLS" || ext === "XLSX" || ext === "CSV";
+
+                        return (
+                          <div
+                            key={doc.id}
+                            className="flex items-center justify-between p-2.5 rounded-xl border border-slate-100 bg-[#FAFAFA] hover:bg-slate-50 transition-colors gap-2"
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <div
+                                className={cn(
+                                  "grid size-7 place-items-center rounded-lg border font-bold text-[9px] uppercase shrink-0",
+                                  isPdf
+                                    ? "bg-rose-50 border-rose-200/60 text-rose-600"
+                                    : isSpreadsheet
+                                      ? "bg-emerald-50 border-emerald-200/60 text-emerald-600"
+                                      : "bg-blue-50 border-blue-200/60 text-[#0D74FF]",
+                                )}
+                              >
+                                {ext.slice(0, 3)}
+                              </div>
+                              <div className="min-w-0">
+                                <p
+                                  className="text-[12px] font-semibold text-slate-800 truncate max-w-[170px]"
+                                  title={doc.documentName}
+                                >
+                                  {doc.documentName}
+                                </p>
+                                <p className="text-[10px] text-slate-400 truncate">
+                                  {doc.fileSizeFormatted} · {doc.displayType}
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1 shrink-0">
+                              {/* Working View in New Tab action */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  viewDocumentInNewTab(doc);
+                                  toast.success(`Opening ${doc.documentName}`);
+                                }}
+                                title="Open in new browser tab"
+                                className="grid size-7 place-items-center rounded-lg text-slate-500 hover:text-[#0D74FF] hover:bg-blue-50 transition-colors cursor-pointer"
+                              >
+                                <Eye className="size-3.5" />
+                              </button>
+
+                              {/* Working Download action */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  downloadDocumentFile(doc);
+                                  toast.success(`Downloading ${doc.documentName}`);
+                                }}
+                                title="Download file"
+                                className="grid size-7 place-items-center rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-200/60 transition-colors cursor-pointer"
+                              >
+                                <Download className="size-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -2199,30 +2451,219 @@ export function MovementLifecycleDrawer({
                     </p>
                   </div>
                 ) : (
-                  movementCutOffs.deadlines.map((dl, idx) => (
-                    <div
-                      key={`dl-${dl.type}-${idx}`}
-                      className="rounded-[22px] border border-slate-200/60 bg-white p-4 shadow-2xs space-y-1.5"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700">
-                          {dl.type}
-                        </span>
-                        <span className="rounded-full bg-amber-50 border border-amber-200/60 px-2.5 py-0.5 text-[10.5px] font-semibold text-amber-700">
-                          {dl.in || "Active"}
-                        </span>
+                  movementCutOffs.deadlines.map((dl, idx) => {
+                    const isNeedsReview = Boolean(
+                      dl.requiresManualReview ||
+                      dl.requires_manual_review ||
+                      dl.reviewStatus === "NEEDS_REVIEW" ||
+                      dl.review_status === "NEEDS_REVIEW",
+                    );
+                    const isVerified = Boolean(
+                      dl.reviewStatus === "MANUALLY_VERIFIED" ||
+                      dl.review_status === "MANUALLY_VERIFIED" ||
+                      (!isNeedsReview && dl.dateTime),
+                    );
+
+                    return (
+                      <div
+                        key={`dl-${dl.type}-${idx}`}
+                        className={cn(
+                          "rounded-[22px] border p-4 shadow-2xs space-y-2",
+                          isNeedsReview
+                            ? "border-amber-300 bg-amber-50/40"
+                            : "border-slate-200/60 bg-white",
+                        )}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700">
+                            {dl.type}
+                          </span>
+                          <div className="flex items-center gap-1.5">
+                            {isNeedsReview ? (
+                              <span
+                                className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-800 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-full"
+                                title={
+                                  dl.reviewReason ||
+                                  dl.review_reason ||
+                                  "Requires operational review"
+                                }
+                              >
+                                <AlertTriangle className="size-2.5 text-amber-700" />
+                                <span>Needs Review</span>
+                              </span>
+                            ) : isVerified ? (
+                              <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200/80 px-2 py-0.5 rounded-full">
+                                <Check className="size-2.5" />
+                                <span>Verified</span>
+                              </span>
+                            ) : null}
+                            <span className="rounded-full bg-slate-100 border border-slate-200/60 px-2 py-0.5 text-[10.5px] font-semibold text-slate-600">
+                              {dl.in || "Active"}
+                            </span>
+                          </div>
+                        </div>
+
+                        <p className="font-mono text-[14px] font-bold text-slate-900">
+                          {dl.dateTime || `${dl.date || ""} ${dl.time || ""}`}
+                        </p>
+
+                        {isNeedsReview && (
+                          <div className="pt-1 flex items-center justify-between gap-2 border-t border-amber-200/60">
+                            <p className="text-[11px] text-amber-800 truncate">
+                              {dl.reviewReason ||
+                                dl.review_reason ||
+                                "Date format requires manual verification"}
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => handleVerifyCutOff(dl)}
+                              className="shrink-0 rounded-full bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-bold px-3 py-1 shadow-2xs cursor-pointer transition-colors"
+                            >
+                              Verify Date
+                            </button>
+                          </div>
+                        )}
                       </div>
-                      <p className="font-mono text-[14px] font-bold text-slate-900">
-                        {dl.dateTime || `${dl.date || ""} ${dl.time || ""}`}
-                      </p>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </div>
           )}
 
-          {/* ================= TAB 5: AUDIT LOG & TIMELINE ================= */}
+          {/* ================= TAB 5: DOCUMENTS & ATTACHMENTS ================= */}
+          {activeTab === "documents" && (
+            <div className="space-y-4 animate-in fade-in-50 duration-150">
+              <div className="rounded-[24px] bg-white border border-slate-200/80 p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Paperclip className="size-4.5 text-[#0D74FF]" />
+                    <h3 className="text-[16px] font-bold text-slate-900">
+                      Movement Documents ({docCount})
+                    </h3>
+                  </div>
+                  <p className="text-[12.5px] text-slate-500 mt-0.5">
+                    Carrier documents, bills of lading, and cut-off notices linked to #{effectiveMovementRef}.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    refreshDocuments();
+                    toast.info(`Documents refreshed for ${effectiveMovementRef}`);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-[12px] font-semibold transition-colors shadow-2xs cursor-pointer self-start sm:self-center"
+                >
+                  <RefreshCw
+                    className={cn(
+                      "size-3.5 text-slate-500",
+                      isLoadingDocs && "animate-spin text-[#0D74FF]",
+                    )}
+                  />
+                  <span>Refresh Documents</span>
+                </button>
+              </div>
+
+              {isLoadingDocs ? (
+                <div className="py-12 flex flex-col items-center justify-center text-center space-y-3 bg-white rounded-[24px] border border-slate-200/80">
+                  <RefreshCw className="size-6 text-[#0D74FF] animate-spin" />
+                  <p className="text-[13px] font-semibold text-slate-700">Loading linked documents...</p>
+                </div>
+              ) : movementDocs.length === 0 ? (
+                <div className="py-12 px-6 flex flex-col items-center justify-center text-center space-y-2 bg-white rounded-[24px] border border-slate-200/80">
+                  <div className="grid size-12 place-items-center rounded-2xl bg-slate-100 text-slate-400 mb-1">
+                    <FileText className="size-6 stroke-[1.5]" />
+                  </div>
+                  <p className="text-[14px] font-bold text-slate-800">No documents linked yet</p>
+                  <p className="text-[12px] text-slate-400 max-w-md">
+                    Documents uploaded or synced matching reference #{effectiveMovementRef} will appear here automatically.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {movementDocs.map((doc) => {
+                    const ext = doc.extension.toUpperCase();
+                    const isPdf = ext === "PDF";
+                    const isSpreadsheet = ext === "XLS" || ext === "XLSX" || ext === "CSV";
+
+                    return (
+                      <div
+                        key={doc.id}
+                        className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-2xl border border-slate-200/80 bg-white hover:border-slate-300 transition-all gap-3 shadow-2xs"
+                      >
+                        <div className="flex items-center gap-3.5 min-w-0">
+                          <div
+                            className={cn(
+                              "grid size-10 place-items-center rounded-xl border font-bold text-[11px] uppercase shrink-0",
+                              isPdf
+                                ? "bg-rose-50 border-rose-200 text-rose-600"
+                                : isSpreadsheet
+                                  ? "bg-emerald-50 border-emerald-200 text-emerald-600"
+                                  : "bg-blue-50 border-blue-200 text-[#0D74FF]",
+                            )}
+                          >
+                            {ext.slice(0, 3)}
+                          </div>
+                          <div className="min-w-0">
+                            <p
+                              className="text-[13.5px] font-bold text-slate-900 truncate"
+                              title={doc.documentName}
+                            >
+                              {doc.documentName}
+                            </p>
+                            <div className="flex items-center gap-2 mt-0.5 text-[11.5px] text-slate-500">
+                              <span className="font-semibold text-slate-700">{doc.displayType}</span>
+                              <span>·</span>
+                              <span>{doc.fileSizeFormatted}</span>
+                              {doc.uploadedAt && (
+                                <>
+                                  <span>·</span>
+                                  <span>
+                                    {new Date(doc.uploadedAt).toLocaleDateString("en-GB", {
+                                      day: "numeric",
+                                      month: "short",
+                                      year: "numeric",
+                                    })}
+                                  </span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              viewDocumentInNewTab(doc);
+                              toast.success(`Opening ${doc.documentName}`);
+                            }}
+                            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-[12px] font-semibold transition-colors cursor-pointer"
+                          >
+                            <Eye className="size-3.5 text-[#0D74FF]" />
+                            <span>View</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              downloadDocumentFile(doc);
+                              toast.success(`Downloading ${doc.documentName}`);
+                            }}
+                            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-[#101828] hover:bg-black text-white text-[12px] font-semibold transition-colors cursor-pointer shadow-xs"
+                          >
+                            <Download className="size-3.5" />
+                            <span>Download</span>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ================= TAB 6: AUDIT LOG & TIMELINE ================= */}
           {activeTab === "audit" && (
             <div className="space-y-4 animate-in fade-in-50 duration-150">
               <div className="flex items-center justify-between">

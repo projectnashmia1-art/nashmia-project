@@ -20,11 +20,7 @@ export function logQuotationResponseDiagnostics(
 
   const verifiedRecords = records.map((item: any, idx: number) => {
     const id =
-      item?.id ||
-      item?.quotationId ||
-      item?.offerData?.id ||
-      item?.requestId ||
-      `record-${idx}`;
+      item?.id || item?.quotationId || item?.offerData?.id || item?.requestId || `record-${idx}`;
     const quotation_id =
       item?.quotation_id ||
       item?.quotationId ||
@@ -58,35 +54,27 @@ export function logQuotationResponseDiagnostics(
       status: item?.status || item?.quotation_status,
       forwarderName: item?.forwarderName || item?.forwarder_name,
       ratePerContainer:
-        item?.ratePerContainer ||
-        item?.offerData?.ratePerContainer ||
-        item?.ocean_freight,
-      totalFreight:
-        item?.totalFreight ||
-        item?.offerData?.totalFreight ||
-        item?.quoted_total,
+        item?.ratePerContainer || item?.offerData?.ratePerContainer || item?.ocean_freight,
+      totalFreight: item?.totalFreight || item?.offerData?.totalFreight || item?.quoted_total,
       rawItem: item,
     };
   });
 
-  console.log(
-    `[DiagnosticLog][${contextLabel}] Intercepted raw quotation response object:`,
-    {
-      rawResponseObject: responseObject,
-      recordCount: verifiedRecords.length,
-      verificationSummary: verifiedRecords.map((r) => ({
-        id: r.id,
-        quotation_id: r.quotation_id,
-        booking_id: r.booking_id,
-        has_id: r.has_id,
-        has_quotation_id: r.has_quotation_id,
-        has_booking_id: r.has_booking_id,
-        charges_count: r.charges_count,
-        has_charges_array: r.has_charges_array,
-      })),
-      detailedRecords: verifiedRecords,
-    },
-  );
+  console.log(`[DiagnosticLog][${contextLabel}] Intercepted raw quotation response object:`, {
+    rawResponseObject: responseObject,
+    recordCount: verifiedRecords.length,
+    verificationSummary: verifiedRecords.map((r) => ({
+      id: r.id,
+      quotation_id: r.quotation_id,
+      booking_id: r.booking_id,
+      has_id: r.has_id,
+      has_quotation_id: r.has_quotation_id,
+      has_booking_id: r.has_booking_id,
+      charges_count: r.charges_count,
+      has_charges_array: r.has_charges_array,
+    })),
+    detailedRecords: verifiedRecords,
+  });
 }
 
 export interface PropertyAlignmentReport {
@@ -142,9 +130,10 @@ export function runPropertyAlignmentDiagnostic(
             : "none",
       isAligned: Boolean(
         (apiData.quotation_id ?? apiData.id ?? apiData.quotationId) &&
-          (formState.id ?? formState.quotationId ?? formState.requestId),
+        (formState.id ?? formState.quotationId ?? formState.requestId),
       ),
-      notes: "Checks alignment between backend 'quotation_id' / 'id' and component form state 'id' / 'quotationId'.",
+      notes:
+        "Checks alignment between backend 'quotation_id' / 'id' and component form state 'id' / 'quotationId'.",
     },
     {
       field: "Booking Identifier",
@@ -169,8 +158,7 @@ export function runPropertyAlignmentDiagnostic(
             ? "movementNumber"
             : "none",
       isAligned: Boolean(
-        (apiData.booking_id ?? apiData.bookingId) &&
-          (formState.bookingId ?? formState.booking_id),
+        (apiData.booking_id ?? apiData.bookingId) && (formState.bookingId ?? formState.booking_id),
       ),
       notes: "Checks alignment between backend 'booking_id' and form state 'bookingId'.",
     },
@@ -199,9 +187,10 @@ export function runPropertyAlignmentDiagnostic(
             : "none",
       isAligned: Boolean(
         (apiData.ocean_freight ?? apiData.rate ?? apiData.ratePerContainer) !== undefined &&
-          (formState.ratePerContainer ?? formState.oceanFreight ?? formState.rate) !== undefined,
+        (formState.ratePerContainer ?? formState.oceanFreight ?? formState.rate) !== undefined,
       ),
-      notes: "Checks alignment between backend 'ocean_freight' / 'rate' and form state 'ratePerContainer' / 'oceanFreight'.",
+      notes:
+        "Checks alignment between backend 'ocean_freight' / 'rate' and form state 'ratePerContainer' / 'oceanFreight'.",
     },
     {
       field: "Quoted Total Freight",
@@ -227,9 +216,10 @@ export function runPropertyAlignmentDiagnostic(
             : "none",
       isAligned: Boolean(
         (apiData.quoted_total ?? apiData.total_cost ?? apiData.totalFreight) !== undefined &&
-          (formState.quotedTotal ?? formState.totalFreight) !== undefined,
+        (formState.quotedTotal ?? formState.totalFreight) !== undefined,
       ),
-      notes: "Checks alignment between backend 'quoted_total' / 'total_cost' and form state 'quotedTotal' / 'totalFreight'.",
+      notes:
+        "Checks alignment between backend 'quoted_total' / 'total_cost' and form state 'quotedTotal' / 'totalFreight'.",
     },
     {
       field: "Currency",
@@ -239,8 +229,8 @@ export function runPropertyAlignmentDiagnostic(
       formPropertyUsed: "currency",
       isAligned: Boolean(
         apiData.currency &&
-          formState.currency &&
-          String(apiData.currency).toUpperCase() === String(formState.currency).toUpperCase(),
+        formState.currency &&
+        String(apiData.currency).toUpperCase() === String(formState.currency).toUpperCase(),
       ),
       notes: "Checks currency code alignment.",
     },
@@ -267,7 +257,8 @@ export function runPropertyAlignmentDiagnostic(
       isAligned: Array.isArray(
         apiData.charges || apiData.quotation_charges || (apiData.offerData as any)?.itemizedCharges,
       ),
-      notes: "Checks alignment between backend 'charges' / 'quotation_charges' array and form state 'itemizedCharges' / 'charges'.",
+      notes:
+        "Checks alignment between backend 'charges' / 'quotation_charges' array and form state 'itemizedCharges' / 'charges'.",
     },
     {
       field: "Sailing Date / ETD",
@@ -295,15 +286,10 @@ export function runPropertyAlignmentDiagnostic(
     },
     {
       field: "Vessel Name",
-      apiValue:
-        apiData.vessel_name ?? apiData.vessel ?? (apiData.offerData as any)?.vesselName,
+      apiValue: apiData.vessel_name ?? apiData.vessel ?? (apiData.offerData as any)?.vesselName,
       apiFieldUsed: apiData.vessel_name ? "vessel_name" : apiData.vessel ? "vessel" : "none",
       formValue: formState.vesselName ?? formState.vessel,
-      formPropertyUsed: formState.vesselName
-        ? "vesselName"
-        : formState.vessel
-          ? "vessel"
-          : "none",
+      formPropertyUsed: formState.vesselName ? "vesselName" : formState.vessel ? "vessel" : "none",
       isAligned: Boolean(
         (apiData.vessel_name || apiData.vessel) && (formState.vesselName || formState.vessel),
       ),

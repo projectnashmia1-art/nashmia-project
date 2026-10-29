@@ -22,6 +22,42 @@ export interface BookingRequestCargo {
   unNumber?: string;
 }
 
+export interface BookingConfirmationPayload {
+  confirmed_forwarder_id?: string;
+  confirmed_forwarder_name?: string;
+  confirmed_forwarder_email?: string;
+  confirmed_forwarder_phone?: string;
+  confirmed_forwarder_code?: string;
+  agreed_rate?: number;
+  finalRate?: number;
+  currency?: string;
+  total_freight?: number;
+  etd?: string;
+  eta?: string;
+  pickup_date?: string;
+  pickupDate?: string;
+  pickup_address?: string;
+  pickupAddress?: string;
+  pol_name?: string;
+  pol_code?: string;
+  pod_name?: string;
+  pod_code?: string;
+  shipping_line?: string;
+  shippingLine?: string;
+  carrier?: string;
+  vessel_name?: string;
+  voyage_number?: string;
+  container_count?: number;
+  container_size?: string;
+  container_type?: string;
+  special_instructions?: string;
+  product_description?: string;
+  confirmed_at?: string;
+  confirmed_by?: string;
+  movement_number?: string;
+  [key: string]: unknown;
+}
+
 export interface BookingRequestRecord {
   id: string;
   reference: string;
@@ -94,6 +130,19 @@ export interface BookingRequestRecord {
   siCutoff?: string;
   vgmCutoff?: string;
   gateCutoff?: string;
+
+  // Confirmed Movement & Booking Receipt Details
+  isConfirmed?: boolean;
+  isMovementConfirmed?: boolean;
+  movementId?: string;
+  movementNumber?: string;
+  pickupDate?: string;
+  pickupAddress?: string;
+  shippingLine?: string;
+  forwarderPhone?: string;
+  finalAgreedRate?: number;
+  finalRateCurrency?: string;
+  confirmationDetails?: BookingConfirmationPayload;
 
   // Notes & Revisions
   specialInstructions?: string;

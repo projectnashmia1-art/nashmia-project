@@ -11,7 +11,7 @@ import {
   Info,
   type LucideIcon,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn } from "./utils";
 
 export type PillToastType =
   "comment" | "reminder" | "build" | "mention" | "success" | "error" | "info" | "ai";

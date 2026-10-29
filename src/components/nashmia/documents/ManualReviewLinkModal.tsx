@@ -19,6 +19,7 @@ import { linkAndReviewDriveDocument } from "./documents-data";
 import { saveCutOffsForMovement } from "@/lib/movement-cutoff-service";
 import { getLocalBookings } from "@/lib/supabase-services";
 import { safeInsertNotification } from "@/lib/supabase-services";
+import { notifyMovementActivity } from "@/lib/notification-service";
 import { supabase } from "@/lib/supabase";
 import { LifecycleDropdownSelect } from "@/components/nashmia/common/LifecycleDropdownSelect";
 
@@ -201,7 +202,34 @@ export const ManualReviewLinkModal: React.FC<ManualReviewLinkModalProps> = ({
           }
         : undefined;
 
-      // Update document
+      // Update in database and storage mapping
+      try {
+        await fetch("/api/documents/link-movement", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            documentId: document.id,
+            bookingDocumentId: (document.metadata?.bookingDocumentId as string) || document.id,
+            movementNumber: finalMovementNumber,
+            bookingId: selectedBookingId || undefined,
+            documentType,
+          }),
+        });
+
+        // Broadcast global event
+        window.dispatchEvent(
+          new CustomEvent("nashmia_document_linked", {
+            detail: {
+              documentId: document.id,
+              movementNumber: finalMovementNumber,
+            },
+          }),
+        );
+      } catch (linkNetErr) {
+        console.warn("[ManualReviewLinkModal] link-movement API notice:", linkNetErr);
+      }
+
+      // Update document locally
       const updatedDoc = linkAndReviewDriveDocument(document.id, {
         movementNumber: finalMovementNumber,
         bookingId: selectedBookingId,
@@ -244,15 +272,16 @@ export const ManualReviewLinkModal: React.FC<ManualReviewLinkModalProps> = ({
         }
       }
 
-      // Safe notification
+      // Movement notification
       try {
-        await safeInsertNotification(supabase, {
-          userId: null,
-          title: `Document Linked: ${finalMovementNumber}`,
-          message: `Document "${document.name}" was manually verified and linked to Movement ${finalMovementNumber} by ${reviewerName}.`,
-          type: "document_saved",
-          bookingId: selectedBookingId,
+        void notifyMovementActivity({
+          bookingId: selectedBookingId || undefined,
           movementNumber: finalMovementNumber,
+          activity: "Document Linked",
+          details: `Document "${document.name}" was manually verified and linked to movement`,
+          documentName: document.name,
+          updatedBy: reviewerName,
+          referenceNumber: finalMovementNumber,
         });
       } catch {
         // notification fallback

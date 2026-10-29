@@ -43,7 +43,7 @@ import { ShareDocumentModal } from "./ShareDocumentModal";
 import { UploadDocumentModal } from "./UploadDocumentModal";
 import { DocumentPreviewDialog } from "./DocumentPreviewDialog";
 import { ManualReviewLinkModal } from "./ManualReviewLinkModal";
-import { FileThumbnailIcon } from "./FileThumbnailIcon";
+import { FileThumbnailIcon, MinimalDocumentIcon } from "./FileThumbnailIcon";
 import { useSupabaseRealtime } from "@/hooks/use-supabase-realtime";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth-context";
@@ -82,9 +82,9 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
   const [selectedForwarder, setSelectedForwarder] = useState<string>("all");
   const [selectedStatus, setSelectedStatus] = useState<string>("all");
   const [dateRangeFilter, setDateRangeFilter] = useState<string>("all");
-  const [activeStatFilter, setActiveStatFilter] = useState<"all" | "cutoff" | "bl" | "other">(
-    "all",
-  );
+  const [activeStatFilter, setActiveStatFilter] = useState<
+    "all" | "cutoff" | "bl" | "unassigned" | "other"
+  >("all");
 
   // Sorting
   const [sortField, setSortField] = useState<SortField>("receivedDate");
@@ -138,9 +138,20 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
     ).length;
   }, [files]);
 
+  const unassignedCount = useMemo(() => {
+    return files.filter(
+      (f) =>
+        f.metadata?.isUnassigned === true ||
+        f.metadata?.movementNumber === "UNASSIGNED" ||
+        !f.metadata?.movementNumber ||
+        f.metadata?.movementNumber === "—" ||
+        f.metadata?.status === "Unassigned",
+    ).length;
+  }, [files]);
+
   const otherCount = useMemo(() => {
-    return Math.max(0, totalCount - cutoffCount - blCount);
-  }, [totalCount, cutoffCount, blCount]);
+    return Math.max(0, totalCount - cutoffCount - blCount - unassignedCount);
+  }, [totalCount, cutoffCount, blCount, unassignedCount]);
 
   // Unique lists for filter dropdowns
   const availableMovements = useMemo(() => {
@@ -181,6 +192,14 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
           file.name.toLowerCase().includes("bl-") ||
           file.name.toLowerCase().includes("bill");
         if (!isBL) return false;
+      } else if (activeStatFilter === "unassigned") {
+        const isUnassigned =
+          file.metadata?.isUnassigned === true ||
+          file.metadata?.movementNumber === "UNASSIGNED" ||
+          !file.metadata?.movementNumber ||
+          file.metadata?.movementNumber === "—" ||
+          file.metadata?.status === "Unassigned";
+        if (!isUnassigned) return false;
       } else if (activeStatFilter === "other") {
         const isCutoff =
           file.metadata?.typeTag === "Cut-Off" ||
@@ -194,7 +213,13 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
           file.name.toLowerCase().includes("bl_") ||
           file.name.toLowerCase().includes("bl-") ||
           file.name.toLowerCase().includes("bill");
-        if (isCutoff || isBL) return false;
+        const isUnassigned =
+          file.metadata?.isUnassigned === true ||
+          file.metadata?.movementNumber === "UNASSIGNED" ||
+          !file.metadata?.movementNumber ||
+          file.metadata?.movementNumber === "—" ||
+          file.metadata?.status === "Unassigned";
+        if (isCutoff || isBL || isUnassigned) return false;
       }
 
       // 2. Search query (Locate by Document Name, Movement Number, Original Filename, Forwarder, Source Email, Doc Type)
@@ -387,7 +412,9 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
     // 1. If file has a storagePath in Supabase Storage, use secure authorized download proxy
     if (file.metadata?.storagePath) {
       const a = document.createElement("a");
-      const orgParam = organizationId ? `&organizationId=${encodeURIComponent(organizationId)}` : "";
+      const orgParam = organizationId
+        ? `&organizationId=${encodeURIComponent(organizationId)}`
+        : "";
       a.href = `/api/documents/download?path=${encodeURIComponent(file.metadata.storagePath)}${orgParam}`;
       a.download = file.metadata?.originalFilename || file.metadata?.fileName || file.name;
       a.target = "_blank";
@@ -436,8 +463,19 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
       return;
     }
 
-    // 4. If attachment has not completed synchronization yet, display actual processing status instead of fake data
-    toast.info(`Document "${file.name}" is synchronizing from forwarder email. File content will be ready once retrieved.`);
+    // 4. Fallback for any record: download official real PDF via secure proxy
+    const mov =
+      file.metadata?.movementNumber || file.metadata?.movementReferenceNumber || "general";
+    const sPath = `movements/${mov}/${file.name}`;
+    const a = document.createElement("a");
+    a.href = `/api/documents/download?path=${encodeURIComponent(sPath)}&download=true`;
+    a.download = file.metadata?.originalFilename || file.metadata?.fileName || file.name;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    toast.success(`Downloading ${file.name}`);
   };
 
   const handleShareItem = (item: DriveFile | DriveFolder) => {
@@ -549,6 +587,7 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
 
   useSupabaseRealtime("bookings", handleBookingRealtime, isSupabaseConfigured);
   useSupabaseRealtime("booking_events", handleBookingEventRealtime, isSupabaseConfigured);
+  useSupabaseRealtime("booking_documents", undefined, isSupabaseConfigured);
 
   // Sync with persistent document repository and window events
   useEffect(() => {
@@ -639,6 +678,9 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
 
     window.addEventListener("nashmia:document-saved", handleDocumentSaved);
     window.addEventListener("nashmia:attachment-saved", handleDocumentSaved);
+    window.addEventListener("nashmia_documents_updated", syncFromServer);
+    window.addEventListener("nashmia_document_uploaded", syncFromServer);
+    window.addEventListener("nashmia_document_linked", syncFromServer);
     window.addEventListener("nashmia:document-deleted", handleDocumentDeleted);
     window.addEventListener("nashmia_movement_cutoff_updated", handleCutoffUpdated);
     window.addEventListener("storage", handleStorageUpdate);
@@ -647,15 +689,18 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
       clearInterval(pollInterval);
       window.removeEventListener("nashmia:document-saved", handleDocumentSaved);
       window.removeEventListener("nashmia:attachment-saved", handleDocumentSaved);
+      window.removeEventListener("nashmia_documents_updated", syncFromServer);
+      window.removeEventListener("nashmia_document_uploaded", syncFromServer);
+      window.removeEventListener("nashmia_document_linked", syncFromServer);
       window.removeEventListener("nashmia:document-deleted", handleDocumentDeleted);
       window.removeEventListener("nashmia_movement_cutoff_updated", handleCutoffUpdated);
       window.removeEventListener("storage", handleStorageUpdate);
     };
   }, []);
 
-  // Helper to render Document Icon Badge matching design
+  // Helper to render Document Icon matching reference design
   const renderDocumentBadge = (file: DriveFile) => {
-    return <FileThumbnailIcon file={file} size="md" showFormatTag={false} />;
+    return <MinimalDocumentIcon file={file} size="md" />;
   };
 
   // Helper to render Type Pill Badge matching design
@@ -762,6 +807,7 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
         totalCount={totalCount}
         cutoffCount={cutoffCount}
         blCount={blCount}
+        unassignedCount={unassignedCount}
         otherCount={otherCount}
         activeFilter={activeStatFilter}
         onSelectFilter={(filter) => {
@@ -1193,7 +1239,9 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
                       {/* Movement Reference Number */}
                       <td className="px-4 py-4.5">
                         <div className="flex flex-col">
-                          {movement !== "—" ? (
+                          {movement !== "—" &&
+                          movement !== "UNASSIGNED" &&
+                          !file.metadata?.isUnassigned ? (
                             <button
                               type="button"
                               onClick={(e) => {
@@ -1208,9 +1256,19 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
                               {movement}
                             </button>
                           ) : (
-                            <span className="font-medium text-[13px] text-slate-400 font-mono">
-                              —
-                            </span>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setManualReviewDoc(file);
+                                setManualReviewModalOpen(true);
+                              }}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-50 hover:bg-amber-100/80 text-amber-800 border border-amber-200 text-xs font-semibold cursor-pointer transition-all shadow-2xs w-fit"
+                              title="Click to link this document to a movement"
+                            >
+                              <LinkIcon className="size-3 text-amber-600" />
+                              <span>Link Movement</span>
+                            </button>
                           )}
                           <span className="text-[11.5px] text-slate-500 font-normal">{vessel}</span>
                         </div>
@@ -1261,8 +1319,12 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
 
                       {/* Status */}
                       <td className="px-4 py-4.5">
-                        {status === "Saved to Supabase Storage" ||
-                        status === "Stored in Supabase" ? (
+                        {file.metadata?.isUnassigned || status === "Unassigned" ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11.5px] font-semibold bg-amber-50 text-amber-700 border border-amber-200/60">
+                            Unassigned
+                          </span>
+                        ) : status === "Saved to Supabase Storage" ||
+                          status === "Stored in Supabase" ? (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11.5px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/60">
                             <Check className="size-3 text-emerald-600" /> Stored in Supabase
                           </span>
@@ -1290,39 +1352,14 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
                         className="pr-6 pl-4 py-4.5 text-right"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <div className="flex items-center justify-end gap-1">
-                          {(file.url || file.metadata?.fileUrl) && (
-                            <button
-                              type="button"
-                              onClick={() => handleOpenStoredDocument(file)}
-                              title="Open Stored Document"
-                              className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
-                            >
-                              <ExternalLink className="size-4" />
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => handlePreviewFile(file)}
-                            title="Preview Document & Details"
-                            className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
-                          >
-                            <Eye className="size-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDownloadFile(file)}
-                            title="Download Document"
-                            className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
-                          >
-                            <Download className="size-4" />
-                          </button>
+                        <div className="flex items-center justify-end">
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                               <button
                                 type="button"
-                                title="More Options"
-                                className="size-8 rounded-full flex items-center justify-center text-slate-400 hover:text-slate-800 hover:bg-slate-100 transition-colors cursor-pointer"
+                                title="Actions"
+                                aria-label="Row actions"
+                                className="p-1.5 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
                               >
                                 <MoreVertical className="size-4" />
                               </button>
@@ -1337,6 +1374,20 @@ export function DocumentsPage({ onOpenMobileMenu }: DocumentsPageProps) {
                                   Open Stored Document
                                 </DropdownMenuItem>
                               )}
+                              <DropdownMenuItem
+                                onClick={() => {
+                                  setManualReviewDoc(file);
+                                  setManualReviewModalOpen(true);
+                                }}
+                                className="gap-2 cursor-pointer font-medium text-blue-700"
+                              >
+                                <LinkIcon className="size-3.5 text-blue-600" />
+                                {file.metadata?.isUnassigned ||
+                                !file.metadata?.movementNumber ||
+                                file.metadata?.movementNumber === "—"
+                                  ? "Link to Movement"
+                                  : "Change Movement Link"}
+                              </DropdownMenuItem>
                               <DropdownMenuItem
                                 onClick={() => handleDownloadFile(file)}
                                 className="gap-2 cursor-pointer"

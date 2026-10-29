@@ -11,6 +11,7 @@ import {
 } from "./supabase-services";
 import type {
   BookingRequestRecord,
+  BookingConfirmationPayload,
   RequestStatus,
   RequestPriority,
   RequestsStatsSummary,
@@ -142,6 +143,8 @@ export function mapBookingRecordToRequest(booking: FullBookingRecord): BookingRe
     booking.movement_number ||
     (booking.booking_reference?.startsWith("MOV-") ? booking.booking_reference : undefined);
 
+  const conf = (booking.confirmation_details as BookingConfirmationPayload) || {};
+
   return {
     id: booking.id,
     reference:
@@ -190,35 +193,53 @@ export function mapBookingRecordToRequest(booking: FullBookingRecord): BookingRe
     supplierCity:
       booking.supplier?.city || (booking as { supplierCity?: string })?.supplierCity || "",
     supplierLoadPoint: booking.supplier?.load_point || "",
-    forwarderId: isConfirmed ? booking.forwarder_id || undefined : undefined,
+    forwarderId: isConfirmed
+      ? (conf.confirmed_forwarder_id as string) || booking.forwarder_id || undefined
+      : undefined,
     forwarderName: isConfirmed
-      ? (booking.forwarder as { name?: string })?.name ||
+      ? (conf.confirmed_forwarder_name as string) ||
+        (booking.forwarder as { name?: string })?.name ||
         booking.forwarder?.company_name ||
         booking.forwarder_name ||
         "Forwarder"
       : "Pending Award",
-    forwarderCode: booking.forwarder?.code || "FORWARDER",
-    forwarderEmail: booking.forwarder?.email || undefined,
+    forwarderCode:
+      (conf.confirmed_forwarder_code as string) || booking.forwarder?.code || "FORWARDER",
+    forwarderEmail:
+      (conf.confirmed_forwarder_email as string) || booking.forwarder?.email || undefined,
     polCode,
     polName,
     podCode,
     podName,
-    requestedEtd: etdStr,
+    requestedEtd: (conf.etd as string) || etdStr,
     estimatedEta:
-      booking.eta || new Date(etdDate.getTime() + 21 * 86400000).toISOString().split("T")[0],
+      (conf.eta as string) ||
+      booking.eta ||
+      new Date(etdDate.getTime() + 21 * 86400000).toISOString().split("T")[0],
     containerSize: (booking.container_size as ContainerSize) || "40HC",
     containerType: booking.container_type || "High Cube Dry",
     containerCount,
     allocatedContainers: booking.containers?.map((c) => c.container_number),
     preferredCarrier,
-    assignedCarrier: preferredCarrier,
-    vesselName: booking.vessel_name || "Pending Allocation",
-    voyageNumber: booking.voyage_number || "—",
-    ratePerContainer,
-    totalFreight,
-    currency: booking.currency || "USD",
+    assignedCarrier: (conf.shipping_line as string) || (conf.carrier as string) || preferredCarrier,
+    vesselName:
+      (conf.vessel_name as string) ||
+      booking.vessel_name ||
+      (isConfirmed ? undefined : "Pending Allocation"),
+    voyageNumber:
+      (conf.voyage_number as string) || booking.voyage_number || (isConfirmed ? undefined : "—"),
+    ratePerContainer:
+      (conf.agreed_rate as number) ||
+      (conf.finalRate as number) ||
+      booking.rate_amount ||
+      ratePerContainer,
+    totalFreight:
+      (conf.total_freight as number) ||
+      ((conf.agreed_rate as number) ? (conf.agreed_rate as number) * containerCount : undefined) ||
+      totalFreight,
+    currency: (conf.currency as string) || booking.currency || "USD",
     rateCardId: booking.rate_card_id || undefined,
-    rateValidUntil: "—",
+    rateValidUntil: isConfirmed ? undefined : "—",
     cargo: {
       description: booking.product_description || "Commercial Export Cargo",
       totalWeightKg,
@@ -250,7 +271,11 @@ export function mapBookingRecordToRequest(booking: FullBookingRecord): BookingRe
         }
       )?.cut_off_dates?.portCutoff ||
       `${vgmCutoffDate.toISOString().split("T")[0]} 22:00`,
-    specialInstructions: booking.special_instructions || booking.notes || undefined,
+    specialInstructions:
+      (conf.special_instructions as string) ||
+      booking.special_instructions ||
+      booking.notes ||
+      undefined,
     revisionNotes:
       status === "Revision Requested"
         ? booking.special_instructions || "Awaiting updated documentation or weight adjustments."
@@ -260,6 +285,37 @@ export function mapBookingRecordToRequest(booking: FullBookingRecord): BookingRe
       email: booking.supplier?.email || "operations@nashmia.com",
       phone: booking.supplier?.phone || "—",
     },
+    // Confirmed Movement & Booking Receipt details
+    isConfirmed,
+    isMovementConfirmed: Boolean(booking.is_movement_confirmed) || isConfirmed,
+    pickupDate:
+      (conf.pickup_date as string) ||
+      (conf.pickupDate as string) ||
+      booking.loading_date ||
+      undefined,
+    pickupAddress:
+      (conf.pickup_address as string) ||
+      (conf.pickupAddress as string) ||
+      booking.supplier?.load_point ||
+      undefined,
+    shippingLine:
+      (conf.shipping_line as string) ||
+      (conf.shippingLine as string) ||
+      (conf.carrier as string) ||
+      booking.carrier ||
+      preferredCarrier ||
+      undefined,
+    finalAgreedRate:
+      (conf.agreed_rate as number) ||
+      (conf.finalRate as number) ||
+      booking.rate_amount ||
+      (isConfirmed ? ratePerContainer : undefined),
+    finalRateCurrency: (conf.currency as string) || booking.currency || "USD",
+    forwarderPhone:
+      (conf.confirmed_forwarder_phone as string) ||
+      (booking.forwarder as { phone?: string })?.phone ||
+      undefined,
+    confirmationDetails: conf,
     events: booking.events,
   };
 }
@@ -437,7 +493,9 @@ export async function approveBookingRequestInSupabase(
     existing?.movement_number ||
     existing?.booking_reference ||
     existing?.reference ||
-    (requestId.startsWith("MOV-") || requestId.startsWith("NASH-") ? requestId : "NASH-BK-2026-7023");
+    (requestId.startsWith("MOV-") || requestId.startsWith("NASH-")
+      ? requestId
+      : "NASH-BK-2026-7023");
 
   // Call Server-Side API to update Supabase with Service Role
   try {

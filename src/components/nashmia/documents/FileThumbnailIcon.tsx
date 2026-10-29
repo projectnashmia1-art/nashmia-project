@@ -29,6 +29,77 @@ interface FileThumbnailIconProps {
   size?: "sm" | "md" | "lg" | "xl";
   className?: string;
   showFormatTag?: boolean;
+  variant?: "default" | "minimal";
+}
+
+/**
+ * Clean, minimal file-type icon matching reference design:
+ * - Red for PDF
+ * - Green for Excel (.xlsx, .xls, .csv)
+ * - Blue for Word (.docx, .doc)
+ * - Gray for text (.txt) or other file types
+ */
+export function MinimalDocumentIcon({
+  file,
+  className,
+  size = "md",
+}: {
+  file: Partial<DriveFile> & {
+    name: string;
+    type?: string;
+    extension?: string;
+    metadata?: (Partial<DriveFileMetadata> & Record<string, unknown>) | null;
+  };
+  className?: string;
+  size?: "sm" | "md" | "lg";
+}) {
+  const rawExt = (file.extension || file.name?.split(".").pop() || "").toLowerCase();
+  const rawType = (
+    file.type ||
+    (file.metadata?.displayDocumentType as string) ||
+    (file.metadata?.documentType as string) ||
+    ""
+  ).toLowerCase();
+
+  let colorClass = "text-slate-400"; // default gray for text / other
+
+  if (rawExt === "pdf" || rawType.includes("pdf")) {
+    colorClass = "text-red-500"; // red for PDF
+  } else if (
+    ["xlsx", "xls", "csv"].includes(rawExt) ||
+    rawType.includes("excel") ||
+    rawType.includes("spreadsheet") ||
+    rawType.includes("sheet")
+  ) {
+    colorClass = "text-emerald-500"; // green for Excel
+  } else if (
+    ["docx", "doc"].includes(rawExt) ||
+    rawType.includes("word") ||
+    rawType.includes("document")
+  ) {
+    colorClass = "text-blue-500"; // blue for Word
+  } else {
+    colorClass = "text-slate-400"; // gray for text or other file types
+  }
+
+  const sizeClass = size === "sm" ? "size-4" : size === "lg" ? "size-6" : "size-4.5 sm:size-5";
+
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={cn("shrink-0 transition-colors", sizeClass, colorClass, className)}
+    >
+      <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+      <polyline points="14 2 14 8 20 8" />
+      <line x1="8" y1="13" x2="16" y2="13" />
+      <line x1="8" y1="17" x2="16" y2="17" />
+    </svg>
+  );
 }
 
 export function FileThumbnailIcon({
@@ -36,8 +107,19 @@ export function FileThumbnailIcon({
   size = "md",
   className,
   showFormatTag = false,
+  variant = "default",
 }: FileThumbnailIconProps) {
   const [imageError, setImageError] = useState(false);
+
+  if (variant === "minimal") {
+    return (
+      <MinimalDocumentIcon
+        file={file}
+        className={className}
+        size={size === "lg" || size === "xl" ? "lg" : size === "sm" ? "sm" : "md"}
+      />
+    );
+  }
 
   const rawExt = (file.extension || file.name.split(".").pop() || "").toLowerCase();
   const fileType = file.type || getFileTypeFromExt(rawExt);

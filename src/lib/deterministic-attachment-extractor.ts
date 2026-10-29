@@ -336,8 +336,8 @@ export async function extractTextFromPdf(
         }
       } else {
         const pdfParseFn =
-          (pdfParseModule as unknown as { default?: (b: Buffer) => Promise<{ text: string }> }).default ||
-          (pdfParseModule as unknown as (b: Buffer) => Promise<{ text: string }>);
+          (pdfParseModule as unknown as { default?: (b: Buffer) => Promise<{ text: string }> })
+            .default || (pdfParseModule as unknown as (b: Buffer) => Promise<{ text: string }>);
         if (typeof pdfParseFn === "function") {
           const data = await pdfParseFn(buffer);
           rawText = (data?.text || "").trim();

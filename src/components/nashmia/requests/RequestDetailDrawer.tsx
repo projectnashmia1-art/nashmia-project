@@ -58,6 +58,7 @@ interface RequestDetailDrawerProps {
   onRequestQuotes?: (request: BookingRequestRecord) => void;
   onViewQuotations?: (request: BookingRequestRecord) => void;
   onOpenAwardDrawer?: (request: BookingRequestRecord) => void;
+  onConfirmBooking?: (request: BookingRequestRecord) => void;
 }
 
 export const RequestDetailDrawer = memo(function RequestDetailDrawer({
@@ -70,6 +71,7 @@ export const RequestDetailDrawer = memo(function RequestDetailDrawer({
   onRequestQuotes,
   onViewQuotations,
   onOpenAwardDrawer,
+  onConfirmBooking,
 }: RequestDetailDrawerProps) {
   const { userId } = useAuth();
   const [forwarderRequests, setForwarderRequests] = useState<ForwarderQuoteRequestRecord[]>([]);
@@ -925,17 +927,40 @@ export const RequestDetailDrawer = memo(function RequestDetailDrawer({
               Close
             </Button>
 
-            {request.status !== "Approved" && (
+            {onConfirmBooking && (
               <Button
                 type="button"
                 size="sm"
-                onClick={() => onApprove(request)}
-                className="bg-[#0FA3B1] font-semibold text-white hover:bg-[#0D919E]"
+                onClick={() => {
+                  onClose();
+                  onConfirmBooking(request);
+                }}
+                className="bg-emerald-600 font-bold text-white hover:bg-emerald-700 shadow-2xs"
               >
                 <CheckCircle2 className="mr-1.5 size-4" />
-                Approve & Release Booking
+                {request.status === "Approved" ||
+                request.status === "Confirmed" ||
+                request.status === "Booking Confirmed" ||
+                request.confirmationStatus === "CONFIRMED"
+                  ? "Update Confirmation"
+                  : "Confirm Booking"}
               </Button>
             )}
+
+            {request.status !== "Approved" &&
+              request.status !== "Confirmed" &&
+              request.status !== "Booking Confirmed" &&
+              request.confirmationStatus !== "CONFIRMED" && (
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => onApprove(request)}
+                  className="bg-[#0FA3B1] font-semibold text-white hover:bg-[#0D919E]"
+                >
+                  <CheckCircle2 className="mr-1.5 size-4" />
+                  Approve & Release Booking
+                </Button>
+              )}
           </div>
         </div>
         {/* Award Forwarder Modal */}

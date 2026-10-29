@@ -1443,8 +1443,7 @@ async function resolveConfidentMatchResult(
   // Fallback 3: Use sender display name or formatted email username
   if (!forwarderName && (senderName || senderEmail)) {
     const emailUser = (senderEmail || "").split("@")[0] || "Forwarder";
-    forwarderName =
-      senderName?.trim() || emailUser.charAt(0).toUpperCase() + emailUser.slice(1);
+    forwarderName = senderName?.trim() || emailUser.charAt(0).toUpperCase() + emailUser.slice(1);
     forwarderEmail = senderEmail;
   }
 

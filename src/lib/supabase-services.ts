@@ -129,7 +129,7 @@ export function deduplicateBookings<
  * Safely inserts a notification record into Supabase notifications table
  * preventing NOT NULL violations on user_id and catching errors gracefully.
  */
-export async function safeInsertNotification(payload: {
+export interface SafeNotificationPayload {
   userId?: string | null;
   user_id?: string | null;
   type?: string;
@@ -139,8 +139,20 @@ export async function safeInsertNotification(payload: {
   related_booking_id?: string | null;
   link?: string | null;
   is_read?: boolean;
-}): Promise<void> {
+}
+
+export async function safeInsertNotification(
+  arg1: unknown,
+  arg2?: SafeNotificationPayload,
+): Promise<void> {
   if (!isSupabaseConfigured) return;
+
+  // Support both safeInsertNotification(payload) and safeInsertNotification(supabase, payload)
+  const payload = (
+    arg2 && typeof arg2 === "object" && "title" in arg2 ? arg2 : arg1
+  ) as SafeNotificationPayload;
+
+  if (!payload || !payload.title) return;
 
   let targetUserId = safeUuid(payload.userId || payload.user_id);
 
@@ -166,25 +178,73 @@ export async function safeInsertNotification(payload: {
     }
   }
 
-  // If no real valid user UUID exists, do not perform raw Supabase insert
-  // to prevent NOT NULL / FK constraint errors in PostgreSQL
   if (!targetUserId) {
     return;
   }
 
   const cleanBookingId = safeUuid(payload.booking_id || payload.related_booking_id);
 
+  // PostgreSQL check constraint: ('info', 'success', 'warning', 'error', 'cutoff_warning', 'booking_status', 'email_received', 'system')
+  const rawType = (payload.type || "system").toLowerCase();
+  let dbType = "system";
+  if (
+    [
+      "info",
+      "success",
+      "warning",
+      "error",
+      "cutoff_warning",
+      "booking_status",
+      "email_received",
+      "system",
+    ].includes(rawType)
+  ) {
+    dbType = rawType;
+  } else if (
+    rawType.includes("confirm") ||
+    rawType.includes("status") ||
+    rawType.includes("booking")
+  ) {
+    dbType = "booking_status";
+  } else if (rawType.includes("quote") || rawType.includes("email") || rawType.includes("reply")) {
+    dbType = "email_received";
+  } else if (rawType.includes("cutoff")) {
+    dbType = "cutoff_warning";
+  } else {
+    dbType = "info";
+  }
+
   try {
-    await supabase.from("notifications").insert({
-      user_id: targetUserId,
-      type: payload.type || "system",
-      title: payload.title,
-      message: payload.message,
-      booking_id: cleanBookingId || undefined,
-      related_booking_id: cleanBookingId || undefined,
-      link: payload.link || "/requests",
-      is_read: payload.is_read ?? false,
-    });
+    const { data: inserted } = await supabase
+      .from("notifications")
+      .insert({
+        user_id: targetUserId,
+        type: dbType,
+        title: payload.title,
+        message: payload.message,
+        booking_id: cleanBookingId || undefined,
+        related_booking_id: cleanBookingId || undefined,
+        link: payload.link || "/requests",
+        is_read: payload.is_read ?? false,
+      })
+      .select("id")
+      .maybeSingle();
+
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("nashmia_notification_inserted", {
+          detail: {
+            id: inserted?.id || `safe-${Date.now()}`,
+            title: payload.title,
+            message: payload.message,
+            type: dbType,
+            link: payload.link || "/requests",
+            is_read: payload.is_read ?? false,
+            created_at: new Date().toISOString(),
+          },
+        }),
+      );
+    }
   } catch (err) {
     console.warn("[safeInsertNotification] Notice inserting notification:", err);
   }
@@ -398,9 +458,9 @@ export async function fetchBuyersFromSupabase(
       )
       .order("created_at", { ascending: false });
 
-    const validUserUuid = safeUuid(userId);
-    if (validUserUuid) {
-      query = query.or(`user_id.eq.${validUserUuid},user_id.not.is.null`);
+    // Organizational / collaborative scope: all active company buyers are accessible
+    if (options?.organizationId) {
+      query = query.eq("organization_id", options.organizationId);
     }
 
     if (options?.limit) {
@@ -656,20 +716,9 @@ export async function fetchSuppliersFromSupabase(
       )
       .order("created_at", { ascending: false });
 
-    let validUserUuid = safeUuid(userId);
-    if (!validUserUuid) {
-      try {
-        const { data: authData } = await supabase.auth.getUser();
-        if (authData?.user?.id) {
-          validUserUuid = safeUuid(authData.user.id);
-        }
-      } catch {
-        // Ignore user check
-      }
-    }
-
-    if (validUserUuid) {
-      query = query.or(`user_id.eq.${validUserUuid},user_id.is.null`);
+    // Organizational / collaborative scope: all active company suppliers are accessible
+    if (options?.organizationId) {
+      query = query.eq("organization_id", options.organizationId);
     }
 
     if (options?.limit) {
@@ -1033,20 +1082,9 @@ export async function fetchForwardersFromSupabase(
       )
       .order("company_name", { ascending: true });
 
-    let validUserUuid = safeUuid(userId);
-    if (!validUserUuid) {
-      try {
-        const { data: authData } = await supabase.auth.getUser();
-        if (authData?.user?.id) {
-          validUserUuid = safeUuid(authData.user.id);
-        }
-      } catch (authErr) {
-        console.warn("[fetchForwarders] User resolution notice:", authErr);
-      }
-    }
-
-    if (validUserUuid) {
-      query = query.or(`user_id.eq.${validUserUuid},user_id.is.null`);
+    // Organizational / collaborative scope: all active company forwarders are accessible
+    if (options?.organizationId) {
+      query = query.eq("organization_id", options.organizationId);
     }
 
     if (options?.limit) {
@@ -1377,9 +1415,9 @@ export async function fetchRateCardsFromSupabase(
       )
       .order("created_at", { ascending: false });
 
-    const validUserUuid = safeUuid(userId);
-    if (validUserUuid) {
-      query = query.or(`user_id.eq.${validUserUuid},user_id.is.null`);
+    // Organizational / collaborative scope: all active company rate cards are accessible
+    if (options?.organizationId) {
+      query = query.eq("organization_id", options.organizationId);
     }
 
     if (options?.limit) {
@@ -2153,39 +2191,59 @@ export function reconcileBookingWithConfirmations(b: FullBookingRecord): FullBoo
     }
   }
 
+  const conf = (b.confirmation_details as Record<string, unknown>) || {};
+  const explicitConfirmedFwd =
+    (conf.confirmed_forwarder_name as string) ||
+    (conf.forwarder_name as string) ||
+    (conf.forwarderName as string) ||
+    (conf.forwarder as string);
+
   // Forwarder Name rule: ONLY display forwarder name if explicitly confirmed or awarded!
   // If not confirmed/awarded yet, display "Pending Award" instead of defaulting to a random forwarder!
   const hasExplicitAward = Boolean(
+    explicitConfirmedFwd ||
     award?.awardedForwarderName ||
-    b.confirmed_by ||
     (isExplicitlyConfirmed &&
       ((b.forwarder as { name?: string })?.name || b.forwarder?.company_name || b.forwarder_name)),
   );
 
   const forwarderName = hasExplicitAward
-    ? award?.awardedForwarderName ||
-      b.confirmed_by ||
+    ? explicitConfirmedFwd ||
+      award?.awardedForwarderName ||
       (b.forwarder as { name?: string })?.name ||
       b.forwarder?.company_name ||
       b.forwarder_name ||
       ""
     : "Pending Award";
 
+  const explicitStage = (conf.current_stage as string) || (conf.lifecycle_stage as string);
+  const resolvedMovementStatus =
+    b.movement_status ||
+    (explicitStage ? toDbMovementStatus(explicitStage) : undefined) ||
+    (isExplicitlyConfirmed ? "CONFIRMED" : "REQUESTED");
+
   if (isExplicitlyConfirmed) {
     const normalized = normalizeBookingStatus(rawStatus);
     const effectiveStatus =
-      normalized === "Booking Requested" || normalized === "Draft" || !rawStatus
+      explicitStage ||
+      (normalized === "Booking Requested" || normalized === "Draft" || !rawStatus
         ? "Booking Confirmed"
-        : normalized;
+        : normalized);
 
     return {
       ...b,
       status: effectiveStatus,
+      movement_status: resolvedMovementStatus,
       confirmation_status: "CONFIRMED",
       confirmed_at: b.confirmed_at || award?.awardedAt || new Date().toISOString(),
-      confirmed_by: b.confirmed_by || award?.awardedForwarderName || "Operations Desk",
+      confirmed_by: b.confirmed_by || "Operations Desk",
       supplier_name: supplierName,
       forwarder_name: forwarderName,
+      forwarder:
+        b.forwarder ||
+        (forwarderName && forwarderName !== "Pending Award"
+          ? { name: forwarderName, company_name: forwarderName }
+          : null),
       buyer_name: buyerName,
       rate_amount: award?.rate || b.rate_amount,
       total_freight:
@@ -2258,10 +2316,45 @@ export const OPTIMIZED_BOOKINGS_SELECT = `
   events:booking_events(id, booking_id, container_id, event_type, title, description, location, occurred_at, event_date, payload, created_at)
 `;
 
+// SWR In-Memory Bookings Cache
+let clientBookingsCache: {
+  data: FullBookingRecord[];
+  timestamp: number;
+  key: string;
+} | null = null;
+
+const CLIENT_CACHE_TTL_MS = 15000; // 15 seconds SWR freshness window
+
+/**
+ * Instantly invalidates client-side bookings cache and dispatches refresh event
+ */
+export function invalidateBookingsCache(): void {
+  clientBookingsCache = null;
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("nashmia_bookings_updated", {
+        detail: { cacheInvalidated: true, timestamp: Date.now() },
+      }),
+    );
+  }
+}
+
 export async function fetchBookingsFromSupabase(
   userId?: string | null,
   options?: { limit?: number; offset?: number; organizationId?: string | null },
 ): Promise<FullBookingRecord[]> {
+  const cacheKey = `${userId || "all"}_${options?.limit || 500}_${options?.offset || 0}_${options?.organizationId || "global"}`;
+  const now = Date.now();
+
+  // If fresh in client SWR cache, return immediately for instant page render
+  if (
+    clientBookingsCache &&
+    clientBookingsCache.key === cacheKey &&
+    now - clientBookingsCache.timestamp < CLIENT_CACHE_TTL_MS
+  ) {
+    return clientBookingsCache.data;
+  }
+
   // 1. Try server-side API on client for real-time backend synchronization
   if (typeof window !== "undefined") {
     try {
@@ -2271,11 +2364,18 @@ export async function fetchBookingsFromSupabase(
       const res = await fetch(`/api/bookings${limitQuery}`);
       if (res.ok) {
         const json = await res.json();
-        if (json.success && Array.isArray(json.bookings)) {
+        // Return genuine database records from API (including fast server-side SWR cache)
+        if (
+          json.success &&
+          Array.isArray(json.bookings) &&
+          json.bookings.length > 0
+        ) {
           const dbBookings = (json.bookings as FullBookingRecord[]).map(
             reconcileBookingWithConfirmations,
           );
-          return deduplicateBookings(dbBookings);
+          const deduped = deduplicateBookings(dbBookings);
+          clientBookingsCache = { data: deduped, timestamp: Date.now(), key: cacheKey };
+          return deduped;
         }
       }
     } catch {
@@ -2305,7 +2405,7 @@ export async function fetchBookingsFromSupabase(
     let { data, error } = await query;
     if (error) {
       console.warn(
-        "[Supabase fetchBookings] Query with joins had notice, falling back to base select:",
+        "[Supabase fetchBookings] Query with joins had notice, falling back to base select with relational stitching:",
         error.message,
       );
       // Fallback query to core table without complex joins in case of schema discrepancy
@@ -2324,9 +2424,82 @@ export async function fetchBookingsFromSupabase(
           fallbackQuery = fallbackQuery.limit(defaultLimit);
         }
         const fallbackRes = await fallbackQuery;
-        if (!fallbackRes.error && fallbackRes.data) {
-          data = fallbackRes.data;
+        if (!fallbackRes.error && fallbackRes.data && fallbackRes.data.length > 0) {
+          let stitchedData: Record<string, unknown>[] = fallbackRes.data as Record<
+            string,
+            unknown
+          >[];
           error = null;
+
+          // Relational stitching: retrieve missing foreign entities in parallel so relations never vanish
+          try {
+            const buyerIds = Array.from(
+              new Set(stitchedData.map((b) => b.buyer_id as string).filter(Boolean)),
+            );
+            const supplierIds = Array.from(
+              new Set(stitchedData.map((b) => b.supplier_id as string).filter(Boolean)),
+            );
+            const forwarderIds = Array.from(
+              new Set(stitchedData.map((b) => b.forwarder_id as string).filter(Boolean)),
+            );
+            const bookingIds = stitchedData.map((b) => b.id as string).filter(Boolean);
+
+            const [buyersRes, suppliersRes, forwardersRes, containersRes] = await Promise.all([
+              buyerIds.length > 0
+                ? supabase
+                    .from("buyers")
+                    .select(
+                      "id, name, company_name, consignee, contact_person, email, phone, country",
+                    )
+                    .in("id", buyerIds)
+                : Promise.resolve({ data: [] }),
+              supplierIds.length > 0
+                ? supabase
+                    .from("suppliers")
+                    .select("id, name, company_name, contact_person, email, phone, country")
+                    .in("id", supplierIds)
+                : Promise.resolve({ data: [] }),
+              forwarderIds.length > 0
+                ? supabase
+                    .from("forwarders")
+                    .select("id, name, company_name, contact_person, email, phone, code")
+                    .in("id", forwarderIds)
+                : Promise.resolve({ data: [] }),
+              bookingIds.length > 0
+                ? supabase
+                    .from("booking_containers")
+                    .select(
+                      "id, booking_id, container_number, seal_number, container_size, container_type, weight, weight_unit, status",
+                    )
+                    .in("booking_id", bookingIds)
+                : Promise.resolve({ data: [] }),
+            ]);
+
+            const buyerMap = new Map((buyersRes.data || []).map((by) => [by.id, by]));
+            const supplierMap = new Map((suppliersRes.data || []).map((sp) => [sp.id, sp]));
+            const forwarderMap = new Map((forwardersRes.data || []).map((fw) => [fw.id, fw]));
+            const containerMap = new Map<string, unknown[]>();
+            for (const c of containersRes.data || []) {
+              if (c.booking_id) {
+                if (!containerMap.has(c.booking_id)) containerMap.set(c.booking_id, []);
+                containerMap.get(c.booking_id)!.push(c);
+              }
+            }
+
+            stitchedData = stitchedData.map((b) => ({
+              ...b,
+              buyer: b.buyer || (b.buyer_id ? buyerMap.get(b.buyer_id as string) : null),
+              supplier:
+                b.supplier || (b.supplier_id ? supplierMap.get(b.supplier_id as string) : null),
+              forwarder:
+                b.forwarder || (b.forwarder_id ? forwarderMap.get(b.forwarder_id as string) : null),
+              containers: b.containers || containerMap.get(b.id as string) || [],
+            }));
+          } catch (stitchingErr) {
+            console.warn("[Supabase fetchBookings] Fallback stitching notice:", stitchingErr);
+          }
+
+          data = stitchedData as unknown as FullBookingRecord[];
         }
       } catch {
         // Keep original error
@@ -2341,7 +2514,9 @@ export async function fetchBookingsFromSupabase(
       reconcileBookingWithConfirmations,
     );
 
-    return deduplicateBookings(dbBookings);
+    const deduped = deduplicateBookings(dbBookings);
+    clientBookingsCache = { data: deduped, timestamp: Date.now(), key: cacheKey };
+    return deduped;
   } catch (err) {
     console.warn("[Supabase fetchBookings] Direct query notice:", err);
     return [];
@@ -2990,13 +3165,17 @@ export async function updateBookingStatusInSupabase(
       ? `Movement ${movementRef} has been confirmed by the forwarder.`
       : `Booking stage progressed to ${newStatus}.`;
 
+    const targetLink = isConfirmed
+      ? `/?ref=${encodeURIComponent(movementRef)}&openDrawer=true`
+      : `/requests?ref=${encodeURIComponent(movementRef)}&openDrawer=true`;
+
     await safeInsertNotification({
       userId,
       type: isConfirmed ? "booking_confirmed" : "milestone",
       title: notifTitle,
       message: notifMessage,
       booking_id: safeUuid(bookingId),
-      link: "/requests",
+      link: targetLink,
       is_read: false,
     });
   } catch (err) {
@@ -3020,6 +3199,20 @@ export async function updateBookingDetailsInSupabase(
 
     if (error) {
       console.warn("[Supabase updateBookingDetails] Notice:", error.message);
+    }
+
+    if (updates.eta) {
+      const localBooking = getLocalBookings().find((b) => b.id === bookingId);
+      const movementRef =
+        localBooking?.movement_number || localBooking?.booking_reference || bookingId;
+      await safeInsertNotification({
+        type: "booking_status",
+        title: `ETA Update: ${movementRef}`,
+        message: `Vessel arrival for movement ${movementRef} updated to ${updates.eta}.`,
+        booking_id: safeUuid(bookingId),
+        link: `/?ref=${encodeURIComponent(movementRef)}&openDrawer=true`,
+        is_read: false,
+      });
     }
   } catch (err) {
     console.warn("[Supabase updateBookingDetails] Notice:", err);

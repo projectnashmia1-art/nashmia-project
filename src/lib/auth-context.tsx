@@ -22,7 +22,10 @@ interface AuthContextType {
   isConfigured: boolean;
   userId: string | null;
   organizationId: string | null;
-  signIn: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  isAdmin: boolean;
+  userRole: "admin" | "user";
+  username: string;
+  signIn: (identifier: string, password: string) => Promise<{ success: boolean; error?: string }>;
   signUp: (
     email: string,
     password: string,
@@ -128,13 +131,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [fetchProfile]);
 
   const signIn = useCallback(
-    async (email: string, password: string) => {
+    async (identifier: string, password: string) => {
       if (!isSupabaseConfigured) {
         return { success: false, error: "Supabase connection is not configured." };
       }
       try {
+        let emailToAuth = identifier.trim().toLowerCase();
+        if (!emailToAuth.includes("@")) {
+          // Automatic internal domain mapping for usernames
+          emailToAuth = `${emailToAuth}@nashmia.internal`;
+        }
+
         const { data, error } = await supabase.auth.signInWithPassword({
-          email: email.trim().toLowerCase(),
+          email: emailToAuth,
           password,
         });
 
@@ -143,6 +152,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         if (data.user) {
+          // Immediately enforce account status: block deactivated users
+          const meta = data.user.user_metadata || {};
+          const isBanned = Boolean(
+            data.user.banned_until && new Date(data.user.banned_until).getTime() > Date.now(),
+          );
+          const isDeactivated = isBanned || meta.is_active === false || meta.status === "inactive";
+
+          if (isDeactivated) {
+            await supabase.auth.signOut();
+            return {
+              success: false,
+              error: "Your account has been deactivated. Please contact an administrator.",
+            };
+          }
+
           setUser(data.user);
           setSession(data.session);
           await fetchProfile(data.user.id, data.user.email);
@@ -257,6 +281,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     );
   }, [profile, user]);
 
+  const userRole = useMemo<"admin" | "user">(() => {
+    const email = user?.email?.toLowerCase().trim() || "";
+    if (email === "fleeksaas@gmail.com") return "admin";
+    const metaRole = (user?.user_metadata?.role as string)?.toLowerCase();
+    const profileRole = (profile as Record<string, unknown> | null)?.role as string;
+    if (metaRole === "admin" || (profileRole && profileRole.toLowerCase() === "admin")) return "admin";
+    return "user";
+  }, [user, profile]);
+
+  const isAdmin = userRole === "admin";
+
+  const username = useMemo<string>(() => {
+    const metaUsername = user?.user_metadata?.username as string;
+    if (metaUsername) return metaUsername;
+    const email = user?.email || "";
+    if (email.endsWith("@nashmia.internal")) {
+      return email.replace("@nashmia.internal", "");
+    }
+    return email ? email.split("@")[0] : "";
+  }, [user]);
+
   const contextValue = useMemo<AuthContextType>(
     () => ({
       user,
@@ -266,6 +311,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isConfigured: isSupabaseConfigured,
       userId: user?.id ?? null,
       organizationId,
+      isAdmin,
+      userRole,
+      username,
       signIn,
       signUp,
       resetPassword,
@@ -278,6 +326,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       profile,
       loading,
       organizationId,
+      isAdmin,
+      userRole,
+      username,
       signIn,
       signUp,
       resetPassword,

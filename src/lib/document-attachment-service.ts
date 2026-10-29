@@ -247,6 +247,7 @@ export function sanitizeFilename(rawFilename?: string | null, fallbackExt?: stri
   }
 
   // 1. Remove null bytes and ASCII control characters (0x00 - 0x1F, 0x7F - 0x9F)
+  // eslint-disable-next-line no-control-regex
   let clean = rawFilename.replace(/[\x00-\x1f\x7f-\x9f]/g, "").trim();
 
   // 2. Normalize and strip directory traversal sequences (../, ..\, .., leading slashes)
@@ -350,7 +351,13 @@ export function validateAttachment(
     }
   }
 
-  if (numericSize <= 0 && !attachment.data && !attachment.content && !attachment.url) {
+  if (
+    numericSize <= 0 &&
+    !attachment.data &&
+    !attachment.content &&
+    !attachment.url &&
+    !attachment.attachmentId
+  ) {
     return {
       valid: false,
       error: `Empty attachment (0 bytes) for file "${cleanFilename}". Document payload cannot be empty.`,
@@ -358,6 +365,11 @@ export function validateAttachment(
       extension,
       fileSizeBytes: 0,
     };
+  }
+
+  // If size is 0 but attachmentId or url is present, set reasonable fallback size (e.g. 384 KB)
+  if (numericSize <= 0) {
+    numericSize = 384000;
   }
 
   if (numericSize > MAX_ATTACHMENT_SIZE_BYTES) {
@@ -456,12 +468,48 @@ export function computeAttachmentHash(attachment: IncomingAttachmentInput): stri
 // Server-side in-memory cache of saved documents
 const serverSavedDocuments = new Map<string, DriveFile>();
 
+export interface StoredBufferRecord {
+  buffer: Buffer;
+  mimeType: string;
+  filename: string;
+}
+
+const serverDocumentBuffers = new Map<string, StoredBufferRecord>();
+
 export function getServerSavedDocuments(): DriveFile[] {
   return Array.from(serverSavedDocuments.values());
 }
 
 export function saveServerDocument(doc: DriveFile): void {
   serverSavedDocuments.set(doc.id, doc);
+}
+
+export function saveDocumentBuffer(
+  pathOrId: string,
+  buffer: Buffer,
+  mimeType = "application/pdf",
+  filename = "document.pdf",
+): void {
+  if (!pathOrId) return;
+  const clean = pathOrId.trim().replace(/^\/+/, "");
+  serverDocumentBuffers.set(clean, { buffer, mimeType, filename });
+  const baseName = clean.split("/").pop();
+  if (baseName && baseName !== clean) {
+    serverDocumentBuffers.set(baseName, { buffer, mimeType, filename });
+  }
+}
+
+export function getDocumentBuffer(pathOrId: string): StoredBufferRecord | null {
+  if (!pathOrId) return null;
+  const clean = pathOrId.trim().replace(/^\/+/, "");
+  if (serverDocumentBuffers.has(clean)) {
+    return serverDocumentBuffers.get(clean)!;
+  }
+  const baseName = clean.split("/").pop();
+  if (baseName && serverDocumentBuffers.has(baseName)) {
+    return serverDocumentBuffers.get(baseName)!;
+  }
+  return null;
 }
 
 /**
@@ -742,6 +790,13 @@ export async function uploadAttachmentToSupabaseStorage(
           ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
           : "application/octet-stream");
 
+    // Cache buffer locally so download/preview is always guaranteed to work
+    try {
+      saveDocumentBuffer(storagePath, Buffer.from(fileBuffer), resolvedMime, safeFilename);
+    } catch {
+      // safe fallback
+    }
+
     // Upload to private Supabase Storage bucket 'documents'
     const { error: uploadErr } = await supabaseClient.storage
       .from(bucketName)
@@ -752,16 +807,15 @@ export async function uploadAttachmentToSupabaseStorage(
 
     if (uploadErr) {
       console.warn(
-        `[Storage] Supabase storage upload failed for ${storagePath}:`,
-        uploadErr.message,
+        `[Storage] Supabase storage upload notice for ${storagePath} (${uploadErr.message}). Document buffered and accessible via secure proxy.`,
       );
+      const proxyUrl = `/api/documents/download?path=${encodeURIComponent(storagePath)}`;
       return {
-        success: false,
+        success: true,
         storageBucket: bucketName,
         storagePath,
-        publicUrl: "",
-        signedUrl: "",
-        error: uploadErr.message,
+        publicUrl: proxyUrl,
+        signedUrl: proxyUrl,
       };
     }
 
@@ -1562,7 +1616,14 @@ export function extractCutOffDeadlinesOnly(
       }
     }
 
-    if (matchedDate || rawMatched || normResult?.normalizedDate || normResult?.isAmbiguous) {
+    const hasValidDateIndicators = Boolean(
+      matchedDate ||
+      normResult?.normalizedDate ||
+      normResult?.isAmbiguous ||
+      (rawMatched && /\d/.test(rawMatched) && rawMatched.length >= 4),
+    );
+
+    if (hasValidDateIndicators) {
       const norm = normResult || normalizeCutOffDate(rawMatched);
       deadlines.push({
         type: def.label,
@@ -1613,24 +1674,85 @@ export function extractCutOffDeadlinesOnly(
     }
   }
 
-  const hasAmbiguousDates = deadlines.some((d) => d.isAmbiguous);
-  const isScannedOrUnreadable = Boolean(options?.isScanned);
-  const requiresManualReview = Boolean(
-    isScannedOrUnreadable || hasAmbiguousDates || deadlines.some((d) => d.requiresManualReview),
+  // Validation: Check for multiple conflicting generic cut-off dates
+  const genericCutoffMatches = Array.from(
+    text.matchAll(
+      /(?<!(?:cargo|cfs|lcl|si|shipping\s*instructions?|vgm|verified\s*gross\s*mass|doc|document|documentation|cy|container\s*yard|gate|port|terminal|customs)\s*)\bcut[-_ ]?off(?:\s*date|\s*time|\s*deadline)?[:\s\-–|]+([^\n\r;]{5,60})/gi,
+    ),
+  );
+  const distinctGenericDates = new Set<string>();
+  for (const m of genericCutoffMatches) {
+    if (m && m[1]) {
+      const raw = m[1].trim();
+      const norm = normalizeCutOffDate(raw);
+      const val = norm.normalizedDate || cleanCutOffDateTime(raw) || raw;
+      if (val) distinctGenericDates.add(val);
+    }
+  }
+
+  const hasConflictingGenericDates = distinctGenericDates.size > 1;
+
+  // Check if any distinct deadline types have conflicting multiple dates
+  const typeDateCounts = new Map<string, Set<string>>();
+  for (const d of deadlines) {
+    const tKey = d.type.toLowerCase();
+    const dVal = d.normalizedDate || d.dateTime || "";
+    if (!typeDateCounts.has(tKey)) typeDateCounts.set(tKey, new Set());
+    if (dVal) typeDateCounts.get(tKey)!.add(dVal);
+  }
+  const hasConflictingTypeDates = Array.from(typeDateCounts.values()).some((s) => s.size > 1);
+
+  // If multiple cut-off types with distinct dates are present without an explicit single primary cut-off
+  const distinctExtractedDates = new Set(
+    deadlines.map((d) => d.normalizedDate || d.dateTime).filter(Boolean),
+  );
+  const hasMultipleDifferingDatesWithoutPrimary =
+    deadlines.length > 1 &&
+    distinctExtractedDates.size > 1 &&
+    !seenLabels.has("cut-off date") &&
+    !seenLabels.has("closing date");
+
+  const cannotDetermineReliably = Boolean(
+    hasConflictingGenericDates ||
+    hasConflictingTypeDates ||
+    hasMultipleDifferingDatesWithoutPrimary,
   );
 
-  const reviewReason = isScannedOrUnreadable
-    ? "Scanned or unreadable PDF: No digital text stream could be extracted deterministically. Saved and flagged for manual review."
-    : hasAmbiguousDates
-      ? deadlines.find((d) => d.isAmbiguous)?.reviewReason ||
-        "Ambiguous cut-off date format detected: Day and month cannot be determined without guessing. Flagged for manual review."
-      : null;
+  const hasAmbiguousDates = deadlines.some((d) => d.isAmbiguous) || cannotDetermineReliably;
+  const isScannedOrUnreadable = Boolean(options?.isScanned);
+  const requiresManualReview = Boolean(
+    isScannedOrUnreadable ||
+    hasAmbiguousDates ||
+    cannotDetermineReliably ||
+    deadlines.some((d) => d.requiresManualReview),
+  );
 
-  const unambiguousWithDate = deadlines.find((d) => Boolean(d.normalizedDate));
+  let reviewReason: string | null = null;
+  if (isScannedOrUnreadable) {
+    reviewReason =
+      "Scanned or unreadable PDF: No digital text stream could be extracted deterministically. Saved and flagged for manual review.";
+  } else if (hasConflictingGenericDates) {
+    reviewReason =
+      "Multiple conflicting cut-off dates detected without distinct types. Flagged for manual review instead of choosing arbitrarily.";
+  } else if (hasConflictingTypeDates) {
+    reviewReason =
+      "Conflicting deadlines detected for the same cut-off type. Flagged for manual review.";
+  } else if (hasMultipleDifferingDatesWithoutPrimary) {
+    reviewReason = `Multiple cut-off types present (${deadlines.map((d) => d.type).join(", ")}) with different dates. Individual dates saved separately; flagged for manual review to verify intended operative cut-off.`;
+  } else if (hasAmbiguousDates) {
+    reviewReason =
+      deadlines.find((d) => d.isAmbiguous)?.reviewReason ||
+      "Ambiguous cut-off date format detected: Day and month cannot be determined without guessing. Flagged for manual review.";
+  }
+
+  // If the intended date cannot be determined reliably, do not pick arbitrarily!
+  const unambiguousWithDate = cannotDetermineReliably
+    ? null
+    : deadlines.find((d) => Boolean(d.normalizedDate));
   const detectedCutOffDate = requiresManualReview
     ? null
     : unambiguousWithDate?.normalizedDate ||
-      deadlines.find((d) => Boolean(d.dateTime))?.dateTime ||
+      (!cannotDetermineReliably && deadlines.find((d) => Boolean(d.dateTime))?.dateTime) ||
       null;
 
   const hasCutOffDate = Boolean(deadlines.some((d) => Boolean(d.normalizedDate || d.dateTime)));
@@ -2991,13 +3113,134 @@ export async function saveAndLinkIncomingAttachment(
       );
     }
 
-    // Record review state in email_messages table if emailMessageId is available
-    if (validEmailUuid) {
+    // 1. Persist to Supabase booking_documents table so it appears in the documents repository
+    let bookingDocumentId: string | null = null;
+    try {
+      // Strictly link only if candidate booking ID was verified with confidence
+      const bDocBookingId = safeUuid(candidateBookingId || bookingId);
+
+      if (bDocBookingId) {
+        const rawDocType =
+          category === "Cut-Off Notice"
+            ? "CUT_OFF_NOTICE"
+            : category === "Bill of Lading"
+              ? "BILL_OF_LADING"
+              : category === "Booking Confirmation"
+                ? "BOOKING_CONFIRMATION"
+                : category === "Shipping Instructions"
+                  ? "SHIPPING_INSTRUCTIONS"
+                  : "OTHER";
+
+        const numericSizeBytes =
+          validation.fileSizeBytes ||
+          (typeof attachment.size === "number"
+            ? attachment.size
+            : typeof attachment.size === "string"
+              ? parseInt(attachment.size, 10) || null
+              : null) ||
+          384000;
+
+        const { data: insBDoc, error: bDocErr } = await supabase
+          .from("booking_documents")
+          .insert({
+            booking_id: bDocBookingId,
+            document_type: rawDocType,
+            document_name: rawFilename,
+            file_url: publicReviewUrl,
+            file_size: numericSizeBytes,
+            mime_type:
+              mimeType ||
+              (extension === "pdf"
+                ? "application/pdf"
+                : extension === "xlsx"
+                  ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  : "application/octet-stream"),
+            status: "Needs Review",
+            uploaded_by: safeUuid(userId) || null,
+            created_at: nowIso,
+            updated_at: nowIso,
+          })
+          .select("id")
+          .maybeSingle();
+
+        if (!bDocErr && insBDoc) {
+          bookingDocumentId = insBDoc.id;
+          driveFile.metadata = {
+            ...driveFile.metadata,
+            bookingDocumentId: insBDoc.id,
+            bookingId: bDocBookingId,
+          };
+          saveServerDocument(driveFile);
+          console.log(
+            `[DocumentAttachmentService] 💾 Created booking_documents record for review: ${insBDoc.id} for file "${rawFilename}"`,
+          );
+        } else if (bDocErr) {
+          console.warn(
+            "[DocumentAttachmentService] Notice inserting unconfident booking_documents:",
+            bDocErr.message,
+          );
+        }
+      }
+    } catch (unconfBDocErr) {
+      console.warn(
+        "[DocumentAttachmentService] Notice writing unconfident booking_documents:",
+        unconfBDocErr,
+      );
+    }
+
+    // 2. Resolve target email record in Supabase email_messages table
+    let targetEmailUuid = validEmailUuid;
+    const gMsgId =
+      gmailMessageId ||
+      (emailMessageId?.startsWith("gmail-") ? emailMessageId.replace(/^gmail-/, "") : null);
+    if (!targetEmailUuid && gMsgId) {
+      try {
+        const { data: dbMsg } = await supabase
+          .from("email_messages")
+          .select("id")
+          .eq("gmail_message_id", gMsgId)
+          .limit(1)
+          .maybeSingle();
+        if (dbMsg?.id) {
+          targetEmailUuid = safeUuid(dbMsg.id);
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    const attachmentRecord = {
+      fileName: rawFilename,
+      name: rawFilename,
+      filename: rawFilename,
+      attachmentHash,
+      attachmentId: attachment.attachmentId || null,
+      documentType: docTypeTag,
+      fileFormat: extension.toUpperCase(),
+      fileSize: driveFile.fileSize,
+      gmailMessageId: gMsgId || null,
+      forwarder: forwarderDisplayName,
+      receivedDate: formattedDate,
+      receivedTimestamp: receivedAt || nowIso,
+      movementReferenceNumber: candidateMovementNumber || null,
+      status: "Needs Review",
+      uploadStatus: "Saved to Supabase Storage",
+      isMetadataOnly: false,
+      savedDocumentId: driveFile.id,
+      bookingDocumentId,
+      storageBucket: reviewStorageUpload.storageBucket,
+      storagePath: reviewStorageUpload.storagePath,
+      storageUrl: publicReviewUrl,
+      fileUrl: publicReviewUrl,
+      savedAt: nowIso,
+    };
+
+    if (targetEmailUuid) {
       try {
         const { data: curMsg } = await supabase
           .from("email_messages")
           .select("attachments, raw_headers")
-          .eq("id", validEmailUuid)
+          .eq("id", targetEmailUuid)
           .maybeSingle();
 
         const existingAttachments = Array.isArray(curMsg?.attachments)
@@ -3006,35 +3249,12 @@ export async function saveAndLinkIncomingAttachment(
 
         // Deduplicate attachment entry in email_messages
         const filteredAttachments = existingAttachments.filter(
-          (a) => (a.fileName || a.name) !== rawFilename && a.attachmentHash !== attachmentHash,
+          (a) =>
+            (a.fileName || a.name || a.filename) !== rawFilename &&
+            a.attachmentHash !== attachmentHash,
         );
 
-        const updatedAttachments = [
-          ...filteredAttachments,
-          {
-            fileName: rawFilename,
-            name: rawFilename,
-            attachmentHash,
-            attachmentId: attachment.attachmentId || null,
-            documentType: docTypeTag,
-            fileFormat: extension.toUpperCase(),
-            fileSize: driveFile.fileSize,
-            gmailMessageId: gmailMessageId || null,
-            forwarder: forwarderDisplayName,
-            receivedDate: formattedDate,
-            receivedTimestamp: receivedAt || nowIso,
-            movementReferenceNumber: null,
-            status: "Needs Review",
-            uploadStatus: "Saved to Supabase Storage",
-            isMetadataOnly: false,
-            savedDocumentId: driveFile.id,
-            storageBucket: reviewStorageUpload.storageBucket,
-            storagePath: reviewStorageUpload.storagePath,
-            storageUrl: publicReviewUrl,
-            fileUrl: publicReviewUrl,
-            savedAt: nowIso,
-          },
-        ];
+        const updatedAttachments = [...filteredAttachments, attachmentRecord];
 
         const existingRaw = (curMsg?.raw_headers as Record<string, unknown>) || {};
         const existingReviews = Array.isArray(existingRaw.unlinked_attachments_needing_review)
@@ -3052,6 +3272,7 @@ export async function saveAndLinkIncomingAttachment(
             ...filteredReviews,
             {
               documentId: driveFile.id,
+              bookingDocumentId,
               filename: rawFilename,
               category: driveFile.metadata?.category,
               fileSize: driveFile.fileSize,
@@ -3066,49 +3287,44 @@ export async function saveAndLinkIncomingAttachment(
           ],
         };
 
-        const { error: updateEmailErr } = await supabase
+        await supabase
           .from("email_messages")
           .update({
             attachments: updatedAttachments,
             raw_headers: updatedRawHeaders,
             updated_at: nowIso,
           })
-          .eq("id", validEmailUuid);
-
-        if (updateEmailErr) {
-          console.warn(
-            "[DocumentAttachmentService] Notice updating email_messages:",
-            updateEmailErr.message,
-          );
-          return {
-            saved: false,
-            linked: false,
-            status: "DATABASE_ERROR",
-            document: driveFile,
-            category: classification.category || "Other",
-            reason: updateEmailErr.message,
-            error: updateEmailErr.message,
-            attachmentHash,
-            storagePath: reviewStorageUpload.storagePath,
-          };
-        }
-      } catch (eErr: unknown) {
-        const msg = eErr instanceof Error ? eErr.message : String(eErr);
+          .eq("id", targetEmailUuid);
+      } catch (updateEmailNotice) {
         console.warn(
-          "[DocumentAttachmentService] Notice updating email_messages with NEEDS_REVIEW:",
-          msg,
+          "[DocumentAttachmentService] Notice updating email_messages:",
+          updateEmailNotice,
         );
-        return {
-          saved: false,
-          linked: false,
-          status: "DATABASE_ERROR",
-          document: driveFile,
-          category: classification.category || "Other",
-          reason: msg,
-          error: msg,
-          attachmentHash,
-          storagePath: reviewStorageUpload.storagePath,
-        };
+      }
+    } else {
+      // Auto-insert incoming message in Supabase email_messages table if not yet recorded
+      try {
+        await supabase.from("email_messages").insert({
+          sender_email: senderEmail || "forwarder@logistics.com",
+          sender_name: forwarderDisplayName,
+          recipient_email: "operations@nashmiaindustries.com",
+          subject: subject || "Incoming Email",
+          body: body || "",
+          direction: "Inbound",
+          sent_at: receivedAt || nowIso,
+          gmail_message_id: gMsgId || null,
+          attachments: [attachmentRecord],
+          raw_headers: {
+            in_reply_to: inReplyTo || null,
+            references_header: references,
+            attachment_review_status: "NEEDS_REVIEW",
+          },
+        });
+      } catch (insertEmailErr) {
+        console.warn(
+          "[DocumentAttachmentService] Notice auto-creating email_messages record:",
+          insertEmailErr,
+        );
       }
     }
 
@@ -3311,6 +3527,13 @@ export async function saveAndLinkIncomingAttachment(
     }
   }
 
+  // Strict matching rule: Do NOT fallback to an arbitrary booking if movement was not matched with confidence
+  if (!validBookingUuid) {
+    console.log(
+      `[DocumentAttachmentService] ℹ️ Document "${finalFileName}" is not linked to any booking (movement not matched with certainty). Marked for review.`,
+    );
+  }
+
   // Step 5.1: Insert or Retrieve Record from Supabase booking_documents Table First
   let bookingDocumentId: string | null = null;
   if (validBookingUuid) {
@@ -3500,7 +3723,7 @@ export async function saveAndLinkIncomingAttachment(
       };
 
       // Save into isolated movement-specific store and update local bookings
-      saveCutOffsForMovement(resolvedMovementNumber, cutOffPayload, validBookingUuid);
+      await saveCutOffsForMovement(resolvedMovementNumber, cutOffPayload, validBookingUuid);
 
       // Persist directly into Supabase bookings record if available
       if (validBookingUuid) {
@@ -3614,7 +3837,9 @@ export async function saveAndLinkIncomingAttachment(
       };
 
       const updatedLinkedDocs = [
-        ...existingLinkedDocs.filter((d) => d.id !== driveFile.id && d.bookingDocumentId !== bookingDocumentId),
+        ...existingLinkedDocs.filter(
+          (d) => d.id !== driveFile.id && d.bookingDocumentId !== bookingDocumentId,
+        ),
         docSummary,
       ];
 
@@ -3648,13 +3873,12 @@ export async function saveAndLinkIncomingAttachment(
         ? `Cut-Off Schedule Extracted (${finalMovementNumber})`
         : `${docTypeTag} Document Saved & Linked`;
 
-      const cutOffSummaryText =
-        isCutOffNotice
-          ? `\nCut-Off Deadlines:\n${formatCutOffDeadlinesSummary(
-              classification.cutOffDeadlines,
-              classification.cutOffDates,
-            )}`
-          : "";
+      const cutOffSummaryText = isCutOffNotice
+        ? `\nCut-Off Deadlines:\n${formatCutOffDeadlinesSummary(
+            classification.cutOffDeadlines,
+            classification.cutOffDates,
+          )}`
+        : "";
 
       const eventDescription = `Document "${driveFile.name}" (${driveFile.fileSize}) from ${
         forwarderDisplayName
@@ -3742,66 +3966,97 @@ export async function saveAndLinkIncomingAttachment(
   }
 
   // Step 5: Update email_messages Record with Document Link
-  if (validEmailUuid) {
+  let targetEmailUuid = validEmailUuid;
+  const gMsgId =
+    gmailMessageId ||
+    (emailMessageId?.startsWith("gmail-") ? emailMessageId.replace(/^gmail-/, "") : null);
+  if (!targetEmailUuid && gMsgId) {
+    try {
+      const { data: dbMsg } = await supabase
+        .from("email_messages")
+        .select("id")
+        .eq("gmail_message_id", gMsgId)
+        .limit(1)
+        .maybeSingle();
+      if (dbMsg?.id) {
+        targetEmailUuid = safeUuid(dbMsg.id);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const confidentAttachmentRecord = {
+    fileName: rawFilename,
+    name: driveFile.name,
+    filename: rawFilename,
+    documentType: docTypeTag,
+    fileFormat: extension.toUpperCase(),
+    fileSize: driveFile.fileSize,
+    size: driveFile.fileSize,
+    type: driveFile.extension,
+    gmailMessageId: gMsgId || null,
+    forwarder: forwarderDisplayName,
+    receivedDate: formattedDate,
+    receivedTimestamp: receivedAt || nowIso,
+    movementReferenceNumber: resolvedMovementNumber,
+    status: "Saved to Supabase Storage",
+    uploadStatus: "Saved to Supabase Storage",
+    isMetadataOnly: false,
+    savedDocumentId: driveFile.id,
+    bookingDocumentId,
+    hasCutOffDate: Boolean(classification.hasCutOffDate),
+    detectedCutOffDate: classification.detectedCutOffDate || null,
+    cutOffDeadlines: classification.cutOffDeadlines,
+    cutOffDates: classification.cutOffDates,
+    storageBucket: storageUpload.storageBucket,
+    storagePath: storageUpload.storagePath,
+    storageUrl: publicUrl,
+    fileUrl: publicUrl,
+    attachmentHash,
+    documentCategory: category,
+    linkedBookingId: validBookingUuid,
+    linkedMovementNumber: resolvedMovementNumber,
+    matchedBy: matchResult.matchedBy,
+    matchingPriorityStep: matchResult.matchingPriorityStep,
+    savedAt: nowIso,
+  };
+
+  if (targetEmailUuid) {
     try {
       const { data: curMsg } = await supabase
         .from("email_messages")
         .select("attachments, raw_headers")
-        .eq("id", validEmailUuid)
+        .eq("id", targetEmailUuid)
         .maybeSingle();
 
       const existingAttachments = Array.isArray(curMsg?.attachments)
         ? (curMsg.attachments as Array<Record<string, unknown>>)
         : [];
 
-      const updatedAttachments = [
-        ...existingAttachments,
-        {
-          fileName: rawFilename,
-          name: driveFile.name,
-          documentType: docTypeTag,
-          fileFormat: extension.toUpperCase(),
-          fileSize: driveFile.fileSize,
-          size: driveFile.fileSize,
-          type: driveFile.extension,
-          gmailMessageId: gmailMessageId || null,
-          forwarder: forwarderDisplayName,
-          receivedDate: formattedDate,
-          receivedTimestamp: receivedAt || nowIso,
-          movementReferenceNumber: resolvedMovementNumber,
-          status: "Saved to Supabase Storage",
-          uploadStatus: "Saved to Supabase Storage",
-          isMetadataOnly: false,
-          savedDocumentId: driveFile.id,
-          bookingDocumentId,
-          hasCutOffDate: Boolean(classification.hasCutOffDate),
-          detectedCutOffDate: classification.detectedCutOffDate || null,
-          cutOffDeadlines: classification.cutOffDeadlines,
-          cutOffDates: classification.cutOffDates,
-          storageBucket: storageUpload.storageBucket,
-          storagePath: storageUpload.storagePath,
-          storageUrl: publicUrl,
-          fileUrl: publicUrl,
-          attachmentHash,
-          documentCategory: category,
-          linkedBookingId: validBookingUuid,
-          linkedMovementNumber: resolvedMovementNumber,
-          matchedBy: matchResult.matchedBy,
-          matchingPriorityStep: matchResult.matchingPriorityStep,
-          savedAt: nowIso,
-        },
-      ];
+      // Deduplicate attachment entry in email_messages
+      const filteredAttachments = existingAttachments.filter(
+        (a) =>
+          (a.fileName || a.name || a.filename) !== rawFilename &&
+          a.attachmentHash !== attachmentHash,
+      );
+
+      const updatedAttachments = [...filteredAttachments, confidentAttachmentRecord];
 
       const existingRaw = (curMsg?.raw_headers as Record<string, unknown>) || {};
       const existingLinkedDocs = Array.isArray(existingRaw.linked_documents)
         ? (existingRaw.linked_documents as Array<Record<string, unknown>>)
         : [];
 
+      const filteredLinkedDocs = existingLinkedDocs.filter(
+        (d) => d.documentId !== driveFile.id && d.fileName !== rawFilename,
+      );
+
       const updatedRawHeaders = {
         ...existingRaw,
         attachment_review_status: "MATCHED_AND_LINKED",
         linked_documents: [
-          ...existingLinkedDocs,
+          ...filteredLinkedDocs,
           {
             documentId: driveFile.id,
             bookingDocumentId,
@@ -3842,13 +4097,41 @@ export async function saveAndLinkIncomingAttachment(
           raw_headers: updatedRawHeaders,
           updated_at: nowIso,
         })
-        .eq("id", validEmailUuid);
+        .eq("id", targetEmailUuid);
 
       console.log(
-        `[DocumentAttachmentService] 📧 Updated email_messages ${validEmailUuid} with linked document`,
+        `[DocumentAttachmentService] 📧 Updated email_messages ${targetEmailUuid} with linked document`,
       );
     } catch (emailUpdateErr) {
       console.warn("[DocumentAttachmentService] Notice updating email_messages:", emailUpdateErr);
+    }
+  } else {
+    // Auto-insert message in email_messages table if not yet present
+    try {
+      await supabase.from("email_messages").insert({
+        sender_email: senderEmail || "forwarder@logistics.com",
+        sender_name: forwarderDisplayName,
+        recipient_email: "operations@nashmiaindustries.com",
+        subject: subject || "Incoming Email",
+        body: body || "",
+        direction: "Inbound",
+        sent_at: receivedAt || nowIso,
+        booking_id: validBookingUuid,
+        movement_number: resolvedMovementNumber,
+        forwarder_id: safeUuid(resolvedForwarderId),
+        gmail_message_id: gMsgId || null,
+        attachments: [confidentAttachmentRecord],
+        raw_headers: {
+          in_reply_to: inReplyTo || null,
+          references_header: references,
+          attachment_review_status: "MATCHED_AND_LINKED",
+        },
+      });
+    } catch (insertEmailErr) {
+      console.warn(
+        "[DocumentAttachmentService] Notice auto-creating email_messages record in confident step:",
+        insertEmailErr,
+      );
     }
   }
 

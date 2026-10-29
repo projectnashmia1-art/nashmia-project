@@ -142,10 +142,9 @@ export const CHARGE_KEYWORD_MAPPINGS: Record<
       "sea rate",
       "baserate",
       "base rate",
+      "base ocean freight",
       "rate",
       "price",
-      "quote",
-      "offer",
     ],
   },
   terminal_handling: {
@@ -647,6 +646,18 @@ function identifyChargeCategory(
     .replace(/[:=-]+$/, "")
     .trim();
 
+  // Exclude document/message section headings and conversational prefixes
+  if (
+    clean.includes("breakdown") ||
+    clean.includes("summary") ||
+    /^(?:quote|quotation|rate\s*offer)\s+for\b/i.test(clean) ||
+    clean.startsWith("dear ") ||
+    clean.startsWith("regarding ") ||
+    clean.startsWith("re:")
+  ) {
+    return null;
+  }
+
   for (const [catKey, config] of Object.entries(CHARGE_KEYWORD_MAPPINGS)) {
     for (const kw of config.keywords) {
       // Word boundary match
@@ -834,7 +845,7 @@ export function extractChargesFromLines(
     };
 
     charges.push(item);
-    if (!chargeMap[category]) {
+    if (!chargeMap[category] || (chargeMap[category].amount === null && item.amount !== null)) {
       chargeMap[category] = item;
     }
   }

@@ -298,24 +298,54 @@ export function normalizeLifecycleStage(
   const confUpper = (confirmationStatus || "").trim().toUpperCase();
   const s = (status || "").trim().toLowerCase();
 
-  // 1. Authoritative check on operational movement_status if populated
-  if (m === "DELIVERED") return "Delivered";
-  if (m === "ARRIVED") return "Arrived";
-  if (m === "IN_TRANSIT") return "In Transit";
-  if (m === "DISPATCHED") return "Container Shipped from Warehouse";
-  if (m === "CUSTOMS_CLEARED") return "Customs Cleared";
-  if (m === "STUFFING_SEALING") return "Stuffing & Sealing";
-  if (m === "CARGO_RECEIVED") return "Cargo Received at Warehouse";
-  if (m === "CONFIRMED") return "Booking Confirmed";
-  if (m === "REQUESTED") return "Booking Requested";
-  if (m === "DRAFT") return s.includes("request") ? "Booking Requested" : "Draft";
-
-  // 2. Exact match with any canonical LifecycleStage
+  // 1. Exact match with any canonical LifecycleStage (or its label/shortLabel)
   for (const stage of LIFECYCLE_STAGES) {
-    if (stage.id.toLowerCase() === s) {
+    if (
+      stage.id.toLowerCase() === s ||
+      stage.label.toLowerCase() === s ||
+      stage.shortLabel.toLowerCase() === s
+    ) {
       return stage.id;
     }
   }
+
+  // 2. Specific operational movement_status milestones (takes precedence over generic CONFIRMED)
+  if (m === "DELIVERED") return "Delivered";
+  if (m === "ARRIVED") return "Arrived";
+  if (m === "IN_TRANSIT") return "In Transit";
+  if (m === "DISPATCHED" || m === "SHIPPED") return "Container Shipped from Warehouse";
+  if (m === "CUSTOMS_CLEARED") return "Customs Cleared";
+  if (m === "STUFFING_SEALING") return "Stuffing & Sealing";
+  if (m === "CARGO_RECEIVED") return "Cargo Received at Warehouse";
+
+  // 3. String content checks for advanced milestone stages
+  if (s.includes("deliver") || s.includes("completed")) return "Delivered";
+  if (s.includes("arriv") || s.includes("berth") || s.includes("discharg")) return "Arrived";
+  if (s.includes("transit") || s.includes("at sea") || s.includes("sailing")) return "In Transit";
+  if (
+    s.includes("shipped") ||
+    s.includes("dispatch") ||
+    s.includes("gate-out") ||
+    s.includes("gate out")
+  ) {
+    return "Container Shipped from Warehouse";
+  }
+  if (s.includes("custom") || s.includes("cleared")) return "Customs Cleared";
+  if (s.includes("stuff") || s.includes("seal") || s.includes("loaded"))
+    return "Stuffing & Sealing";
+  if (
+    s.includes("received") ||
+    s.includes("staged") ||
+    s.includes("warehouse staged") ||
+    s.includes("warehouse")
+  ) {
+    return "Cargo Received at Warehouse";
+  }
+
+  // 4. Initial / Draft / Generic Confirmed states
+  if (m === "CONFIRMED") return "Booking Confirmed";
+  if (m === "REQUESTED") return "Booking Requested";
+  if (m === "DRAFT") return s.includes("request") ? "Booking Requested" : "Draft";
 
   let isExplicitlyConfirmed = confUpper === "CONFIRMED";
   if (!isExplicitlyConfirmed && typeof identifierOrIsConfirmed === "boolean") {
@@ -343,28 +373,6 @@ export function normalizeLifecycleStage(
   if (!status) {
     return isExplicitlyConfirmed ? "Booking Confirmed" : "Booking Requested";
   }
-
-  // 3. High-milestone progression
-  if (s.includes("deliver") || s.includes("completed")) return "Delivered";
-  if (s.includes("arriv") || s.includes("berth") || s.includes("discharg")) return "Arrived";
-  if (s.includes("transit") || s.includes("at sea") || s.includes("sailing")) return "In Transit";
-  if (
-    s.includes("shipped") ||
-    s.includes("dispatch") ||
-    s.includes("gate-out") ||
-    s.includes("gate out")
-  )
-    return "Container Shipped from Warehouse";
-  if (s.includes("custom") || s.includes("cleared")) return "Customs Cleared";
-  if (s.includes("stuff") || s.includes("seal") || s.includes("loaded"))
-    return "Stuffing & Sealing";
-  if (
-    s.includes("received") ||
-    s.includes("staged") ||
-    s.includes("warehouse staged") ||
-    s.includes("warehouse")
-  )
-    return "Cargo Received at Warehouse";
 
   // 4. Operational stages: Quotation received / Rate verification / Awarded
   // Note: Receiving a quotation or awarding a forwarder DOES NOT automatically mean CONFIRMED space!
@@ -499,8 +507,9 @@ export function extractMovementNumber(text: string | null | undefined): string |
 
   // 1. Direct Nashmia movement pattern: "NASH-2026-000145", "NASH-BK-2026-000145", "NASH-MOV-2026-0001"
   const nashMatch =
-    text.match(/(?:^|[^A-Za-z0-9])(NASH[-_](?:BK[-_]|MOV[-_])?[0-9]{4}[-_][0-9]{3,8})(?:$|[^A-Za-z0-9])/i) ||
-    text.match(/\b(NASH[-_](?:BK[-_]|MOV[-_])?[0-9]{4}[-_][0-9]{3,8})\b/i);
+    text.match(
+      /(?:^|[^A-Za-z0-9])(NASH[-_](?:BK[-_]|MOV[-_])?[0-9]{4}[-_][0-9]{3,8})(?:$|[^A-Za-z0-9])/i,
+    ) || text.match(/\b(NASH[-_](?:BK[-_]|MOV[-_])?[0-9]{4}[-_][0-9]{3,8})\b/i);
   if (nashMatch) return nashMatch[1].toUpperCase().replace(/_/g, "-");
 
   // 2. Full system compound prefixes: "CMA-BK-2026-001", "REQ-2026-001"

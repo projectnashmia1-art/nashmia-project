@@ -31,7 +31,16 @@ export interface CutOffDeadlineItem {
 }
 
 export interface DriveFileMetadata {
-  category?: "Cut-Off Notice" | "Bill of Lading" | "Booking Confirmation" | "Shipping Instructions" | "Invoices & Receipts" | "Customs & Clearance" | "General" | "Other" | string;
+  category?:
+    | "Cut-Off Notice"
+    | "Bill of Lading"
+    | "Booking Confirmation"
+    | "Shipping Instructions"
+    | "Invoices & Receipts"
+    | "Customs & Clearance"
+    | "General"
+    | "Other"
+    | string;
   documentType?:
     | "BILL_OF_LADING"
     | "CUT_OFF_NOTICE"
@@ -59,7 +68,15 @@ export interface DriveFileMetadata {
   gmailMessageId?: string | null;
   fileFormat?: string;
   isMetadataOnly?: boolean;
-  displayDocumentType?: "Cut-Off" | "BL" | "Booking Confirmation" | "Shipping Instructions" | "Invoice" | "Packing List" | "Other" | string;
+  displayDocumentType?:
+    | "Cut-Off"
+    | "BL"
+    | "Booking Confirmation"
+    | "Shipping Instructions"
+    | "Invoice"
+    | "Packing List"
+    | "Other"
+    | string;
   source?: string;
   uploadStatus?: string | null;
   savedAt?: string;
@@ -94,7 +111,14 @@ export interface DriveFileMetadata {
   fileSize?: string | null;
   receivedDate?: string | null;
   receivedTime?: string | null;
-  status?: "Processed" | "Pending" | "Needs Review" | "Saved to Supabase Storage" | "Metadata Saved" | string | null;
+  status?:
+    | "Processed"
+    | "Pending"
+    | "Needs Review"
+    | "Saved to Supabase Storage"
+    | "Metadata Saved"
+    | string
+    | null;
   uploadStatus?: "Saved to Supabase Storage" | "Metadata Saved" | "Needs Review" | string | null;
   sourceEmail?: string | null;
   storageBucket?: string | null;

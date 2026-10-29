@@ -228,19 +228,22 @@ export async function handleQuotationsApiRequest(
         }
       }
 
-      console.log("[QuotationAPI][GET /api/bookings/:bookingId/quotations] Returning API response object:", {
-        bookingId: rawBookingId,
-        count: quotations.length,
-        quotations: quotations.map((q) => ({
-          id: q.id,
-          quotation_id: q.quotation_id || q.id,
-          booking_id: q.booking_id || rawBookingId,
-          charges_count: Array.isArray(q.charges) ? q.charges.length : 0,
-          charges: q.charges || [],
-          quotation_charges: q.quotation_charges || q.charges || [],
-        })),
-        rawQuotations: quotations,
-      });
+      console.log(
+        "[QuotationAPI][GET /api/bookings/:bookingId/quotations] Returning API response object:",
+        {
+          bookingId: rawBookingId,
+          count: quotations.length,
+          quotations: quotations.map((q) => ({
+            id: q.id,
+            quotation_id: q.quotation_id || q.id,
+            booking_id: q.booking_id || rawBookingId,
+            charges_count: Array.isArray(q.charges) ? q.charges.length : 0,
+            charges: q.charges || [],
+            quotation_charges: q.quotation_charges || q.charges || [],
+          })),
+          rawQuotations: quotations,
+        },
+      );
 
       return jsonResponse({
         success: true,

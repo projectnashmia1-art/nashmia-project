@@ -81,6 +81,7 @@ export {
 import { getLocalForwarderRequests, saveLocalForwarderRequests } from "./multi-forwarder-service";
 import { persistQuotationToDatabase } from "./quotation-database-service";
 import { recordQuotationAuditEvent } from "./quotation-audit-logger";
+import { createLogisticsNotification } from "./notification-service";
 import type {
   ForwarderQuoteRequestRecord,
   ForwarderOfferData,
@@ -1881,6 +1882,19 @@ export async function processForwarderQuotationEmail(
         discrepancies: validation.discrepancies,
         fields: quotationFields,
       },
+    });
+
+    void createLogisticsNotification({
+      eventType: "QUOTATION_RECEIVED",
+      movementNumber: movementNo,
+      bookingReference: movementNo,
+      bookingId: safeUuid(bookingId) || undefined,
+      forwarderName: matchedForwarderName || senderName || "Freight Forwarder",
+      rateText: quotationFields.oceanFreight
+        ? `$${quotationFields.oceanFreight.toLocaleString()} ${quotationFields.currency || "USD"}`
+        : undefined,
+      userId,
+      linkUrl: `/requests?ref=${encodeURIComponent(movementNo)}&openDrawer=true`,
     });
   }
 

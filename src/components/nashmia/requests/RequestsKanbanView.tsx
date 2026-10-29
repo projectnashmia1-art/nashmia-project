@@ -12,6 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { getPortCountryMeta } from "@/lib/port-flags";
 import { CountryFlagSvg } from "@/components/nashmia/common/CountryFlagSvg";
+import { BookingConfirmationReceiptCard } from "@/components/nashmia/requests/BookingConfirmationReceiptCard";
 import type { BookingRequestRecord, RequestStatus } from "@/types/requests";
 
 interface RequestsKanbanViewProps {
@@ -19,6 +20,7 @@ interface RequestsKanbanViewProps {
   onSelectRequest: (request: BookingRequestRecord) => void;
   onApproveRequest: (request: BookingRequestRecord) => void;
   onRequestRevision: (request: BookingRequestRecord) => void;
+  onConfirmBooking?: (request: BookingRequestRecord) => void;
 }
 
 interface KanbanColumn {
@@ -78,11 +80,24 @@ export const RequestsKanbanView = memo(function RequestsKanbanView({
   onSelectRequest,
   onApproveRequest,
   onRequestRevision,
+  onConfirmBooking,
 }: RequestsKanbanViewProps) {
   return (
     <div className="grid grid-cols-1 gap-4 overflow-x-auto pb-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
       {COLUMNS.map((col) => {
-        const colRequests = requests.filter((r) => r.status === col.id);
+        const colRequests = requests.filter((r) => {
+          if (col.id === "Approved") {
+            return (
+              r.status === "Approved" ||
+              r.status === "Confirmed" ||
+              r.status === "Booking Confirmed" ||
+              r.confirmationStatus === "CONFIRMED" ||
+              Boolean(r.isMovementConfirmed) ||
+              Boolean(r.isConfirmed)
+            );
+          }
+          return r.status === col.id;
+        });
         const Icon = col.icon;
 
         return (
@@ -110,68 +125,130 @@ export const RequestsKanbanView = memo(function RequestsKanbanView({
                   No requests in this stage
                 </div>
               ) : (
-                colRequests.map((req) => (
-                  <div
-                    key={req.id}
-                    onClick={() => onSelectRequest(req)}
-                    className="cursor-pointer rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs transition-all hover:border-[#0FA3B1] hover:shadow-sm"
-                  >
-                    <div className="flex items-center justify-between gap-1">
-                      <span className="font-mono text-[12px] font-bold text-slate-900">
-                        {req.reference}
-                      </span>
-                      <span
-                        className={`rounded px-1.5 py-0.2 text-[9.5px] font-bold uppercase ${
-                          req.priority === "Urgent"
-                            ? "bg-rose-100 text-rose-800"
-                            : req.priority === "High"
-                              ? "bg-amber-100 text-amber-800"
-                              : "bg-slate-100 text-slate-700"
-                        }`}
-                      >
-                        {req.priority}
-                      </span>
-                    </div>
+                colRequests.map((req) => {
+                  const isConfirmed =
+                    req.status === "Approved" ||
+                    req.status === "Confirmed" ||
+                    req.status === "Booking Confirmed" ||
+                    req.confirmationStatus === "CONFIRMED" ||
+                    Boolean(req.isMovementConfirmed) ||
+                    Boolean(req.isConfirmed) ||
+                    Boolean(req.confirmedAt);
 
-                    <p className="mt-1.5 text-[12.5px] font-semibold text-slate-800 line-clamp-1">
-                      {req.buyerName}
-                    </p>
-                    <p className="text-[11px] text-slate-500 line-clamp-1">
-                      From: {req.supplierName}
-                    </p>
+                  if (isConfirmed) {
+                    return (
+                      <BookingConfirmationReceiptCard
+                        key={req.id}
+                        request={req}
+                        onSelectRequest={onSelectRequest}
+                        onConfirmBooking={onConfirmBooking}
+                      />
+                    );
+                  }
 
-                    {/* Route with Small Country Flags SVG */}
-                    <div className="mt-2 flex items-center justify-between rounded-lg bg-white border border-slate-200/80 px-2.5 py-1.5 text-[11.5px] font-medium text-slate-700 shadow-2xs">
-                      <span className="flex items-center gap-1.5 font-semibold text-slate-900">
-                        <CountryFlagSvg
-                          countryCode={getPortCountryMeta(req.polCode, req.polName).countryCode}
-                          size="xs"
-                          title={getPortCountryMeta(req.polCode, req.polName).countryName}
-                        />
-                        <span>{req.polCode}</span>
-                      </span>
-                      <ArrowRight className="size-3 text-slate-400 shrink-0" />
-                      <span className="flex items-center gap-1.5 font-semibold text-slate-900">
-                        <span>{req.podCode}</span>
-                        <CountryFlagSvg
-                          countryCode={getPortCountryMeta(req.podCode, req.podName).countryCode}
-                          size="xs"
-                          title={getPortCountryMeta(req.podCode, req.podName).countryName}
-                        />
-                      </span>
-                    </div>
+                  return (
+                    <div
+                      key={req.id}
+                      onClick={() => onSelectRequest(req)}
+                      className="cursor-pointer rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs transition-all hover:border-[#0FA3B1] hover:shadow-sm"
+                    >
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="font-mono text-[12px] font-bold text-slate-900">
+                          {req.movementNumber || req.reference}
+                        </span>
+                        {isConfirmed ? (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-white px-2 py-0.5 text-[9.5px] font-bold text-emerald-800 shadow-2xs">
+                            <CheckCircle2 className="size-2.5 text-emerald-600" />
+                            CONFIRMED RECEIPT
+                          </span>
+                        ) : (
+                          <span
+                            className={`rounded px-1.5 py-0.2 text-[9.5px] font-bold uppercase ${
+                              req.priority === "Urgent"
+                                ? "bg-rose-100 text-rose-800"
+                                : req.priority === "High"
+                                  ? "bg-amber-100 text-amber-800"
+                                  : "bg-slate-100 text-slate-700"
+                            }`}
+                          >
+                            {req.priority}
+                          </span>
+                        )}
+                      </div>
 
-                    {/* Footer specs */}
-                    <div className="mt-2.5 flex items-center justify-between text-[11.5px]">
-                      <span className="font-medium text-slate-600">
-                        {req.containerCount}x {req.containerSize}
-                      </span>
-                      <span className="font-bold text-slate-900">
-                        ${req.totalFreight.toLocaleString()}
-                      </span>
+                      <p className="mt-1.5 text-[12.5px] font-semibold text-slate-800 line-clamp-1">
+                        {req.buyerName}
+                      </p>
+                      <p className="text-[11px] text-slate-500 line-clamp-1">
+                        From: {req.supplierName}
+                      </p>
+
+                      {/* Route with Small Country Flags SVG */}
+                      <div className="mt-2 flex items-center justify-between rounded-lg bg-white border border-slate-200/80 px-2.5 py-1.5 text-[11.5px] font-medium text-slate-700 shadow-2xs">
+                        <span className="flex items-center gap-1.5 font-semibold text-slate-900">
+                          <CountryFlagSvg
+                            countryCode={getPortCountryMeta(req.polCode, req.polName).countryCode}
+                            size="xs"
+                            title={getPortCountryMeta(req.polCode, req.polName).countryName}
+                          />
+                          <span>{req.polCode}</span>
+                        </span>
+                        <ArrowRight className="size-3 text-slate-400 shrink-0" />
+                        <span className="flex items-center gap-1.5 font-semibold text-slate-900">
+                          <span>{req.podCode}</span>
+                          <CountryFlagSvg
+                            countryCode={getPortCountryMeta(req.podCode, req.podName).countryCode}
+                            size="xs"
+                            title={getPortCountryMeta(req.podCode, req.podName).countryName}
+                          />
+                        </span>
+                      </div>
+
+                      {/* Footer specs & Actions */}
+                      <div className="mt-2.5 flex items-center justify-between text-[11.5px]">
+                        <span className="font-medium text-slate-600">
+                          {req.containerCount}x {req.containerSize}
+                        </span>
+                        <span className="font-bold text-slate-900">
+                          ${req.totalFreight.toLocaleString()}
+                        </span>
+                      </div>
+
+                      <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center gap-1.5">
+                        {req.status === "Approved" || req.confirmationStatus === "CONFIRMED" ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (onConfirmBooking) onConfirmBooking(req);
+                              else onSelectRequest(req);
+                            }}
+                            className="w-full h-7 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold gap-1 shadow-2xs cursor-pointer"
+                            title="Booking confirmed. Click to view or edit confirmation details."
+                          >
+                            <CheckCircle2 className="size-3" />
+                            <span>Confirmed</span>
+                          </Button>
+                        ) : (
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onConfirmBooking?.(req);
+                            }}
+                            className="w-full h-7 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold gap-1 shadow-2xs cursor-pointer"
+                            title="Confirm booking and update movement"
+                          >
+                            <CheckCircle2 className="size-3" />
+                            <span>Confirm</span>
+                          </Button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>

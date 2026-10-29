@@ -25,12 +25,8 @@ import {
   awardForwarderOffer,
   updateForwarderQuotation,
 } from "@/lib/multi-forwarder-service";
-import { extractQuotationWithAiFallback } from "@/lib/ai-quotation-fallback";
 import { AwardForwarderModal } from "./AwardForwarderModal";
-import type {
-  BookingRequestRecord,
-  ForwarderQuoteRequestRecord,
-} from "@/types/requests";
+import type { BookingRequestRecord, ForwarderQuoteRequestRecord } from "@/types/requests";
 
 interface AwardStatusDrawerProps {
   isOpen: boolean;
@@ -50,9 +46,9 @@ export const AwardStatusDrawer = memo(function AwardStatusDrawer({
   const { userId } = useAuth();
   const [forwarderRequests, setForwarderRequests] = useState<ForwarderQuoteRequestRecord[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [isAiExtracting, setIsAiExtracting] = useState(false);
-  const [aiNote, setAiNote] = useState<string | null>(null);
-  const [awardModalTarget, setAwardModalTarget] = useState<ForwarderQuoteRequestRecord | null>(null);
+  const [awardModalTarget, setAwardModalTarget] = useState<ForwarderQuoteRequestRecord | null>(
+    null,
+  );
 
   const loadRequests = useCallback(async () => {
     if (!booking) return;
@@ -123,115 +119,15 @@ export const AwardStatusDrawer = memo(function AwardStatusDrawer({
     return forwarderRequests.find((r) => r.status === "AWARDED" || r.status === "ACCEPTED");
   }, [forwarderRequests]);
 
-  // AI Assistant trigger to scan unstructured forwarder emails for rate & ETD
-  const handleAiScan = async (reqRecord: ForwarderQuoteRequestRecord) => {
-    setIsAiExtracting(true);
-    setAiNote(null);
-    try {
-      const res = await extractQuotationWithAiFallback({
-        subject: reqRecord.offerData?.originalEmailSubject || reqRecord.forwarderName,
-        body: reqRecord.offerData?.originalEmailBody || reqRecord.notes || "",
-        snippet: reqRecord.offerData?.extractionSummary || "",
-        forwarderName: reqRecord.forwarderName,
-        movementNumber: reqRecord.movementNumber || booking?.movementNumber,
-      });
 
-      if (res && (res.rate || res.etd)) {
-        await updateForwarderQuotation(
-          reqRecord.id,
-          {
-            ratePerContainer: res.rate ?? reqRecord.offerData?.ratePerContainer,
-            totalFreight:
-              res.totalCost ??
-              (res.rate
-                ? res.rate * (reqRecord.containerCount || 1)
-                : reqRecord.offerData?.totalFreight),
-            currency: res.currency || reqRecord.offerData?.currency || "USD",
-            etd: res.etd || reqRecord.offerData?.etd,
-            eta: res.eta || reqRecord.offerData?.eta,
-            carrier: res.carrier || reqRecord.offerData?.carrier,
-            transitDays: res.transitTime || reqRecord.offerData?.transitDays,
-            freeDays: res.freeDays || reqRecord.offerData?.freeDays,
-            notes: res.notes || reqRecord.offerData?.notes,
-          },
-          userId,
-          "OFFER_RECEIVED",
-        );
-
-        setAiNote(
-          `AI verified: Rate $${res.rate ? res.rate.toLocaleString() : "N/A"} / cntr ${res.currency || "USD"}, ETD ${res.etd || "N/A"}${res.carrier ? ` (${res.carrier})` : ""}`,
-        );
-        showPillToast.success("AI extracted updated Rate and ETD details from email.", "AI Extraction Verified");
-        void loadRequests();
-      } else {
-        setAiNote("AI analyzed email: standard forwarder text with no conflicting rates.");
-        showPillToast.info("Deterministic values are fully synchronized.", "AI Analysis Complete");
-      }
-    } catch (scanErr) {
-      console.warn("[AwardStatusDrawer] AI scan notice:", scanErr);
-      showPillToast.info("Deterministic values currently active in drawer.", "Analysis Notice");
-    } finally {
-      setIsAiExtracting(false);
-    }
-  };
-
-  // AI Assistant trigger to scan all contacted forwarder emails for rate & ETD in batch
-  const handleAiScanAll = async () => {
-    if (forwarderRequests.length === 0) return;
-    setIsAiExtracting(true);
-    setAiNote(null);
-    let updatedCount = 0;
-    try {
-      for (const reqRecord of forwarderRequests) {
-        const textToScan = reqRecord.offerData?.originalEmailBody || reqRecord.notes || "";
-        if (!textToScan || textToScan.trim().length < 5) continue;
-        const res = await extractQuotationWithAiFallback({
-          subject: reqRecord.offerData?.originalEmailSubject || reqRecord.forwarderName,
-          body: textToScan,
-          snippet: reqRecord.offerData?.extractionSummary || "",
-          forwarderName: reqRecord.forwarderName,
-          movementNumber: reqRecord.movementNumber || booking?.movementNumber,
-        });
-        if (res && (res.rate || res.etd)) {
-          await updateForwarderQuotation(
-            reqRecord.id,
-            {
-              ratePerContainer: res.rate ?? reqRecord.offerData?.ratePerContainer,
-              totalFreight:
-                res.totalCost ??
-                (res.rate
-                  ? res.rate * (reqRecord.containerCount || 1)
-                  : reqRecord.offerData?.totalFreight),
-              currency: res.currency || reqRecord.offerData?.currency || "USD",
-              etd: res.etd || reqRecord.offerData?.etd,
-              eta: res.eta || reqRecord.offerData?.eta,
-              carrier: res.carrier || reqRecord.offerData?.carrier,
-            },
-            userId,
-            "OFFER_RECEIVED",
-          );
-          updatedCount++;
-        }
-      }
-      if (updatedCount > 0) {
-        setAiNote(`AI scanned all emails: Synchronized ${updatedCount} forwarder quotation(s) with Rate & ETD.`);
-        showPillToast.success(`AI updated ${updatedCount} quotation(s) from emails.`, "AI Scan Complete");
-        void loadRequests();
-      } else {
-        setAiNote("AI scan complete: All current rates and ETD values are up to date.");
-        showPillToast.info("No newer quotation changes detected in emails.", "AI Verification");
-      }
-    } catch (batchErr) {
-      console.warn("[AwardStatusDrawer] Batch AI scan notice:", batchErr);
-    } finally {
-      setIsAiExtracting(false);
-    }
-  };
 
   const handleConfirmAward = async (requestId: string) => {
     try {
       await awardForwarderOffer(requestId, userId);
-      showPillToast.success("Forwarder designated and awarded for this booking.", "Forwarder Awarded");
+      showPillToast.success(
+        "Forwarder designated and awarded for this booking.",
+        "Forwarder Awarded",
+      );
       void loadRequests();
       onAwarded?.();
     } catch (err: unknown) {
@@ -337,13 +233,15 @@ export const AwardStatusDrawer = memo(function AwardStatusDrawer({
                   {awardedQuote?.forwarderName || booking.forwarderName || "Winning Forwarder"}
                 </h4>
                 <p className="text-[11.5px] text-cyan-800 mt-0.5">
-                  Designated as official forwarder for this booking. Space & carrier scheduling in progress.
+                  Designated as official forwarder for this booking. Space & carrier scheduling in
+                  progress.
                 </p>
               </div>
             ) : quotesWithOffers.length > 0 ? (
               <div>
                 <h4 className="text-sm font-extrabold text-slate-900">
-                  {quotesWithOffers.length} Quotation{quotesWithOffers.length > 1 ? "s" : ""} Received via Email
+                  {quotesWithOffers.length} Quotation{quotesWithOffers.length > 1 ? "s" : ""}{" "}
+                  Received via Email
                 </h4>
                 <p className="text-[11.5px] text-slate-600 mt-0.5">
                   Forwarders responded to your RFQ emails. Review rate and ETD below to award.
@@ -351,9 +249,12 @@ export const AwardStatusDrawer = memo(function AwardStatusDrawer({
               </div>
             ) : (
               <div>
-                <h4 className="text-sm font-bold text-slate-800">No Forwarder Quotes Received Yet</h4>
+                <h4 className="text-sm font-bold text-slate-800">
+                  No Forwarder Quotes Received Yet
+                </h4>
                 <p className="text-[11.5px] text-slate-500 mt-0.5">
-                  Inquiries sent via Gmail. As soon as a forwarder replies with Rate & ETD, it will automatically populate here.
+                  Inquiries sent via Gmail. As soon as a forwarder replies with Rate & ETD, it will
+                  automatically populate here.
                 </p>
               </div>
             )}
@@ -388,8 +289,15 @@ export const AwardStatusDrawer = memo(function AwardStatusDrawer({
                 {/* Chota Sa Rate & ETD */}
                 <div className="text-right shrink-0">
                   <div className="text-base font-extrabold text-slate-900 font-mono leading-none">
-                    ${(bestQuote.offerData?.ratePerContainer || bestQuote.ratePerContainer || 0).toLocaleString()}
-                    <span className="text-[10px] font-normal text-slate-500 font-sans ml-1">/cntr</span>
+                    $
+                    {(
+                      bestQuote.offerData?.ratePerContainer ||
+                      bestQuote.ratePerContainer ||
+                      0
+                    ).toLocaleString()}
+                    <span className="text-[10px] font-normal text-slate-500 font-sans ml-1">
+                      /cntr
+                    </span>
                   </div>
                   <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-teal-100/80 border border-teal-200 text-teal-900 font-mono text-[11px] font-bold mt-1.5">
                     <Calendar className="size-3 text-teal-700" />
@@ -399,19 +307,8 @@ export const AwardStatusDrawer = memo(function AwardStatusDrawer({
               </div>
 
               {/* Action Buttons */}
-              <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleAiScan(bestQuote)}
-                  disabled={isAiExtracting}
-                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50/80 hover:bg-indigo-100 text-indigo-900 text-[11px] font-semibold transition-colors cursor-pointer"
-                  title="Verify rate and ETD with AI against email text"
-                >
-                  <Bot className="size-3 text-indigo-600" />
-                  <span>{isAiExtracting ? "AI Scanning..." : "AI Re-Scan Email"}</span>
-                </button>
-
-                {!isAwarded && (
+              {!isAwarded && (
+                <div className="pt-2 border-t border-slate-100 flex items-center justify-end gap-2">
                   <Button
                     type="button"
                     size="sm"
@@ -421,16 +318,8 @@ export const AwardStatusDrawer = memo(function AwardStatusDrawer({
                     <CheckCircle2 className="size-3" />
                     <span>Award This Rate</span>
                   </Button>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* AI Extraction Verification Feedback */}
-          {aiNote && (
-            <div className="rounded-xl border border-indigo-200 bg-indigo-50/60 p-3 flex items-start gap-2 text-indigo-950 text-[11px] leading-relaxed">
-              <Sparkles className="size-3.5 text-indigo-600 mt-0.5 shrink-0" />
-              <span>{aiNote}</span>
+                </div>
+              )}
             </div>
           )}
 
@@ -442,25 +331,15 @@ export const AwardStatusDrawer = memo(function AwardStatusDrawer({
                 All Contacted Forwarders ({forwarderRequests.length})
               </span>
               <div className="flex items-center gap-2">
-                {forwarderRequests.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => void handleAiScanAll()}
-                    disabled={isAiExtracting}
-                    className="text-[11px] text-indigo-700 hover:text-indigo-900 bg-indigo-50/90 hover:bg-indigo-100 border border-indigo-200 px-2 py-0.5 rounded-md flex items-center gap-1 font-semibold cursor-pointer transition-colors"
-                    title="Scan all inbound forwarder emails with AI to extract rates and ETD"
-                  >
-                    <Bot className="size-3 text-indigo-600" />
-                    <span>{isAiExtracting ? "AI Scanning..." : "AI Scan All Emails"}</span>
-                  </button>
-                )}
                 <button
                   type="button"
                   onClick={() => void loadRequests()}
                   disabled={isLoading}
                   className="text-[11px] text-slate-500 hover:text-slate-800 flex items-center gap-1 font-medium cursor-pointer"
                 >
-                  <RefreshCw className={`size-3 ${isLoading ? "animate-spin text-[#0FA3B1]" : ""}`} />
+                  <RefreshCw
+                    className={`size-3 ${isLoading ? "animate-spin text-[#0FA3B1]" : ""}`}
+                  />
                   Refresh
                 </button>
               </div>
@@ -530,15 +409,6 @@ export const AwardStatusDrawer = memo(function AwardStatusDrawer({
                       {/* Small Bottom Controls */}
                       {rate && !isThisAwarded && !isAwarded && (
                         <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-end gap-1.5">
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => handleAiScan(fwd)}
-                            className="h-6.5 px-2 text-[10.5px] text-indigo-700 hover:bg-indigo-50 cursor-pointer"
-                          >
-                            <Bot className="size-3 mr-1" /> AI Check
-                          </Button>
                           <Button
                             type="button"
                             size="sm"

@@ -1,7 +1,7 @@
 import React from "react";
 import {
   Link2,
-  MoreHorizontal,
+  MoreVertical,
   Download,
   Eye,
   Star,
@@ -66,8 +66,8 @@ export function FileRowItem({
       )}
     >
       {/* Name Column (Col span 5 on desktop, 6 on tablet, 8 on mobile) */}
-      <div className="col-span-8 sm:col-span-5 flex items-center gap-3 min-w-0 pr-2">
-        <FileThumbnailIcon file={file} size="sm" />
+      <div className="col-span-8 sm:col-span-5 flex items-center gap-2.5 min-w-0 pr-2">
+        <FileThumbnailIcon file={file} size="sm" variant="minimal" />
 
         <div className="flex flex-col min-w-0">
           <div className="flex items-center gap-2 min-w-0">
@@ -199,9 +199,9 @@ export function FileRowItem({
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-white rounded-lg transition-colors"
+              className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-white rounded-lg transition-colors cursor-pointer"
             >
-              <MoreHorizontal className="size-4" />
+              <MoreVertical className="size-4" />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-48">

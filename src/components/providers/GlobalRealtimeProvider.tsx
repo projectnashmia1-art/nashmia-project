@@ -70,18 +70,51 @@ export function GlobalRealtimeProvider({ children }: { children: ReactNode }) {
     [queryClient],
   );
 
-  const onBookingsChange = useCallback(() => handleRealtimeChange("bookings"), [handleRealtimeChange]);
-  const onContainersChange = useCallback(() => handleRealtimeChange("booking_containers"), [handleRealtimeChange]);
-  const onEventsChange = useCallback(() => handleRealtimeChange("booking_events"), [handleRealtimeChange]);
+  const onBookingsChange = useCallback(
+    () => handleRealtimeChange("bookings"),
+    [handleRealtimeChange],
+  );
+  const onContainersChange = useCallback(
+    () => handleRealtimeChange("booking_containers"),
+    [handleRealtimeChange],
+  );
+  const onEventsChange = useCallback(
+    () => handleRealtimeChange("booking_events"),
+    [handleRealtimeChange],
+  );
   const onBuyersChange = useCallback(() => handleRealtimeChange("buyers"), [handleRealtimeChange]);
-  const onSuppliersChange = useCallback(() => handleRealtimeChange("suppliers"), [handleRealtimeChange]);
-  const onForwardersChange = useCallback(() => handleRealtimeChange("forwarders"), [handleRealtimeChange]);
-  const onShippingLinesChange = useCallback(() => handleRealtimeChange("shipping_lines"), [handleRealtimeChange]);
-  const onRateCardsChange = useCallback(() => handleRealtimeChange("rate_cards"), [handleRealtimeChange]);
-  const onEmailMessagesChange = useCallback(() => handleRealtimeChange("email_messages"), [handleRealtimeChange]);
-  const onNotificationsChange = useCallback(() => handleRealtimeChange("notifications"), [handleRealtimeChange]);
-  const onForwarderRequestsChange = useCallback(() => handleRealtimeChange("forwarder_requests"), [handleRealtimeChange]);
-  const onQuotationsChange = useCallback(() => handleRealtimeChange("quotations"), [handleRealtimeChange]);
+  const onSuppliersChange = useCallback(
+    () => handleRealtimeChange("suppliers"),
+    [handleRealtimeChange],
+  );
+  const onForwardersChange = useCallback(
+    () => handleRealtimeChange("forwarders"),
+    [handleRealtimeChange],
+  );
+  const onShippingLinesChange = useCallback(
+    () => handleRealtimeChange("shipping_lines"),
+    [handleRealtimeChange],
+  );
+  const onRateCardsChange = useCallback(
+    () => handleRealtimeChange("rate_cards"),
+    [handleRealtimeChange],
+  );
+  const onEmailMessagesChange = useCallback(
+    () => handleRealtimeChange("email_messages"),
+    [handleRealtimeChange],
+  );
+  const onNotificationsChange = useCallback(
+    () => handleRealtimeChange("notifications"),
+    [handleRealtimeChange],
+  );
+  const onForwarderRequestsChange = useCallback(
+    () => handleRealtimeChange("forwarder_requests"),
+    [handleRealtimeChange],
+  );
+  const onQuotationsChange = useCallback(
+    () => handleRealtimeChange("quotations"),
+    [handleRealtimeChange],
+  );
 
   // 1. Core Bookings & Containers Realtime
   useSupabaseRealtime("bookings", onBookingsChange, isSupabaseConfigured);

@@ -1,10 +1,16 @@
-import React, { useState } from "react";
+import { useState, lazy, Suspense } from "react";
 import { Bell } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useNotifications } from "@/lib/notifications-context";
-import { AINotificationCenter } from "./AINotificationCenter";
+import { NotificationsListSkeleton } from "@/components/nashmia/skeletons/NotificationSkeletons";
 import { cn } from "@/lib/utils";
+
+const AINotificationCenter = lazy(() =>
+  import("./AINotificationCenter").then((m) => ({
+    default: m.AINotificationCenter,
+  })),
+);
 
 interface NotificationCenterTriggerProps {
   className?: string;
@@ -46,7 +52,17 @@ export function NotificationCenterTrigger({
             sideOffset={8}
             className="w-auto max-w-[calc(100vw-24px)] p-0 border-0 bg-transparent shadow-none"
           >
-            <AINotificationCenter onClose={() => setIsDesktopOpen(false)} />
+            {isDesktopOpen && (
+              <Suspense
+                fallback={
+                  <div className="w-[380px] rounded-2xl border border-slate-200 bg-white p-4 shadow-xl">
+                    <NotificationsListSkeleton />
+                  </div>
+                }
+              >
+                <AINotificationCenter onClose={() => setIsDesktopOpen(false)} />
+              </Suspense>
+            )}
           </PopoverContent>
         </Popover>
       </div>
@@ -77,7 +93,17 @@ export function NotificationCenterTrigger({
             <SheetHeader className="sr-only">
               <SheetTitle>Notification Center</SheetTitle>
             </SheetHeader>
-            <AINotificationCenter isBottomSheet onClose={() => setIsMobileOpen(false)} />
+            {isMobileOpen && (
+              <Suspense
+                fallback={
+                  <div className="p-2">
+                    <NotificationsListSkeleton />
+                  </div>
+                }
+              >
+                <AINotificationCenter isBottomSheet onClose={() => setIsMobileOpen(false)} />
+              </Suspense>
+            )}
           </SheetContent>
         </Sheet>
       </div>

@@ -43,8 +43,10 @@ import {
   CheckCheck,
   MessageSquare,
   AlarmClock,
+  Users,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { UserManagementSection } from "@/components/nashmia/settings/UserManagementSection";
 
 interface ProfileRecord {
   id: string;
@@ -73,9 +75,9 @@ export function ProfileSettingsPage({ onOpenMobileMenu }: { onOpenMobileMenu?: (
   const [copiedId, setCopiedId] = useState(false);
 
   // Active Tab
-  const [activeTab, setActiveTab] = useState<"profile" | "security" | "backend" | "preferences">(
-    "profile",
-  );
+  const [activeTab, setActiveTab] = useState<
+    "profile" | "security" | "backend" | "preferences" | "users"
+  >("profile");
 
   // Edit form state
   const [fullName, setFullName] = useState("");
@@ -552,6 +554,25 @@ export function ProfileSettingsPage({ onOpenMobileMenu }: { onOpenMobileMenu?: (
                 className={cn("size-4 opacity-70", activeTab === "preferences" && "text-white")}
               />
             </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab("users")}
+              className={cn(
+                "flex w-full items-center justify-between rounded-xl px-3.5 py-2.5 text-sm font-semibold transition-all",
+                activeTab === "users"
+                  ? "bg-[#0FA3B1] text-white shadow-xs"
+                  : "text-slate-600 hover:bg-slate-50 hover:text-slate-900",
+              )}
+            >
+              <div className="flex items-center gap-2.5">
+                <Users className="size-4" />
+                <span>User Management</span>
+              </div>
+              <ChevronRight
+                className={cn("size-4 opacity-70", activeTab === "users" && "text-white")}
+              />
+            </button>
           </div>
         </div>
 
@@ -1005,6 +1026,9 @@ export function ProfileSettingsPage({ onOpenMobileMenu }: { onOpenMobileMenu?: (
               </div>
             </div>
           )}
+
+          {/* TAB 5: USER MANAGEMENT */}
+          {activeTab === "users" && <UserManagementSection />}
         </div>
       </div>
     </div>

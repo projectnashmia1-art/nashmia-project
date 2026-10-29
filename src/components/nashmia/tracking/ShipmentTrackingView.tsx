@@ -28,6 +28,7 @@ import {
   Truck,
   Warehouse,
   X,
+  Eye,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -36,8 +37,14 @@ import {
   fetchShipmentAlertsFromSupabase,
   getShipmentSubscription,
 } from "@/lib/tracking-alerts-service";
-import { getSavedDocuments, type DriveFile } from "@/components/nashmia/documents/documents-data";
+import {
+  getSavedDocuments,
+  type DriveFile,
+  type FileType,
+} from "@/components/nashmia/documents/documents-data";
 import { getTrackingProviderConfig } from "@/lib/tracking-adapter";
+import { useSupabaseRealtime } from "@/hooks/use-supabase-realtime";
+import { fetchMovementDocuments, type BookingDocumentRow } from "@/lib/movement-document-service";
 import { TrackingMapSection } from "./TrackingMapSection";
 import { TrackingAlertsModal } from "./TrackingAlertsModal";
 import type {
@@ -182,7 +189,7 @@ export function ShipmentTrackingView({
     };
   }, [movementRef, booking]);
 
-  // Load real documents linked to this movement from server and local storage
+  // Load real documents linked strictly to this movement from Supabase and server
   const loadShipmentDocuments = useCallback(async () => {
     if (!movementRef || movementRef === "—") {
       setMovementDocuments([]);
@@ -190,56 +197,141 @@ export function ShipmentTrackingView({
     }
     setIsLoadingDocuments(true);
     try {
-      const res = await fetch(`/api/documents?movementNumber=${encodeURIComponent(movementRef)}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data.files)) {
-          const cleanRef = movementRef.trim().toUpperCase();
-          const bkId = (booking as { id?: string })?.id;
-          const matched = data.files.filter((doc: DriveFile) => {
-            const docMov = (
-              doc.metadata?.movementNumber ||
-              doc.metadata?.movementReferenceNumber ||
-              ""
-            ).trim().toUpperCase();
-            const docBkId = doc.metadata?.bookingId;
-            return (
-              (cleanRef && docMov && (docMov === cleanRef || cleanRef.includes(docMov) || docMov.includes(cleanRef))) ||
-              (bkId && docBkId === bkId)
-            );
-          });
-          setMovementDocuments(matched);
-          return;
+      const cleanRef = movementRef.trim().toUpperCase();
+      const bkId = (booking as { id?: string })?.id;
+
+      // 1. Fetch strictly from Supabase booking_documents table
+      const supabaseDocs = await fetchMovementDocuments({
+        movementRef: cleanRef,
+        bookingId: bkId,
+      });
+
+      const convertedSupabaseDocs: DriveFile[] = supabaseDocs.map((sDoc) => {
+        const ext = sDoc.extension.toLowerCase();
+        const fileType: FileType =
+          ext === "pdf"
+            ? "PDF"
+            : ext === "xlsx" || ext === "xls" || ext === "csv"
+              ? "SPREADSHEET"
+              : ext === "png" || ext === "jpg" || ext === "jpeg"
+                ? "IMAGE"
+                : ext === "docx" || ext === "doc"
+                  ? "DOCUMENT"
+                  : "OTHER";
+
+        return {
+          id: sDoc.id,
+          name: sDoc.documentName,
+          type: fileType,
+          extension: sDoc.extension,
+          owners: [
+            {
+              id: "owner-fwd",
+              name: "Verified Freight Forwarder",
+              email: "operations@nashmia.com",
+              avatarBg: "bg-blue-600 text-white",
+              avatarText: "F",
+            },
+          ],
+          lastModified: new Date(sDoc.createdAt).toLocaleDateString("en-US", {
+            month: "short",
+            day: "numeric",
+            year: "numeric",
+          }),
+          lastModifiedTimestamp: sDoc.createdAt,
+          fileSize: sDoc.fileSizeFormatted,
+          folderId: "folder-design",
+          starred: true,
+          sharedLink: sDoc.fileUrl,
+          url: sDoc.fileUrl,
+          metadata: {
+            documentType: sDoc.displayType,
+            displayDocumentType: sDoc.displayType,
+            typeTag: sDoc.displayType,
+            originalFilename: sDoc.documentName,
+            fileName: sDoc.documentName,
+            category: sDoc.displayType,
+            bookingId: sDoc.bookingId,
+            movementNumber: sDoc.movementNumber,
+            movementReferenceNumber: sDoc.movementNumber,
+            status: sDoc.status || "Verified",
+            uploadStatus: sDoc.status || "Verified",
+            fileSize: sDoc.fileSizeFormatted,
+            fileUrl: sDoc.fileUrl,
+            receivedDate: new Date(sDoc.createdAt).toLocaleDateString(),
+            forwarder: "Freight Forwarder",
+          },
+        };
+      });
+
+      // 2. Query /api/documents strictly by exact movement number
+      let serverMatched: DriveFile[] = [];
+      try {
+        const res = await fetch(`/api/documents?movementNumber=${encodeURIComponent(movementRef)}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.files)) {
+            serverMatched = data.files.filter((doc: DriveFile) => {
+              const docMov = (
+                doc.metadata?.movementNumber ||
+                doc.metadata?.movementReferenceNumber ||
+                ""
+              )
+                .trim()
+                .toUpperCase();
+              const docBkId = doc.metadata?.bookingId;
+              // Strict exact match only
+              return (cleanRef && docMov === cleanRef) || (bkId && docBkId === bkId);
+            });
+          }
         }
+      } catch (srvErr) {
+        console.warn("[ShipmentTrackingView] Notice querying /api/documents:", srvErr);
       }
+
+      // Merge and deduplicate by document id or normalized name
+      const seen = new Set<string>();
+      const combined: DriveFile[] = [];
+
+      for (const d of [...convertedSupabaseDocs, ...serverMatched]) {
+        const nameKey = (d.metadata?.originalFilename || d.name || "").toLowerCase().trim();
+        const idKey = d.id;
+        if (idKey && seen.has(idKey)) continue;
+        if (nameKey && seen.has(nameKey)) continue;
+        if (idKey) seen.add(idKey);
+        if (nameKey) seen.add(nameKey);
+        combined.push(d);
+      }
+
+      setMovementDocuments(combined);
     } catch (err) {
       console.warn("[ShipmentTrackingView] Fetch documents error:", err);
     } finally {
       setIsLoadingDocuments(false);
     }
-
-    // Fallback to locally saved documents if offline
-    const localDocs = getSavedDocuments();
-    const cleanRef = movementRef.trim().toUpperCase();
-    const bkId = (booking as { id?: string })?.id;
-    const matchedLocal = localDocs.filter((doc) => {
-      const docMov = (
-        doc.metadata?.movementNumber ||
-        doc.metadata?.movementReferenceNumber ||
-        ""
-      ).trim().toUpperCase();
-      const docBkId = doc.metadata?.bookingId;
-      return (
-        (cleanRef && docMov && (docMov === cleanRef || cleanRef.includes(docMov) || docMov.includes(cleanRef))) ||
-        (bkId && docBkId === bkId)
-      );
-    });
-    setMovementDocuments(matchedLocal);
   }, [movementRef, booking]);
 
   useEffect(() => {
     loadShipmentDocuments();
   }, [loadShipmentDocuments]);
+
+  // Real-time listener on booking_documents table
+  useSupabaseRealtime<BookingDocumentRow>({
+    table: "booking_documents",
+    filter: (booking as { id?: string })?.id
+      ? `booking_id=eq.${(booking as { id?: string })!.id}`
+      : undefined,
+    enabled: Boolean(movementRef),
+    onInsert: () => {
+      loadShipmentDocuments();
+    },
+    onUpdate: () => {
+      loadShipmentDocuments();
+    },
+    onDelete: () => {
+      loadShipmentDocuments();
+    },
+  });
 
   // Real events from Supabase
   const bookingEvents = useMemo(() => {
@@ -443,28 +535,6 @@ export function ShipmentTrackingView({
     setIsSubscribed(Boolean(sub.emailEnabled || sub.inAppToastEnabled));
   }, [movementRef, user?.email]);
 
-  // Synchronize real alerts count from Supabase
-  useEffect(() => {
-    let isCancelled = false;
-    async function loadCount() {
-      try {
-        const list = await fetchShipmentAlertsFromSupabase(
-          movementRef,
-          booking as FullBookingRecord | null,
-        );
-        if (!isCancelled) {
-          setAlertsCount(list.length);
-        }
-      } catch {
-        // Fallback count
-      }
-    }
-    void loadCount();
-    return () => {
-      isCancelled = true;
-    };
-  }, [movementRef, booking]);
-
   // Handle Subscribe - Opens Subscription Configuration
   const handleSubscribe = () => {
     setAlertsModalTab("subscribe");
@@ -483,6 +553,97 @@ export function ShipmentTrackingView({
       return next;
     });
   };
+
+  // Handle Open Document in New Tab (View action)
+  const handleViewDoc = useCallback((doc: DriveFile) => {
+    const directUrl =
+      doc.url ||
+      doc.sharedLink ||
+      doc.metadata?.fileUrl ||
+      (doc.metadata?.storagePath
+        ? `/api/documents/download?path=${encodeURIComponent(doc.metadata.storagePath)}`
+        : null);
+
+    if (directUrl && directUrl !== "#") {
+      const opened = window.open(directUrl, "_blank", "noopener,noreferrer");
+      if (!opened) {
+        const a = document.createElement("a");
+        a.href = directUrl;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }
+      toast.success(`Opening ${doc.name}`);
+      return;
+    }
+
+    const msgId = doc.metadata?.gmailMessageId || doc.metadata?.emailMessageId;
+    const attId = (doc.metadata as Record<string, unknown>)?.attachmentId as string | undefined;
+    if (msgId && attId) {
+      const filename = doc.metadata?.originalFilename || doc.metadata?.fileName || doc.name;
+      const downloadEndpoint = `/api/gmail/attachment?messageId=${encodeURIComponent(msgId)}&attachmentId=${encodeURIComponent(attId)}&filename=${encodeURIComponent(filename)}&mimeType=${encodeURIComponent(doc.metadata?.fileFormat || "application/octet-stream")}`;
+      window.open(downloadEndpoint, "_blank", "noopener,noreferrer");
+      toast.success(`Opening ${doc.name}`);
+      return;
+    }
+
+    toast.info(`Document "${doc.name}" is synchronizing from forwarder email.`);
+  }, []);
+
+  // Handle Real Document Download
+  const handleDownloadDoc = useCallback((doc: DriveFile) => {
+    if (doc.metadata?.storagePath) {
+      const a = document.createElement("a");
+      a.href = `/api/documents/download?path=${encodeURIComponent(doc.metadata.storagePath)}`;
+      a.download = doc.metadata?.originalFilename || doc.metadata?.fileName || doc.name;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      toast.success(`Downloading ${doc.name}`);
+      return;
+    }
+
+    const msgId = doc.metadata?.gmailMessageId || doc.metadata?.emailMessageId;
+    const attId = (doc.metadata as Record<string, unknown>)?.attachmentId as string | undefined;
+    if (msgId && attId) {
+      const filename = doc.metadata?.originalFilename || doc.metadata?.fileName || doc.name;
+      const downloadEndpoint = `/api/gmail/attachment?messageId=${encodeURIComponent(msgId)}&attachmentId=${encodeURIComponent(attId)}&filename=${encodeURIComponent(filename)}&mimeType=${encodeURIComponent(doc.metadata?.fileFormat || "application/octet-stream")}`;
+      const a = document.createElement("a");
+      a.href = downloadEndpoint;
+      a.download = filename;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      toast.success(`Downloading ${doc.name}`);
+      return;
+    }
+
+    const downloadUrl = doc.url || doc.metadata?.fileUrl || doc.sharedLink;
+    if (
+      downloadUrl &&
+      downloadUrl !== "#" &&
+      !downloadUrl.startsWith("https://drive.nashmia.com")
+    ) {
+      const a = document.createElement("a");
+      a.href = downloadUrl;
+      a.download = doc.metadata?.originalFilename || doc.metadata?.fileName || doc.name;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      toast.success(`Downloading ${doc.name}`);
+      return;
+    }
+
+    toast.info(`Document "${doc.name}" is synchronizing from forwarder email.`);
+  }, []);
 
   // If no booking or movement is present, render clean empty state
   if (!booking && !movementId) {
@@ -791,7 +952,10 @@ export function ShipmentTrackingView({
               destinationName={destCity}
               destCountryCode={destCountry}
               vesselName={currentVessel}
-              vesselStatus="In Transit (+18h)"
+              vesselStatus={
+                (booking as { status?: string })?.status ||
+                (departedEvent ? "In Transit" : "Scheduled")
+              }
               etaFormatted={etaFormatted}
             />
 
@@ -940,7 +1104,7 @@ export function ShipmentTrackingView({
                     : "text-slate-500 hover:text-slate-700",
                 )}
               >
-                Transport documents (3)
+                Transport documents ({movementDocuments.length})
                 {activeTab === "documents" && (
                   <span className="absolute bottom-0 left-0 right-0 h-[2.5px] bg-[#009EE2] rounded-full animate-in fade-in-50 duration-200" />
                 )}
@@ -1135,102 +1299,95 @@ export function ShipmentTrackingView({
                       Verified Shipping & Customs Documents
                     </h3>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      Carrier bill of lading, export declarations, and VGM certificates.
+                      Carrier bill of lading, export declarations, and VGM certificates for movement
+                      #{movementRef}.
                     </p>
                   </div>
+                  {isLoadingDocuments && (
+                    <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                      <Loader2 className="size-3.5 animate-spin text-[#009EE2]" />
+                      <span>Checking documents...</span>
+                    </div>
+                  )}
                 </div>
 
-                <div className="divide-y divide-slate-100">
-                  {/* Doc 1 */}
-                  <div className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <div className="grid size-10 place-items-center rounded-xl bg-blue-50 text-[#009EE2] shrink-0 font-bold text-xs uppercase">
-                        BL
-                      </div>
-                      <div>
-                        <h4 className="text-[13.5px] font-bold text-slate-900">
-                          Original Bill of Lading (Master B/L)
-                        </h4>
-                        <p className="text-xs text-slate-500 font-mono">
-                          MEDUAHJ11786.pdf · 2.4 MB · Issued by Mediterranean Shipping Company
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700">
-                        Signed
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => toast.success("Downloading Master Bill of Lading")}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
-                      >
-                        <Download className="size-3.5" />
-                        <span>Download</span>
-                      </button>
-                    </div>
-                  </div>
+                {movementDocuments.length > 0 ? (
+                  <div className="divide-y divide-slate-100">
+                    {movementDocuments.map((doc) => {
+                      const ext = (doc.extension || "pdf").toUpperCase();
+                      const typeTag =
+                        doc.metadata?.typeTag ||
+                        doc.metadata?.displayDocumentType ||
+                        doc.metadata?.documentType ||
+                        ext;
+                      const statusText =
+                        doc.metadata?.status || doc.metadata?.uploadStatus || "Verified";
+                      const dateText = doc.metadata?.receivedDate || doc.lastModified || "Recent";
+                      const sizeText = doc.fileSize || doc.metadata?.fileSize || "—";
+                      const forwarderText =
+                        doc.metadata?.forwarder || doc.metadata?.forwarderName || "Forwarder";
 
-                  {/* Doc 2 */}
-                  <div className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <div className="grid size-10 place-items-center rounded-xl bg-emerald-50 text-emerald-600 shrink-0 font-bold text-xs uppercase">
-                        VGM
-                      </div>
-                      <div>
-                        <h4 className="text-[13.5px] font-bold text-slate-900">
-                          Verified Gross Mass (VGM) Certificate
-                        </h4>
-                        <p className="text-xs text-slate-500 font-mono">
-                          VGM-MSMU7506677.pdf · 1.1 MB · Terminal Gate-in Weighbridge Calibrated
-                        </p>
-                      </div>
+                      return (
+                        <div
+                          key={doc.id}
+                          className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className="grid size-10 place-items-center rounded-xl bg-blue-50 text-[#009EE2] shrink-0 font-bold text-xs uppercase">
+                              {typeTag.slice(0, 3)}
+                            </div>
+                            <div className="min-w-0">
+                              <h4 className="text-[13.5px] font-bold text-slate-900 truncate">
+                                {doc.name}
+                              </h4>
+                              <p className="text-xs text-slate-500 font-mono truncate">
+                                {sizeText} · {dateText} · {forwarderText}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700">
+                              {statusText}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleViewDoc(doc)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-700 hover:text-[#009EE2] hover:bg-slate-50 transition-colors cursor-pointer"
+                              title="Open document directly in new browser tab"
+                            >
+                              <Eye className="size-3.5" />
+                              <span>View</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadDoc(doc)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
+                              title="Download document file"
+                            >
+                              <Download className="size-3.5" />
+                              <span>Download</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="py-12 flex flex-col items-center justify-center text-center space-y-3">
+                    <div className="size-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400">
+                      <FileText className="size-6 text-slate-400" />
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700">
-                        Verified
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => toast.success("Downloading Verified Gross Mass Certificate")}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
-                      >
-                        <Download className="size-3.5" />
-                        <span>Download</span>
-                      </button>
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-800">
+                        No verified documents attached yet
+                      </h4>
+                      <p className="text-xs text-slate-500 max-w-sm mt-1">
+                        Carrier bills of lading, cut-off notices, and clearance invoices received
+                        for movement #{movementRef} will appear here automatically once processed.
+                      </p>
                     </div>
                   </div>
-
-                  {/* Doc 3 */}
-                  <div className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <div className="grid size-10 place-items-center rounded-xl bg-amber-50 text-amber-600 shrink-0 font-bold text-xs uppercase">
-                        INV
-                      </div>
-                      <div>
-                        <h4 className="text-[13.5px] font-bold text-slate-900">
-                          Commercial Invoice & Packing Declaration
-                        </h4>
-                        <p className="text-xs text-slate-500 font-mono">
-                          INV-PK-2026-9021.pdf · 3.8 MB · Customs Declared: Used Clothing 40'HC
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-blue-50 text-[#009EE2]">
-                        Customs Approved
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => toast.success("Downloading Commercial Invoice")}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
-                      >
-                        <Download className="size-3.5" />
-                        <span>Download</span>
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                )}
               </div>
             </div>
           )}

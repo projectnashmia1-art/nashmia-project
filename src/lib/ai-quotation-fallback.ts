@@ -74,7 +74,9 @@ function validateAiExtractedData(raw: Record<string, unknown>): AiParsedQuotatio
   };
 
   const rate = sanitizeNumber(raw.rate || raw.oceanFreight || raw.ocean_freight);
-  const totalCost = sanitizeNumber(raw.totalCost || raw.totalAmount || raw.total_cost || raw.total_amount);
+  const totalCost = sanitizeNumber(
+    raw.totalCost || raw.totalAmount || raw.total_cost || raw.total_amount,
+  );
   const currency = sanitizeCurrency(raw.currency) || (rate || totalCost ? "USD" : null);
 
   const rawConfidence = typeof raw.confidenceScore === "number" ? raw.confidenceScore : 0.75;
@@ -116,7 +118,9 @@ export async function extractQuotationWithAiFallback(
   const apiKey =
     process.env.GEMINI_API_KEY ||
     process.env.GOOGLE_GENAI_API_KEY ||
-    (typeof window !== "undefined" ? (window as unknown as Record<string, string>).__GEMINI_API_KEY__ : undefined);
+    (typeof window !== "undefined"
+      ? (window as unknown as Record<string, string>).__GEMINI_API_KEY__
+      : undefined);
 
   if (!apiKey) {
     if (typeof window !== "undefined") {
@@ -163,10 +167,15 @@ export async function extractQuotationWithAiFallback(
           }
         }
       } catch (proxyErr) {
-        console.warn("[AiQuotationFallback] Browser proxy to /api/extraction/extract-quotation notice:", proxyErr);
+        console.warn(
+          "[AiQuotationFallback] Browser proxy to /api/extraction/extract-quotation notice:",
+          proxyErr,
+        );
       }
     }
-    console.info("[AiQuotationFallback] Gemini API key not present, preserving deterministic result.");
+    console.info(
+      "[AiQuotationFallback] Gemini API key not present, preserving deterministic result.",
+    );
     return null;
   }
 
@@ -207,25 +216,46 @@ Extract the fields according to the schema.`;
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            rate: { type: Type.NUMBER, description: "Ocean freight rate per container (e.g. 2100)" },
-            currency: { type: Type.STRING, description: "3-letter currency code, e.g. USD, EUR, GBP" },
-            totalCost: { type: Type.NUMBER, description: "Total quotation cost if stated explicitly" },
+            rate: {
+              type: Type.NUMBER,
+              description: "Ocean freight rate per container (e.g. 2100)",
+            },
+            currency: {
+              type: Type.STRING,
+              description: "3-letter currency code, e.g. USD, EUR, GBP",
+            },
+            totalCost: {
+              type: Type.NUMBER,
+              description: "Total quotation cost if stated explicitly",
+            },
             originCharges: { type: Type.NUMBER, description: "Origin terminal or THC charges" },
             destinationCharges: { type: Type.NUMBER, description: "Destination charges" },
             thc: { type: Type.NUMBER, description: "Terminal handling charges" },
             documentationCharges: { type: Type.NUMBER, description: "Documentation fee" },
             customsCharges: { type: Type.NUMBER, description: "Customs clearance charge" },
-            truckingCharges: { type: Type.NUMBER, description: "Inland haulage or trucking charge" },
+            truckingCharges: {
+              type: Type.NUMBER,
+              description: "Inland haulage or trucking charge",
+            },
             otherCharges: { type: Type.NUMBER, description: "Other itemized surcharges" },
             transitTime: { type: Type.NUMBER, description: "Transit time in days" },
-            freeDays: { type: Type.NUMBER, description: "Detention / demurrage free days (e.g. 14)" },
+            freeDays: {
+              type: Type.NUMBER,
+              description: "Detention / demurrage free days (e.g. 14)",
+            },
             etd: { type: Type.STRING, description: "Estimated time of departure date string" },
             eta: { type: Type.STRING, description: "Estimated time of arrival date string" },
-            carrier: { type: Type.STRING, description: "Ocean shipping line name, e.g. Maersk, MSC, CMA CGM" },
+            carrier: {
+              type: Type.STRING,
+              description: "Ocean shipping line name, e.g. Maersk, MSC, CMA CGM",
+            },
             vesselName: { type: Type.STRING, description: "Vessel name" },
             voyageNumber: { type: Type.STRING, description: "Voyage number" },
             rateValidity: { type: Type.STRING, description: "Rate validity or expiration date" },
-            quotationReference: { type: Type.STRING, description: "Quotation quote reference number" },
+            quotationReference: {
+              type: Type.STRING,
+              description: "Quotation quote reference number",
+            },
             notes: { type: Type.STRING, description: "Important conditions, exclusions or notes" },
             confidenceScore: { type: Type.NUMBER, description: "Confidence score from 0.0 to 1.0" },
           },
@@ -244,12 +274,15 @@ Extract the fields according to the schema.`;
       return null;
     }
 
-    console.log("[AiQuotationFallback] ✅ AI fallback successfully extracted unstructured quotation:", {
-      rate: validated.rate,
-      currency: validated.currency,
-      carrier: validated.carrier,
-      etd: validated.etd,
-    });
+    console.log(
+      "[AiQuotationFallback] ✅ AI fallback successfully extracted unstructured quotation:",
+      {
+        rate: validated.rate,
+        currency: validated.currency,
+        carrier: validated.carrier,
+        etd: validated.etd,
+      },
+    );
 
     return validated;
   } catch (err) {

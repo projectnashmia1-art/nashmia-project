@@ -905,17 +905,24 @@ export async function sendEmailDirectlyViaGmail(params: {
 
   // If 401 Unauthorized, automatically refresh token or prompt re-authorization popup and retry
   if (response.status === 401) {
-    console.warn("[GmailService] Token expired on send (HTTP 401). Attempting token refresh/re-authentication...");
+    console.warn(
+      "[GmailService] Token expired on send (HTTP 401). Attempting token refresh/re-authentication...",
+    );
     cachedAccessToken = null;
     let refreshedToken = await getGmailAccessToken(params.userId, true);
 
     if (!refreshedToken) {
       try {
-        console.log("[GmailService] Stale token detected. Prompting Google OAuth re-authentication popup...");
+        console.log(
+          "[GmailService] Stale token detected. Prompting Google OAuth re-authentication popup...",
+        );
         const connResult = await connectGmailAccount(params.userId);
         refreshedToken = connResult.accessToken;
       } catch (connErr) {
-        console.warn("[GmailService] Interactive re-authentication popup skipped or cancelled:", connErr);
+        console.warn(
+          "[GmailService] Interactive re-authentication popup skipped or cancelled:",
+          connErr,
+        );
       }
     }
 
@@ -1077,7 +1084,10 @@ export interface GmailFetchedMessage {
  * Format bytes to readable size string
  */
 export function formatAttachmentSize(bytes: number | string | undefined): string {
-  if (typeof bytes === "string" && (bytes.includes("KB") || bytes.includes("MB") || bytes.includes("B"))) {
+  if (
+    typeof bytes === "string" &&
+    (bytes.includes("KB") || bytes.includes("MB") || bytes.includes("B"))
+  ) {
     return bytes;
   }
   const num = typeof bytes === "number" ? bytes : parseInt(String(bytes || 0), 10);

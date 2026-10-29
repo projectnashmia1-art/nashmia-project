@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, QueryClient } from "@tanstack/react-query";
 import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 import type { RealtimeChannel, RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 import {
@@ -11,6 +11,7 @@ import {
   applyForwarderRequestRealtimeUpdate,
   applyQuotationRealtimeUpdate,
 } from "@/lib/cache/realtime-cache-sync";
+import { invalidateBookingsCache } from "@/lib/supabase-services";
 
 export type RealtimeTable =
   | "buyers"
@@ -29,31 +30,15 @@ export type RealtimeTable =
   | "forwarder_requests"
   | "quotations"
   | "quotation_versions"
-  | "requests";
+  | "requests"
+  | "booking_documents";
 
 export type RealtimeConnectionState =
-  "SUBSCRIBED" | "CONNECTING" | "TIMED_OUT" | "CLOSED" | "CHANNEL_ERROR";
-
-interface ChannelPoolEntry {
-  channel: RealtimeChannel;
-  listeners: Set<(payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => void>;
-  teardownTimer: ReturnType<typeof setTimeout> | null;
-  reconnectTimer: ReturnType<typeof setTimeout> | null;
-  reconnectAttempts: number;
-  state: RealtimeConnectionState;
-  targetTable: string;
-  filter?: string;
-  channelName: string;
-}
-
-// Global multiplexed channel registry to ensure exactly ONE subscription per table resource
-const channelPool = new Map<string, ChannelPoolEntry>();
-
-// Grace period before closing an unused channel (avoids WebSocket reconnect storms on route change)
-const CHANNEL_TEARDOWN_GRACE_MS = 2500;
-
-// Maximum reconnection backoff in ms
-const MAX_RECONNECT_DELAY_MS = 10000;
+  | "SUBSCRIBED"
+  | "CONNECTING"
+  | "TIMED_OUT"
+  | "CLOSED"
+  | "CHANNEL_ERROR";
 
 // Deduplication sliding window to prevent duplicate handling of the same event
 const recentEventSignatures = new Map<string, number>();
@@ -69,12 +54,7 @@ function cleanupOldEventSignatures(): void {
 }
 
 // Valid PostgreSQL tables with realtime enabled
-const VALID_TABLES = new Set<string>([
-  "buyers",
-  "suppliers",
-  "forwarders",
-  "shipping_lines",
-  "rate_cards",
+const VALID_TABLES = [
   "bookings",
   "booking_containers",
   "booking_events",
@@ -82,12 +62,16 @@ const VALID_TABLES = new Set<string>([
   "email_messages",
   "email_threads",
   "forwarder_offers",
-  "booking_forwarders",
   "forwarder_requests",
   "quotations",
   "quotation_versions",
-  "requests",
-]);
+  "buyers",
+  "suppliers",
+  "forwarders",
+  "shipping_lines",
+  "rate_cards",
+  "booking_documents",
+] as const;
 
 /**
  * Maps incoming table names or legacy aliases to the canonical database table
@@ -104,11 +88,262 @@ export interface RealtimeSubscriptionOptions {
   organizationId?: string | null;
 }
 
+type ListenerFn = (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => void;
+
+/**
+ * Global Realtime Hub Singleton
+ * Connects ONE multiplexed organization-scoped WebSocket channel per session
+ * to eliminate connection lag, socket leaks, and duplicate events across tabs/pages.
+ */
+class GlobalRealtimeHub {
+  private channel: RealtimeChannel | null = null;
+  private channelName = "";
+  public state: RealtimeConnectionState = "CONNECTING";
+  private listeners = new Map<string, Set<ListenerFn>>();
+  private stateChangeListeners = new Set<(state: RealtimeConnectionState) => void>();
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempts = 0;
+  private activeQueryClient: QueryClient | null = null;
+  private organizationId: string | null = null;
+
+  constructor() {
+    if (typeof window !== "undefined") {
+      window.addEventListener("online", () => {
+        if (this.state !== "SUBSCRIBED" && this.channel) {
+          try {
+            void this.channel.subscribe();
+          } catch {
+            // ignore
+          }
+        }
+      });
+    }
+  }
+
+  public setQueryClient(qc: QueryClient) {
+    this.activeQueryClient = qc;
+  }
+
+  public setOrganizationId(orgId?: string | null) {
+    if (orgId && orgId !== this.organizationId) {
+      this.organizationId = orgId;
+      // Re-initialize channel for specific organization
+      this.initChannel(orgId);
+    }
+  }
+
+  public initChannel(orgId?: string | null): RealtimeChannel | null {
+    if (!isSupabaseConfigured) return null;
+
+    const desiredChannelName = `org_${orgId || "default"}_session_feed`;
+    if (this.channel && this.channelName === desiredChannelName) {
+      return this.channel;
+    }
+
+    if (this.channel) {
+      try {
+        void supabase.removeChannel(this.channel);
+      } catch {
+        // ignore
+      }
+    }
+
+    this.channelName = desiredChannelName;
+    this.organizationId = orgId || null;
+    this.state = "CONNECTING";
+    this.notifyState();
+
+    const channel = supabase.channel(desiredChannelName);
+
+    // Register all PostgreSQL tables on this single channel
+    for (const table of VALID_TABLES) {
+      channel.on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table,
+        },
+        (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => {
+          this.handleIncomingPayload(table, payload);
+        },
+      );
+    }
+
+    channel.subscribe((status, err) => {
+      this.state = status as RealtimeConnectionState;
+      this.notifyState();
+
+      if (status === "SUBSCRIBED") {
+        this.reconnectAttempts = 0;
+      } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        console.warn(
+          `[GlobalRealtimeHub] Channel notice on ${this.channelName} (${status}):`,
+          err?.message,
+        );
+        this.scheduleReconnect();
+      }
+    });
+
+    this.channel = channel;
+    return channel;
+  }
+
+  private scheduleReconnect() {
+    if (this.reconnectTimer) return;
+    this.reconnectAttempts += 1;
+    const delay = Math.min(1000 * Math.pow(1.5, this.reconnectAttempts), 10000);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.channel) {
+        try {
+          void this.channel.subscribe();
+        } catch (e) {
+          console.warn("[GlobalRealtimeHub] Reconnect notice:", e);
+        }
+      }
+    }, delay);
+  }
+
+  private notifyState() {
+    for (const fn of this.stateChangeListeners) {
+      try {
+        fn(this.state);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  public subscribeState(fn: (state: RealtimeConnectionState) => void): () => void {
+    this.stateChangeListeners.add(fn);
+    fn(this.state);
+    return () => {
+      this.stateChangeListeners.delete(fn);
+    };
+  }
+
+  public registerListener(table: string, fn: ListenerFn): () => void {
+    const canonical = resolveCanonicalTable(table);
+    if (!this.listeners.has(canonical)) {
+      this.listeners.set(canonical, new Set());
+    }
+    this.listeners.get(canonical)!.add(fn);
+
+    return () => {
+      const set = this.listeners.get(canonical);
+      if (set) {
+        set.delete(fn);
+      }
+    };
+  }
+
+  private handleIncomingPayload(
+    table: string,
+    payload: RealtimePostgresChangesPayload<Record<string, unknown>>,
+  ) {
+    const row = (payload.new || payload.old || {}) as Record<string, unknown>;
+
+    // 1. Organization isolation guard: discard if belongs to different org
+    if (this.organizationId && row.organization_id) {
+      if (String(row.organization_id) !== String(this.organizationId)) {
+        return;
+      }
+    }
+
+    // 2. Sliding window event deduplication guard
+    const recordId = String(row.id || row.booking_id || row.movement_number || "");
+    const recordTs = String(payload.commit_timestamp || row.updated_at || row.created_at || "");
+    const eventSig = `${table}:${payload.eventType}:${recordId}:${recordTs}`;
+
+    cleanupOldEventSignatures();
+    if (recentEventSignatures.has(eventSig)) {
+      return; // Already processed
+    }
+    recentEventSignatures.set(eventSig, Date.now());
+
+    // 3. Surgical TanStack Query cache sync & instant cache invalidation
+    if (this.activeQueryClient) {
+      const qc = this.activeQueryClient;
+      try {
+        if (table === "bookings") {
+          applyBookingRealtimeUpdate(qc, payload);
+          void qc.invalidateQueries({ queryKey: ["dashboard-data"] });
+          void qc.invalidateQueries({ queryKey: ["dashboard-bookings"] });
+          void qc.invalidateQueries({ queryKey: ["booking-requests"] });
+          void qc.invalidateQueries({ queryKey: ["movements"] });
+          void qc.invalidateQueries({ queryKey: ["all-forwarder-requests"] });
+          invalidateBookingsCache();
+        } else if (table === "forwarder_requests") {
+          applyForwarderRequestRealtimeUpdate(qc, payload);
+          void qc.invalidateQueries({ queryKey: ["all-forwarder-requests"] });
+          void qc.invalidateQueries({ queryKey: ["booking-requests"] });
+        } else if (table === "quotations" || table === "quotation_versions") {
+          applyQuotationRealtimeUpdate(qc, payload);
+          void qc.invalidateQueries({ queryKey: ["all-forwarder-requests"] });
+          void qc.invalidateQueries({ queryKey: ["booking-requests"] });
+          void qc.invalidateQueries({ queryKey: ["quotations"] });
+        } else if (table === "forwarder_offers" || table === "booking_forwarders") {
+          applyOfferRealtimeUpdate(qc, payload);
+          void qc.invalidateQueries({ queryKey: ["all-forwarder-requests"] });
+        } else if (table === "booking_events") {
+          applyBookingEventRealtimeUpdate(qc, payload);
+        } else if (table === "booking_containers") {
+          void qc.invalidateQueries({ queryKey: ["dashboard-bookings"] });
+          void qc.invalidateQueries({ queryKey: ["booking-requests"] });
+          void qc.invalidateQueries({ queryKey: ["movements"] });
+          invalidateBookingsCache();
+        } else if (table === "booking_documents") {
+          void qc.invalidateQueries({ queryKey: ["booking-documents"] });
+          void qc.invalidateQueries({ queryKey: ["documents"] });
+        } else if (table === "buyers") {
+          void qc.invalidateQueries({ queryKey: ["entities", "buyers"] });
+          void qc.invalidateQueries({ queryKey: ["buyers"] });
+        } else if (table === "suppliers") {
+          void qc.invalidateQueries({ queryKey: ["entities", "suppliers"] });
+          void qc.invalidateQueries({ queryKey: ["suppliers"] });
+        } else if (table === "forwarders") {
+          void qc.invalidateQueries({ queryKey: ["entities", "forwarders"] });
+          void qc.invalidateQueries({ queryKey: ["forwarders"] });
+          void qc.invalidateQueries({ queryKey: ["all-forwarder-requests"] });
+        } else if (table === "rate_cards") {
+          void qc.invalidateQueries({ queryKey: ["entities", "rate-cards"] });
+          void qc.invalidateQueries({ queryKey: ["rate-cards"] });
+          void qc.invalidateQueries({ queryKey: ["all-rate-cards"] });
+        } else if (table === "shipping_lines") {
+          void qc.invalidateQueries({ queryKey: ["entities", "shipping-lines"] });
+          void qc.invalidateQueries({ queryKey: ["shipping-lines"] });
+        } else if (table === "email_messages") {
+          applyEmailMessageRealtimeUpdate(qc, payload);
+        } else if (table === "notifications") {
+          applyNotificationRealtimeUpdate(qc, payload);
+        }
+      } catch (syncErr) {
+        console.warn(`[GlobalRealtimeHub] Cache sync notice on ${table}:`, syncErr);
+      }
+    }
+
+    // 4. Dispatch to registered component listeners
+    const targetSet = this.listeners.get(table);
+    if (targetSet) {
+      for (const fn of targetSet) {
+        try {
+          fn(payload);
+        } catch (err) {
+          console.warn(`[GlobalRealtimeHub] Error in listener for ${table}:`, err);
+        }
+      }
+    }
+  }
+}
+
+// Global Hub Singleton
+const globalHub = new GlobalRealtimeHub();
+
 /**
  * Hook to subscribe to PostgreSQL table changes in Supabase in real-time.
- * Multiplexes subscriptions into a single WebSocket channel per table resource.
- * Automatically synchronizes TanStack Query cache without triggering expensive
- * full-database refetches or duplicate WebSocket connections.
+ * Multiplexes subscriptions onto a SINGLE organization-scoped WebSocket channel.
+ * Eliminates connection storms and duplicate subscriptions.
  */
 export function useSupabaseRealtime<T extends Record<string, unknown> = Record<string, unknown>>(
   table: RealtimeTable | string,
@@ -120,211 +355,37 @@ export function useSupabaseRealtime<T extends Record<string, unknown> = Record<s
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
 
-  const [connectionStatus, setConnectionStatus] = useState<RealtimeConnectionState>("CONNECTING");
+  const [connectionStatus, setConnectionStatus] = useState<RealtimeConnectionState>(
+    globalHub.state,
+  );
 
-  const filter = typeof filterOrOptions === "string" ? filterOrOptions : filterOrOptions?.filter;
   const organizationId =
     typeof filterOrOptions === "object" ? filterOrOptions?.organizationId : null;
 
   useEffect(() => {
     if (!isSupabaseConfigured || !enabled) return;
 
-    const targetTable = resolveCanonicalTable(table);
-
-    if (!VALID_TABLES.has(targetTable) && !VALID_TABLES.has(table)) {
-      console.warn(`[useSupabaseRealtime] Table "${targetTable}" is not in valid realtime tables.`);
-      return;
-    }
-
-    const channelKey = `${targetTable}:${filter || "*"}`;
-
-    const listener = (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => {
-      // 1. Organization filtering guard: discard if record belongs to another organization
-      if (organizationId) {
-        const row = (payload.new || payload.old || {}) as Record<string, unknown>;
-        if (row.organization_id && String(row.organization_id) !== String(organizationId)) {
-          return;
-        }
-      }
-
-      // 2. Event deduplication guard
-      const row = (payload.new || payload.old || {}) as Record<string, unknown>;
-      const recordId = String(row.id || row.booking_id || row.movement_number || "");
-      const recordTs = String(payload.commit_timestamp || row.updated_at || row.created_at || "");
-      const eventSig = `${targetTable}:${payload.eventType}:${recordId}:${recordTs}`;
-
-      cleanupOldEventSignatures();
-      if (recentEventSignatures.has(eventSig)) {
-        return; // Already processed this exact event
-      }
-      recentEventSignatures.set(eventSig, Date.now());
-
-      // 3. Forward to component listener if provided
-      try {
-        onChangeRef.current?.(payload as RealtimePostgresChangesPayload<T>);
-      } catch (err) {
-        console.warn(`[useSupabaseRealtime] Error in listener for ${targetTable}:`, err);
-      }
-    };
-
-    let entry = channelPool.get(channelKey);
-
-    const setupSubscription = (currentEntry: ChannelPoolEntry) => {
-      const channel = currentEntry.channel;
-
-      channel.on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: targetTable,
-          filter,
-        },
-        (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => {
-          // Organization filtering guard:
-          // Check if payload row has an organization_id and doesn't match active organization
-          const targetRow = (payload.new || payload.old || {}) as Record<string, unknown>;
-          if (
-            organizationId &&
-            targetRow.organization_id &&
-            String(targetRow.organization_id) !== String(organizationId)
-          ) {
-            return;
-          }
-
-          // Surgical cache update: update affected item without refetching entire database
-          try {
-            if (targetTable === "bookings") {
-              applyBookingRealtimeUpdate(queryClient, payload);
-            } else if (targetTable === "forwarder_requests") {
-              applyForwarderRequestRealtimeUpdate(queryClient, payload);
-            } else if (targetTable === "quotations" || targetTable === "quotation_versions") {
-              applyQuotationRealtimeUpdate(queryClient, payload);
-            } else if (targetTable === "forwarder_offers" || targetTable === "booking_forwarders") {
-              applyOfferRealtimeUpdate(queryClient, payload);
-            } else if (targetTable === "booking_events") {
-              applyBookingEventRealtimeUpdate(queryClient, payload);
-            } else if (targetTable === "email_messages") {
-              applyEmailMessageRealtimeUpdate(queryClient, payload);
-            } else if (targetTable === "notifications") {
-              applyNotificationRealtimeUpdate(queryClient, payload);
-            }
-          } catch (syncErr) {
-            console.warn(`[useSupabaseRealtime] Cache sync notice on ${targetTable}:`, syncErr);
-          }
-
-          // Dispatch to active registered listeners in pool
-          currentEntry.listeners.forEach((fn) => {
-            try {
-              fn(payload);
-            } catch (e) {
-              console.warn(`[useSupabaseRealtime] Dispatch error on ${targetTable}:`, e);
-            }
-          });
-        },
-      );
-
-      channel.subscribe((status, err) => {
-        currentEntry.state = status as RealtimeConnectionState;
-        setConnectionStatus(status as RealtimeConnectionState);
-
-        if (status === "SUBSCRIBED") {
-          currentEntry.reconnectAttempts = 0;
-        } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-          console.warn(
-            `[useSupabaseRealtime] Channel notice on ${channelKey} (${status}):`,
-            err?.message,
-          );
-
-          // Exponential backoff reconnect
-          if (!currentEntry.reconnectTimer) {
-            currentEntry.reconnectAttempts += 1;
-            const delay = Math.min(
-              1000 * Math.pow(1.5, currentEntry.reconnectAttempts),
-              MAX_RECONNECT_DELAY_MS,
-            );
-            currentEntry.reconnectTimer = setTimeout(() => {
-              currentEntry.reconnectTimer = null;
-              if (currentEntry.listeners.size > 0) {
-                try {
-                  void channel.subscribe();
-                } catch (reconnectErr) {
-                  console.warn("[useSupabaseRealtime] Reconnect notice:", reconnectErr);
-                }
-              }
-            }, delay);
-          }
-        }
-      });
-    };
-
-    if (entry) {
-      if (entry.teardownTimer) {
-        clearTimeout(entry.teardownTimer);
-        entry.teardownTimer = null;
-      }
-      setConnectionStatus(entry.state);
+    globalHub.setQueryClient(queryClient);
+    if (organizationId) {
+      globalHub.setOrganizationId(organizationId);
     } else {
-      const channelName = `rt_${targetTable}_${(filter || "all").replace(/[^a-zA-Z0-9_-]/g, "_")}`;
-      const channel = supabase.channel(channelName);
-
-      entry = {
-        channel,
-        listeners: new Set(),
-        teardownTimer: null,
-        reconnectTimer: null,
-        reconnectAttempts: 0,
-        state: "CONNECTING",
-        targetTable,
-        filter,
-        channelName,
-      };
-      channelPool.set(channelKey, entry);
-      setupSubscription(entry);
+      globalHub.initChannel();
     }
 
-    entry.listeners.add(listener);
+    const unsubsState = globalHub.subscribeState((st) => {
+      setConnectionStatus(st);
+    });
 
-    // Network online handler to immediately reconnect if internet drops and recovers
-    const handleOnline = () => {
-      const activeEntry = channelPool.get(channelKey);
-      if (activeEntry && activeEntry.state !== "SUBSCRIBED") {
-        try {
-          void activeEntry.channel.subscribe();
-        } catch {
-          // ignore
-        }
-      }
-    };
-    window.addEventListener("online", handleOnline);
+    const targetCanonical = resolveCanonicalTable(table);
+    const unregister = globalHub.registerListener(targetCanonical, (payload) => {
+      onChangeRef.current?.(payload as RealtimePostgresChangesPayload<T>);
+    });
 
     return () => {
-      window.removeEventListener("online", handleOnline);
-      const currentEntry = channelPool.get(channelKey);
-      if (!currentEntry) return;
-
-      currentEntry.listeners.delete(listener);
-
-      // Grace period before tearing down channel to avoid flapping between route navigations
-      if (currentEntry.listeners.size === 0) {
-        if (currentEntry.teardownTimer) {
-          clearTimeout(currentEntry.teardownTimer);
-        }
-        if (currentEntry.reconnectTimer) {
-          clearTimeout(currentEntry.reconnectTimer);
-          currentEntry.reconnectTimer = null;
-        }
-
-        currentEntry.teardownTimer = setTimeout(() => {
-          const freshCheck = channelPool.get(channelKey);
-          if (freshCheck && freshCheck.listeners.size === 0) {
-            void supabase.removeChannel(freshCheck.channel);
-            channelPool.delete(channelKey);
-          }
-        }, CHANNEL_TEARDOWN_GRACE_MS);
-      }
+      unsubsState();
+      unregister();
     };
-  }, [table, enabled, filter, organizationId, queryClient]);
+  }, [table, enabled, organizationId, queryClient]);
 
   return { connectionStatus };
 }
