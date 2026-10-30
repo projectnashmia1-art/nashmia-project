@@ -1,6 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { useAuth } from "@/lib/auth-context";
+import { AppShellSkeleton } from "@/components/common/AppShellSkeleton";
 
 interface AuthGuardProps {
   children: ReactNode;
@@ -56,8 +57,13 @@ export function AuthGuard({ children }: AuthGuardProps) {
     }
   }, [isAuthenticated, isAuthRoute, loading, location.pathname, location.searchStr, navigate]);
 
-  // While checking auth status on initial load, show clean loading state to prevent flash of login or protected pages
+  // While checking auth status on initial load:
+  // For protected routes, render the complete AppShellSkeleton immediately so the layout paints in sub-100ms
+  // For auth routes (/login, /signup), render a clean lightweight container
   if (loading) {
+    if (!isAuthRoute) {
+      return <AppShellSkeleton />;
+    }
     return (
       <div
         className="flex min-h-screen w-full items-center justify-center bg-white"

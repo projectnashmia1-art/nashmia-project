@@ -86,6 +86,7 @@ import {
   LifecycleSkeleton,
   RecentMovementsSkeleton,
   NeedsAttentionSkeleton,
+  UpcomingCutoffsSkeleton,
 } from "@/components/nashmia/skeletons/DashboardSkeletons";
 import { NotificationsListSkeleton } from "@/components/nashmia/skeletons/NotificationSkeletons";
 import { GlobalSearch } from "@/components/nashmia/search/GlobalSearch";
@@ -458,8 +459,8 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
 
   const bookingsQuery = useQuery({
-    queryKey: ["dashboard-bookings", userId],
-    queryFn: () => fetchBookingsFromSupabase(userId),
+    queryKey: ["dashboard-bookings", organizationId || "global"],
+    queryFn: () => fetchBookingsFromSupabase(userId, { organizationId }),
     enabled: true,
     staleTime: 1000 * 60 * 5, // 5m cache freshness ensures instant UI rendering on navigation
     gcTime: 1000 * 60 * 60,
@@ -678,12 +679,12 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
  */
 export function useDashboardData(): DashboardDataContextValue {
   const context = useContext(DashboardDataContext);
-  const { userId } = useAuth();
+  const { userId, organizationId } = useAuth();
 
   // Fallback if rendered outside DashboardDataProvider
   const fallbackQuery = useQuery({
-    queryKey: ["dashboard-bookings", userId],
-    queryFn: () => fetchBookingsFromSupabase(userId),
+    queryKey: ["dashboard-bookings", organizationId || "global"],
+    queryFn: () => fetchBookingsFromSupabase(userId, { organizationId }),
     enabled: !context,
     staleTime: 1000 * 30,
   });
@@ -1529,7 +1530,11 @@ export const RecentMovements = memo(function RecentMovements() {
   // Global event listener to open movement drawer from notification clicks
   useEffect(() => {
     const handleDrawerEvent = (e: Event) => {
-      const ce = e as CustomEvent<{ movementNumber?: string; reference?: string; bookingId?: string }>;
+      const ce = e as CustomEvent<{
+        movementNumber?: string;
+        reference?: string;
+        bookingId?: string;
+      }>;
       const ref = ce.detail?.movementNumber || ce.detail?.reference || ce.detail?.bookingId;
       if (ref) {
         handleOpenMovement(ce.detail?.bookingId || ref, ref);
@@ -2100,7 +2105,7 @@ export const RecentMovements = memo(function RecentMovements() {
 });
 
 export const UpcomingCutoffs = memo(function UpcomingCutoffs() {
-  const { bookings } = useDashboardData();
+  const { bookings, isLoading } = useDashboardData();
   const [selectedMovementRef, setSelectedMovementRef] = useState<string | null>(null);
   const [cutOffList, setCutOffList] = useState<UpcomingCutoffItem[]>(() =>
     getAllUpcomingCutOffs(bookings),
@@ -2135,6 +2140,10 @@ export const UpcomingCutoffs = memo(function UpcomingCutoffs() {
       window.removeEventListener("storage", refreshCutOffs);
     };
   }, []);
+
+  if (isLoading && bookings.length === 0) {
+    return <UpcomingCutoffsSkeleton />;
+  }
 
   return (
     <>

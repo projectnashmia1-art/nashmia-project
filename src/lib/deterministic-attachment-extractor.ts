@@ -15,8 +15,6 @@
  *   * Route to operator manual review for manual quotation data entry
  */
 
-import * as XLSX from "xlsx";
-
 export type AttachmentFileType = "pdf" | "xlsx" | "docx" | "txt" | "csv" | "image" | "unknown";
 
 export type AttachmentExtractionStatus =
@@ -427,11 +425,12 @@ export async function extractTextFromPdf(
 /**
  * Deterministically extracts text from XLSX/XLS buffer using SheetJS (xlsx).
  */
-export function extractTextFromXlsx(buffer: Buffer): {
+export async function extractTextFromXlsx(buffer: Buffer): Promise<{
   text: string;
   sheets: Array<{ name: string; rowCount: number }>;
-} {
+}> {
   try {
+    const XLSX = await import("xlsx");
     const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
     const sheetSummaries: Array<{ name: string; rowCount: number }> = [];
     const textParts: string[] = [];
@@ -653,7 +652,7 @@ export async function processAttachmentDeterministically(
 
   // 5. XLSX / Spreadsheet Extraction
   if (fileType === "xlsx") {
-    const xlsxResult = extractTextFromXlsx(buffer);
+    const xlsxResult = await extractTextFromXlsx(buffer);
     if (!xlsxResult.text) {
       return {
         id,

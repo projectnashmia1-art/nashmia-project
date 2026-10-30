@@ -38,6 +38,38 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+function getInitialStoredAuth(): {
+  session: Session | null;
+  user: User | null;
+  hasCachedSession: boolean;
+} {
+  if (typeof window === "undefined") {
+    return { session: null, user: null, hasCachedSession: false };
+  }
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (
+        key &&
+        (key.startsWith("sb-") || key.includes("supabase.auth.token")) &&
+        key.endsWith("-auth-token")
+      ) {
+        const item = localStorage.getItem(key);
+        if (item) {
+          const parsed = JSON.parse(item);
+          const sess: Session | null = parsed?.session || (parsed?.access_token ? parsed : null);
+          if (sess && sess.user) {
+            return { session: sess, user: sess.user, hasCachedSession: true };
+          }
+        }
+      }
+    }
+  } catch {
+    // Ignore storage parse issues
+  }
+  return { session: null, user: null, hasCachedSession: false };
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
@@ -81,6 +113,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let isMounted = true;
+
+    // Immediately restore cached session from localStorage on client mount (safe post-hydration fast path)
+    const cached = getInitialStoredAuth();
+    if (cached.session && cached.user && isMounted) {
+      setSession(cached.session);
+      setUser(cached.user);
+      setLoading(false);
+      void fetchProfile(cached.user.id, cached.user.email);
+    }
 
     async function initAuth() {
       if (!isSupabaseConfigured) {
@@ -286,7 +327,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (email === "fleeksaas@gmail.com") return "admin";
     const metaRole = (user?.user_metadata?.role as string)?.toLowerCase();
     const profileRole = (profile as Record<string, unknown> | null)?.role as string;
-    if (metaRole === "admin" || (profileRole && profileRole.toLowerCase() === "admin")) return "admin";
+    if (metaRole === "admin" || (profileRole && profileRole.toLowerCase() === "admin"))
+      return "admin";
     return "user";
   }, [user, profile]);
 

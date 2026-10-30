@@ -2328,8 +2328,11 @@ const CLIENT_CACHE_TTL_MS = 15000; // 15 seconds SWR freshness window
 /**
  * Instantly invalidates client-side bookings cache and dispatches refresh event
  */
+const inFlightBookingsRequests = new Map<string, Promise<FullBookingRecord[]>>();
+
 export function invalidateBookingsCache(): void {
   clientBookingsCache = null;
+  inFlightBookingsRequests.clear();
   if (typeof window !== "undefined") {
     window.dispatchEvent(
       new CustomEvent("nashmia_bookings_updated", {
@@ -2339,11 +2342,12 @@ export function invalidateBookingsCache(): void {
   }
 }
 
-export async function fetchBookingsFromSupabase(
+export function fetchBookingsFromSupabase(
   userId?: string | null,
   options?: { limit?: number; offset?: number; organizationId?: string | null },
 ): Promise<FullBookingRecord[]> {
-  const cacheKey = `${userId || "all"}_${options?.limit || 500}_${options?.offset || 0}_${options?.organizationId || "global"}`;
+  const orgKey = options?.organizationId || "global";
+  const cacheKey = `${orgKey}_${options?.limit || 500}_${options?.offset || 0}`;
   const now = Date.now();
 
   // If fresh in client SWR cache, return immediately for instant page render
@@ -2352,175 +2356,185 @@ export async function fetchBookingsFromSupabase(
     clientBookingsCache.key === cacheKey &&
     now - clientBookingsCache.timestamp < CLIENT_CACHE_TTL_MS
   ) {
-    return clientBookingsCache.data;
+    return Promise.resolve(clientBookingsCache.data);
   }
 
-  // 1. Try server-side API on client for real-time backend synchronization
-  if (typeof window !== "undefined") {
-    try {
-      const limitQuery = options?.limit
-        ? `?limit=${options.limit}&offset=${options.offset || 0}`
-        : "?limit=500";
-      const res = await fetch(`/api/bookings${limitQuery}`);
-      if (res.ok) {
-        const json = await res.json();
-        // Return genuine database records from API (including fast server-side SWR cache)
-        if (
-          json.success &&
-          Array.isArray(json.bookings) &&
-          json.bookings.length > 0
-        ) {
-          const dbBookings = (json.bookings as FullBookingRecord[]).map(
-            reconcileBookingWithConfirmations,
-          );
-          const deduped = deduplicateBookings(dbBookings);
-          clientBookingsCache = { data: deduped, timestamp: Date.now(), key: cacheKey };
-          return deduped;
-        }
-      }
-    } catch {
-      // Fall through to direct Supabase query
-    }
+  // Return existing in-flight promise to eliminate duplicate initial requests
+  const pending = inFlightBookingsRequests.get(cacheKey);
+  if (pending) {
+    return pending;
   }
 
-  if (!isSupabaseConfigured) return [];
-
-  try {
-    let query = supabase
-      .from("bookings")
-      .select(OPTIMIZED_BOOKINGS_SELECT)
-      .order("created_at", { ascending: false });
-
-    if (options?.organizationId) {
-      query = query.eq("organization_id", options.organizationId);
-    }
-
-    const defaultLimit = options?.limit ?? 500;
-    if (options?.offset) {
-      query = query.range(options.offset, options.offset + defaultLimit - 1);
-    } else {
-      query = query.limit(defaultLimit);
-    }
-
-    let { data, error } = await query;
-    if (error) {
-      console.warn(
-        "[Supabase fetchBookings] Query with joins had notice, falling back to base select with relational stitching:",
-        error.message,
-      );
-      // Fallback query to core table without complex joins in case of schema discrepancy
+  const exec = (async (): Promise<FullBookingRecord[]> => {
+    // 1. Try server-side API on client for real-time backend synchronization
+    if (typeof window !== "undefined") {
       try {
-        let fallbackQuery = supabase
-          .from("bookings")
-          .select("*")
-          .order("created_at", { ascending: false });
-
-        if (options?.organizationId) {
-          fallbackQuery = fallbackQuery.eq("organization_id", options.organizationId);
-        }
-        if (options?.offset) {
-          fallbackQuery = fallbackQuery.range(options.offset, options.offset + defaultLimit - 1);
-        } else {
-          fallbackQuery = fallbackQuery.limit(defaultLimit);
-        }
-        const fallbackRes = await fallbackQuery;
-        if (!fallbackRes.error && fallbackRes.data && fallbackRes.data.length > 0) {
-          let stitchedData: Record<string, unknown>[] = fallbackRes.data as Record<
-            string,
-            unknown
-          >[];
-          error = null;
-
-          // Relational stitching: retrieve missing foreign entities in parallel so relations never vanish
-          try {
-            const buyerIds = Array.from(
-              new Set(stitchedData.map((b) => b.buyer_id as string).filter(Boolean)),
+        const limitQuery = options?.limit
+          ? `?limit=${options.limit}&offset=${options.offset || 0}`
+          : "?limit=500";
+        const res = await fetch(`/api/bookings${limitQuery}`);
+        if (res.ok) {
+          const json = await res.json();
+          // Return genuine database records from API (including fast server-side SWR cache)
+          if (json.success && Array.isArray(json.bookings) && json.bookings.length > 0) {
+            const dbBookings = (json.bookings as FullBookingRecord[]).map(
+              reconcileBookingWithConfirmations,
             );
-            const supplierIds = Array.from(
-              new Set(stitchedData.map((b) => b.supplier_id as string).filter(Boolean)),
-            );
-            const forwarderIds = Array.from(
-              new Set(stitchedData.map((b) => b.forwarder_id as string).filter(Boolean)),
-            );
-            const bookingIds = stitchedData.map((b) => b.id as string).filter(Boolean);
-
-            const [buyersRes, suppliersRes, forwardersRes, containersRes] = await Promise.all([
-              buyerIds.length > 0
-                ? supabase
-                    .from("buyers")
-                    .select(
-                      "id, name, company_name, consignee, contact_person, email, phone, country",
-                    )
-                    .in("id", buyerIds)
-                : Promise.resolve({ data: [] }),
-              supplierIds.length > 0
-                ? supabase
-                    .from("suppliers")
-                    .select("id, name, company_name, contact_person, email, phone, country")
-                    .in("id", supplierIds)
-                : Promise.resolve({ data: [] }),
-              forwarderIds.length > 0
-                ? supabase
-                    .from("forwarders")
-                    .select("id, name, company_name, contact_person, email, phone, code")
-                    .in("id", forwarderIds)
-                : Promise.resolve({ data: [] }),
-              bookingIds.length > 0
-                ? supabase
-                    .from("booking_containers")
-                    .select(
-                      "id, booking_id, container_number, seal_number, container_size, container_type, weight, weight_unit, status",
-                    )
-                    .in("booking_id", bookingIds)
-                : Promise.resolve({ data: [] }),
-            ]);
-
-            const buyerMap = new Map((buyersRes.data || []).map((by) => [by.id, by]));
-            const supplierMap = new Map((suppliersRes.data || []).map((sp) => [sp.id, sp]));
-            const forwarderMap = new Map((forwardersRes.data || []).map((fw) => [fw.id, fw]));
-            const containerMap = new Map<string, unknown[]>();
-            for (const c of containersRes.data || []) {
-              if (c.booking_id) {
-                if (!containerMap.has(c.booking_id)) containerMap.set(c.booking_id, []);
-                containerMap.get(c.booking_id)!.push(c);
-              }
-            }
-
-            stitchedData = stitchedData.map((b) => ({
-              ...b,
-              buyer: b.buyer || (b.buyer_id ? buyerMap.get(b.buyer_id as string) : null),
-              supplier:
-                b.supplier || (b.supplier_id ? supplierMap.get(b.supplier_id as string) : null),
-              forwarder:
-                b.forwarder || (b.forwarder_id ? forwarderMap.get(b.forwarder_id as string) : null),
-              containers: b.containers || containerMap.get(b.id as string) || [],
-            }));
-          } catch (stitchingErr) {
-            console.warn("[Supabase fetchBookings] Fallback stitching notice:", stitchingErr);
+            const deduped = deduplicateBookings(dbBookings);
+            clientBookingsCache = { data: deduped, timestamp: Date.now(), key: cacheKey };
+            return deduped;
           }
-
-          data = stitchedData as unknown as FullBookingRecord[];
         }
       } catch {
-        // Keep original error
+        // Fall through to direct Supabase query
       }
     }
 
-    if (error || !data) {
+    if (!isSupabaseConfigured) return [];
+
+    try {
+      let query = supabase
+        .from("bookings")
+        .select(OPTIMIZED_BOOKINGS_SELECT)
+        .order("created_at", { ascending: false });
+
+      if (options?.organizationId) {
+        query = query.eq("organization_id", options.organizationId);
+      }
+
+      const defaultLimit = options?.limit ?? 500;
+      if (options?.offset) {
+        query = query.range(options.offset, options.offset + defaultLimit - 1);
+      } else {
+        query = query.limit(defaultLimit);
+      }
+
+      let { data, error } = await query;
+      if (error) {
+        console.warn(
+          "[Supabase fetchBookings] Query with joins had notice, falling back to base select with relational stitching:",
+          error.message,
+        );
+        // Fallback query to core table without complex joins in case of schema discrepancy
+        try {
+          let fallbackQuery = supabase
+            .from("bookings")
+            .select("*")
+            .order("created_at", { ascending: false });
+
+          if (options?.organizationId) {
+            fallbackQuery = fallbackQuery.eq("organization_id", options.organizationId);
+          }
+          if (options?.offset) {
+            fallbackQuery = fallbackQuery.range(options.offset, options.offset + defaultLimit - 1);
+          } else {
+            fallbackQuery = fallbackQuery.limit(defaultLimit);
+          }
+          const fallbackRes = await fallbackQuery;
+          if (!fallbackRes.error && fallbackRes.data && fallbackRes.data.length > 0) {
+            let stitchedData: Record<string, unknown>[] = fallbackRes.data as Record<
+              string,
+              unknown
+            >[];
+            error = null;
+
+            // Relational stitching: retrieve missing foreign entities in parallel so relations never vanish
+            try {
+              const buyerIds = Array.from(
+                new Set(stitchedData.map((b) => b.buyer_id as string).filter(Boolean)),
+              );
+              const supplierIds = Array.from(
+                new Set(stitchedData.map((b) => b.supplier_id as string).filter(Boolean)),
+              );
+              const forwarderIds = Array.from(
+                new Set(stitchedData.map((b) => b.forwarder_id as string).filter(Boolean)),
+              );
+              const bookingIds = stitchedData.map((b) => b.id as string).filter(Boolean);
+
+              const [buyersRes, suppliersRes, forwardersRes, containersRes] = await Promise.all([
+                buyerIds.length > 0
+                  ? supabase
+                      .from("buyers")
+                      .select(
+                        "id, name, company_name, consignee, contact_person, email, phone, country",
+                      )
+                      .in("id", buyerIds)
+                  : Promise.resolve({ data: [] }),
+                supplierIds.length > 0
+                  ? supabase
+                      .from("suppliers")
+                      .select("id, name, company_name, contact_person, email, phone, country")
+                      .in("id", supplierIds)
+                  : Promise.resolve({ data: [] }),
+                forwarderIds.length > 0
+                  ? supabase
+                      .from("forwarders")
+                      .select("id, name, company_name, contact_person, email, phone, code")
+                      .in("id", forwarderIds)
+                  : Promise.resolve({ data: [] }),
+                bookingIds.length > 0
+                  ? supabase
+                      .from("booking_containers")
+                      .select(
+                        "id, booking_id, container_number, seal_number, container_size, container_type, weight, weight_unit, status",
+                      )
+                      .in("booking_id", bookingIds)
+                  : Promise.resolve({ data: [] }),
+              ]);
+
+              const buyerMap = new Map((buyersRes.data || []).map((by) => [by.id, by]));
+              const supplierMap = new Map((suppliersRes.data || []).map((sp) => [sp.id, sp]));
+              const forwarderMap = new Map((forwardersRes.data || []).map((fw) => [fw.id, fw]));
+              const containerMap = new Map<string, unknown[]>();
+              for (const c of containersRes.data || []) {
+                if (c.booking_id) {
+                  if (!containerMap.has(c.booking_id)) containerMap.set(c.booking_id, []);
+                  containerMap.get(c.booking_id)!.push(c);
+                }
+              }
+
+              stitchedData = stitchedData.map((b) => ({
+                ...b,
+                buyer: b.buyer || (b.buyer_id ? buyerMap.get(b.buyer_id as string) : null),
+                supplier:
+                  b.supplier || (b.supplier_id ? supplierMap.get(b.supplier_id as string) : null),
+                forwarder:
+                  b.forwarder ||
+                  (b.forwarder_id ? forwarderMap.get(b.forwarder_id as string) : null),
+                containers: b.containers || containerMap.get(b.id as string) || [],
+              }));
+            } catch (stitchingErr) {
+              console.warn("[Supabase fetchBookings] Fallback stitching notice:", stitchingErr);
+            }
+
+            data = stitchedData as unknown as FullBookingRecord[];
+          }
+        } catch {
+          // Keep original error
+        }
+      }
+
+      if (error || !data) {
+        return [];
+      }
+
+      const dbBookings = ((data as unknown as FullBookingRecord[]) || []).map(
+        reconcileBookingWithConfirmations,
+      );
+
+      const deduped = deduplicateBookings(dbBookings);
+      clientBookingsCache = { data: deduped, timestamp: Date.now(), key: cacheKey };
+      return deduped;
+    } catch (err) {
+      console.warn("[Supabase fetchBookings] Direct query notice:", err);
       return [];
     }
+  })();
 
-    const dbBookings = ((data as unknown as FullBookingRecord[]) || []).map(
-      reconcileBookingWithConfirmations,
-    );
-
-    const deduped = deduplicateBookings(dbBookings);
-    clientBookingsCache = { data: deduped, timestamp: Date.now(), key: cacheKey };
-    return deduped;
-  } catch (err) {
-    console.warn("[Supabase fetchBookings] Direct query notice:", err);
-    return [];
-  }
+  inFlightBookingsRequests.set(cacheKey, exec);
+  return exec.finally(() => {
+    inFlightBookingsRequests.delete(cacheKey);
+  });
 }
 
 export async function fetchBookingByIdFromSupabase(

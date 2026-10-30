@@ -126,8 +126,8 @@ function startBackgroundSyncWorker() {
     await triggerImmediateServerSync(25);
   };
 
-  // Initial run after startup (3000ms)
-  setTimeout(runSync, 3000);
+  // Defer initial run until after startup (15000ms) so cold boot prioritizes client requests
+  setTimeout(runSync, 15000);
   // Recurring interval every 30 seconds (30000ms) to maintain fresh sync without overloading CPU/DB
   backendSyncTimer = setInterval(runSync, 30000);
 }
@@ -192,6 +192,24 @@ export default {
           status: 200,
           headers: { ...apiCorsHeaders, "Content-Type": "application/json" },
         });
+      }
+
+      // Serve Vite Bundle Visualizer Treemap
+      if (url.pathname === "/bundle-stats.html" || url.pathname === "/stats") {
+        try {
+          const fs = await import("fs");
+          const path = await import("path");
+          const statsPath = path.resolve(process.cwd(), "dist/bundle-stats.html");
+          if (fs.existsSync(statsPath)) {
+            const html = fs.readFileSync(statsPath, "utf-8");
+            return new Response(html, {
+              status: 200,
+              headers: { "Content-Type": "text/html; charset=utf-8" },
+            });
+          }
+        } catch (err) {
+          console.warn("[BundleStats] Unable to serve stats HTML:", err);
+        }
       }
 
       // Quotation & Incoming Email REST API Router

@@ -1,4 +1,3 @@
-import { GoogleGenAI, Type } from "@google/genai";
 import type { QuotationExtractionInput, ExtractedQuotation } from "./quotation-extractor";
 
 export interface AiParsedQuotationResult {
@@ -192,6 +191,7 @@ export async function extractQuotationWithAiFallback(
   }
 
   try {
+    const { GoogleGenAI, Type } = await import("@google/genai");
     const ai = new GoogleGenAI({ apiKey });
 
     const prompt = `You are a strict data extraction tool for ocean freight quotation emails.

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, lazy, Suspense } from "react";
 import {
   Anchor,
   ArrowLeft,
@@ -45,7 +45,9 @@ import {
 import { getTrackingProviderConfig } from "@/lib/tracking-adapter";
 import { useSupabaseRealtime } from "@/hooks/use-supabase-realtime";
 import { fetchMovementDocuments, type BookingDocumentRow } from "@/lib/movement-document-service";
-import { TrackingMapSection } from "./TrackingMapSection";
+const TrackingMapSection = lazy(() =>
+  import("./TrackingMapSection").then((m) => ({ default: m.TrackingMapSection })),
+);
 import { TrackingAlertsModal } from "./TrackingAlertsModal";
 import type {
   FullBookingRecord,
@@ -942,22 +944,33 @@ export function ShipmentTrackingView({
         <main className="flex-1 min-w-0 flex flex-col bg-[#F5F7FA]">
           {/* MAP CANVAS WITH BACK BUTTON */}
           <div className="relative w-full">
-            <TrackingMapSection
-              originName={originCity}
-              originCountryCode={originCountry}
-              polName={polCity}
-              polCountryCode={polCountry}
-              transshipmentName={transshipmentCity}
-              transCountryCode={transCountry}
-              destinationName={destCity}
-              destCountryCode={destCountry}
-              vesselName={currentVessel}
-              vesselStatus={
-                (booking as { status?: string })?.status ||
-                (departedEvent ? "In Transit" : "Scheduled")
+            <Suspense
+              fallback={
+                <div className="relative w-full h-[360px] sm:h-[420px] bg-slate-100 flex items-center justify-center">
+                  <div className="flex flex-col items-center gap-2 text-slate-400">
+                    <div className="size-6 rounded-full border-2 border-slate-300 border-t-slate-600 animate-spin" />
+                    <span className="text-xs font-medium">Loading live route map...</span>
+                  </div>
+                </div>
               }
-              etaFormatted={etaFormatted}
-            />
+            >
+              <TrackingMapSection
+                originName={originCity}
+                originCountryCode={originCountry}
+                polName={polCity}
+                polCountryCode={polCountry}
+                transshipmentName={transshipmentCity}
+                transCountryCode={transCountry}
+                destinationName={destCity}
+                destCountryCode={destCountry}
+                vesselName={currentVessel}
+                vesselStatus={
+                  (booking as { status?: string })?.status ||
+                  (departedEvent ? "In Transit" : "Scheduled")
+                }
+                etaFormatted={etaFormatted}
+              />
+            </Suspense>
 
             {/* Floating Pill: < Back to Movement Details */}
             <div className="absolute top-4 left-4 z-20">

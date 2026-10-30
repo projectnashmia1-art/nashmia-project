@@ -5,6 +5,7 @@
 //     React/TanStack dedupe, error logger plugins, and sandbox detection (port/host/strictPort).
 // You can pass additional config via defineConfig({ vite: { ... }, etc... }) if needed.
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
+import { visualizer } from "rollup-plugin-visualizer";
 
 export default defineConfig({
   tanstackStart: {
@@ -65,6 +66,14 @@ export default defineConfig({
       },
     },
     plugins: [
+      visualizer({
+        filename: "dist/bundle-stats.html",
+        title: "Nashmia Logistics - Vite Bundle Visualizer",
+        open: false,
+        gzipSize: true,
+        brotliSize: true,
+        template: "treemap",
+      }),
       {
         name: "api-dev-server-middleware",
         configureServer(server: {
@@ -79,7 +88,12 @@ export default defineConfig({
           };
         }) {
           server.middlewares.use(async (req, res, next) => {
-            if (req.url && req.url.startsWith("/api/")) {
+            if (
+              req.url &&
+              (req.url.startsWith("/api/") ||
+                req.url.startsWith("/bundle-stats.html") ||
+                req.url === "/stats")
+            ) {
               try {
                 const { default: serverHandler } = await import("./src/server");
                 const url = new URL(req.url, `http://${req.headers.host || "localhost:3000"}`);

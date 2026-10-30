@@ -1,5 +1,4 @@
 import { SupabaseClient } from "@supabase/supabase-js";
-import { GoogleGenAI } from "@google/genai";
 import crypto from "crypto";
 import { safeUuid, safeInsertNotification } from "./supabase-services";
 import {
@@ -2038,6 +2037,7 @@ export async function classifyAttachmentWithAi(
   }
 
   try {
+    const { GoogleGenAI } = await import("@google/genai");
     const ai = new GoogleGenAI({
       apiKey,
       httpOptions: {

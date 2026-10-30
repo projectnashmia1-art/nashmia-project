@@ -83,8 +83,8 @@ async function runTests() {
     console.log("\n[Test 6] Verifying records in Supabase notifications table");
     const { data, error } = await supabase
       .from("notifications")
-      .select("id, title, message, type, movement_number, link, created_at")
-      .eq("movement_number", testMov)
+      .select("id, title, message, type, link, created_at")
+      .ilike("title", `%${testMov}%`)
       .order("created_at", { ascending: false })
       .limit(5);
 

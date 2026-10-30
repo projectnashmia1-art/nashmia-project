@@ -1,4 +1,3 @@
-import * as XLSX from "xlsx";
 import { supabase, isSupabaseConfigured } from "./supabase";
 import {
   normalizeBookingStatus,
@@ -302,6 +301,7 @@ export async function parseAndPreviewExcelBookings(
   fileBuffer: ArrayBuffer | Uint8Array,
   existingBookings: FullBookingRecord[],
 ): Promise<ExcelUploadPreviewResult> {
+  const XLSX = await import("xlsx");
   const workbook = XLSX.read(fileBuffer, { type: "array", cellDates: true });
   const sheetName = workbook.SheetNames[0];
   if (!sheetName) {
